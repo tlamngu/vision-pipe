@@ -1,0 +1,54 @@
+{
+  "name": "visionpipe-vsp",
+  "displayName": "VisionPipe VSP Language",
+  "description": "Syntax highlighting and language support for VisionPipe Script (.vsp) files",
+  "version": "1.0.0",
+  "publisher": "visionpipe",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "visionpipe",
+    "vsp",
+    "vision",
+    "pipeline",
+    "opencv",
+    "computer vision"
+  ],
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/visionpipe/visionpipe"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "vsp",
+        "aliases": [
+          "VisionPipe Script",
+          "vsp"
+        ],
+        "extensions": [
+          ".vsp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vsp",
+        "scopeName": "source.vsp",
+        "path": "./syntaxes/vsp.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "vsp",
+        "path": "./snippets/vsp.json"
+      }
+    ]
+  }
+}

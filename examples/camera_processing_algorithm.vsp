@@ -1,0 +1,35 @@
+# camera_processing_algorithm.vsp - Filter selection demo
+# Run: visionpipe.exe run camera_processing_algorithm.vsp
+
+pipeline setup
+    video_input(0)
+    named_window("Input")
+    named_window("Output")
+    named_window("Controls")
+    create_trackbar("Filter", "Controls", 0, 5)
+    control_panel("Threshold", "threshold")
+    control_panel("Blur", "blur")
+    control_panel("Edge", "edge")
+end
+
+pipeline main
+    video_read(0) -> "orig"
+    use("orig")
+    imshow("Input")
+    
+    get_trackbar_pos("Filter", "Controls", "filter")
+    use("orig")
+    
+    get_var("filter")
+    scalar_compare(filter, "==", 1, "do_thresh")
+    scalar_compare(filter, "==", 2, "do_blur")
+    scalar_compare(filter, "==", 3, "do_edge")
+    
+    use("orig")
+    imshow("Output")
+    update_window_title("Output", "Filter: {filter}")
+    wait_key(30)
+end
+
+exec_seq setup
+exec_loop main

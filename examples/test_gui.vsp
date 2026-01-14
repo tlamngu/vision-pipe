@@ -1,0 +1,15 @@
+# test_gui.vsp - Test GUI items
+# Run: visionpipe.exe run test_gui.vsp
+
+pipeline setup
+    named_window("Test")
+    trackbar_var("Value", "Test", "myvar", 0, 100, 50)
+end
+
+pipeline main
+    trackbar_value("Value", "Test", "myvar")
+    wait_key(30)
+end
+
+exec_seq setup
+exec_loop main

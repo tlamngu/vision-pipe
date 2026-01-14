@@ -1,0 +1,83 @@
+# mono_depth_estimation.vsp - Monocular Depth Estimation Example
+# Estimates depth from a single RGB image using MiDaS neural network.
+# Outputs a colorized depth map showing relative distances.
+#
+# Requirements:
+#   - VisionPipe compiled with VISIONPIPE_WITH_DNN=ON
+#   - MiDaS v2 ONNX model (NOT v2.1 - it uses unsupported ONNX ops in OpenCV)
+#
+# Download model:
+#   Option 1: MiDaS v2 small (OpenCV compatible)
+#     https://github.com/isl-org/MiDaS/releases/download/v2/model-small.onnx
+#     Save to: ./models/midas/midas_v21_small_256.onnx
+#
+#   Option 2: Export from PyTorch with opset 11:
+#     torch.onnx.export(model, x, "midas.onnx", opset_version=11)
+#
+# Usage:
+#   visionpipe run examples/DNN/mono_depth_estimation.vsp
+#
+# Press 'q' or ESC to exit
+
+pipeline setup
+    # Load the MiDaS depth estimation model (v2 small - 256x256 input)
+    # Requires CUDA 12.x - install from https://developer.nvidia.com/cuda-12-6-0-download-archive
+    load_model("midas", "./models/midas/dpt_beit_large_512.onnx", "onnx", "cuda", 512, 512)
+    
+    # Create display windows
+    named_window("RGB Input", "normal")
+    named_window("Depth Estimation", "normal")
+end
+
+pipeline estimate_depth
+    # Capture frame from camera
+    video_cap(0) -> "frame"
+    
+    # Store original for display
+    use("frame")
+    cache("original")
+    
+    # Preprocess for MiDaS
+    resize(512, 512)
+    cvt_color("bgr2rgb")  # Convert BGR to RGB (MiDaS expects RGB)
+    normalize_mean_std([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    
+    # Run MiDaS inference
+    model_infer("midas") -> "depth_output"
+    
+    # Display original frame
+    use("original")
+    imshow("RGB Input")
+    
+    # Display depth map with colormap
+    # The model_infer output is the depth map directly
+    use("depth_output")
+    normalize(0, 255, "minmax", "8u")  # Normalize to 0-255 and convert to CV_8U for colormap
+    apply_colormap("jet")
+    imshow("Depth Estimation")
+end
+
+pipeline main
+    exec_seq estimate_depth
+    
+    # Check for exit key (q = 113, ESC = 27)
+    key = wait_key(1)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+# Initialize
+exec_seq setup
+
+# Run main loop
+exec_loop main
+
+# Cleanup
+pipeline cleanup
+    unload_model("midas")
+end
+exec_seq cleanup

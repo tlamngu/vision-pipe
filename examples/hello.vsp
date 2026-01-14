@@ -1,0 +1,11 @@
+# hello.vsp - Simple camera stream with text overlay
+# Run: visionpipe.exe run hello.vsp
+
+pipeline main
+    video_cap(0)
+    draw_text("Hello from VisionPipe", 50, 50)
+    imshow("Hello VisionPipe")
+    wait_key(30)
+end
+
+exec_loop main

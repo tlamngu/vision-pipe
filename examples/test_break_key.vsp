@@ -1,0 +1,24 @@
+# test_break_key.vsp - Test variable assignment, conditionals, and break
+# Run: visionpipe.exe run test_break_key.vsp
+# Press 'q' or ESC to exit, any other key continues
+
+pipeline main
+    video_cap(0)
+    flip("horizontal")
+    fps(true, 10, 30)
+    imshow("Press 'q' or ESC to exit")
+    
+    # Assign wait_key result to variable 'key'
+    key = wait_key(1)
+    
+    # Check for 'q' key (ASCII 113) or ESC key (ASCII 27)
+    if key == 113
+        break
+    end
+    
+    if key == 27
+        break
+    end
+end
+
+exec_loop main

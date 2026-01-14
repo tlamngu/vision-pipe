@@ -1,0 +1,181 @@
+{
+  "Pipeline": {
+    "prefix": "pipeline",
+    "body": [
+      "pipeline ${1:name}",
+      "    $0",
+      "end"
+    ],
+    "description": "Create a new pipeline"
+  },
+  "Pipeline with Parameters": {
+    "prefix": "pipelinep",
+    "body": [
+      "pipeline ${1:name}(${2:params})",
+      "    $0",
+      "end"
+    ],
+    "description": "Create a new pipeline with parameters"
+  },
+  "Exec Sequential": {
+    "prefix": "execseq",
+    "body": [
+      "exec_seq ${1:pipeline_name}"
+    ],
+    "description": "Execute a pipeline sequentially"
+  },
+  "Exec Multi": {
+    "prefix": "execmulti",
+    "body": [
+      "exec_multi [",
+      "    ${1:pipeline1},",
+      "    ${2:pipeline2}",
+      "]"
+    ],
+    "description": "Execute multiple pipelines in parallel"
+  },
+  "Exec Loop": {
+    "prefix": "execloop",
+    "body": [
+      "exec_loop ${1:main}"
+    ],
+    "description": "Execute a pipeline in a loop"
+  },
+  "Video Capture": {
+    "prefix": "videocap",
+    "body": [
+      "video_cap(${1:0})"
+    ],
+    "description": "Capture video from camera or file"
+  },
+  "Display": {
+    "prefix": "display",
+    "body": [
+      "display(\"${1:Window Title}\")"
+    ],
+    "description": "Display current frame in a window"
+  },
+  "Wait Key": {
+    "prefix": "waitkey",
+    "body": [
+      "wait_key(${1:1})"
+    ],
+    "description": "Wait for key press"
+  },
+  "Draw Text": {
+    "prefix": "drawtext",
+    "body": [
+      "draw_text(\"${1:text}\", ${2:20}, ${3:40}, ${4:1.0}, \"${5:green}\")"
+    ],
+    "description": "Draw text on frame"
+  },
+  "Undistort": {
+    "prefix": "undistort",
+    "body": [
+      "undistort(${1:params}) -> \"${2:cache_id}\""
+    ],
+    "description": "Undistort image and cache result"
+  },
+  "Use Cache": {
+    "prefix": "use",
+    "body": [
+      "use(\"${1:cache_id}\")"
+    ],
+    "description": "Load cached frame"
+  },
+  "Cache Frame": {
+    "prefix": "cache",
+    "body": [
+      "cache(\"${1:cache_id}\")"
+    ],
+    "description": "Cache current frame"
+  },
+  "Gaussian Blur": {
+    "prefix": "blur",
+    "body": [
+      "gaussian_blur(${1:5})"
+    ],
+    "description": "Apply Gaussian blur"
+  },
+  "Color Convert": {
+    "prefix": "cvtcolor",
+    "body": [
+      "color_convert(\"${1:BGR2GRAY}\")"
+    ],
+    "description": "Convert color space"
+  },
+  "Canny Edge": {
+    "prefix": "canny",
+    "body": [
+      "canny_edge(${1:50}, ${2:150})"
+    ],
+    "description": "Canny edge detection"
+  },
+  "Resize": {
+    "prefix": "resize",
+    "body": [
+      "resize(${1:640}, ${2:480})"
+    ],
+    "description": "Resize frame"
+  },
+  "HStack": {
+    "prefix": "hstack",
+    "body": [
+      "hstack([\"${1:frame1}\", \"${2:frame2}\"])"
+    ],
+    "description": "Horizontally stack frames"
+  },
+  "VStack": {
+    "prefix": "vstack",
+    "body": [
+      "vstack([\"${1:frame1}\", \"${2:frame2}\"])"
+    ],
+    "description": "Vertically stack frames"
+  },
+  "Main Pipeline Template": {
+    "prefix": "mainpipe",
+    "body": [
+      "// ${1:Description}",
+      "",
+      "pipeline main",
+      "    video_cap(${2:0})",
+      "    $0",
+      "    display(\"${3:Output}\")",
+      "    wait_key(1)",
+      "end",
+      "",
+      "exec_loop main"
+    ],
+    "description": "Create a main pipeline with video capture and display loop"
+  },
+  "Stereo Pipeline Template": {
+    "prefix": "stereopipe",
+    "body": [
+      "// Stereo vision pipeline",
+      "",
+      "pipeline capture_left",
+      "    video_cap(${1:0})",
+      "    undistort(camera_left) -> \"rect_left\"",
+      "end",
+      "",
+      "pipeline capture_right",
+      "    video_cap(${2:2})",
+      "    undistort(camera_right) -> \"rect_right\"",
+      "end",
+      "",
+      "pipeline stereo_process",
+      "    exec_multi [",
+      "        capture_left,",
+      "        capture_right",
+      "    ]",
+      "    stereo_sgbm(\"rect_left\", \"rect_right\") -> \"disparity\"",
+      "    use(\"disparity\")",
+      "    apply_colormap(\"jet\")",
+      "    display(\"Disparity\")",
+      "end",
+      "",
+      "exec_loop stereo_process"
+    ],
+    "description": "Create a stereo vision pipeline template"
+  }
+}

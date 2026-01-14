@@ -1,0 +1,61 @@
+# object_detection.vsp
+# Real-time object detection using YOLO
+# Requires: VISIONPIPE_WITH_DNN=ON
+
+# Load YOLOv8 model at startup
+# Download model from: https://github.com/ultralytics/assets/releases
+load_model("yolo", "models/yolov8n.onnx", 
+    backend = "opencv",
+    device = "cpu",
+    input_width = 640,
+    input_height = 640
+)
+
+pipeline setup
+    named_window("Object Detection", "normal")
+end
+
+pipeline detect
+    # Capture frame from camera
+    video_cap(0) -> global "frame"
+    
+    # Store original for drawing
+    use(global "frame")
+    cache("original")
+    
+    # Preprocess for YOLO
+    letterbox(640, 640)
+    blob_from_image(0.00392156862, 640, 640, true)  # 1/255
+    
+    # Run inference
+    model_infer("yolo") -> "raw_output"
+    
+    # Decode YOLO output
+    use("raw_output")
+    decode_yolo("v8", 0.25, 640, 480, 640) -> "detections"
+    
+    # Apply NMS
+    use("detections")
+    nms_boxes(0.45, 0.25) -> "final_detections"
+    
+    # Draw results on original frame
+    use("original")
+    draw_detections("final_detections", labels = "models/coco.names", show_conf = true)
+    
+    imshow("Object Detection")
+end
+
+pipeline main
+    exec_seq detect
+    key = wait_key(1)
+    if key == 27
+        break
+    end
+end
+
+# Run
+exec_seq setup
+exec_loop main
+
+# Cleanup
+unload_model("yolo")

@@ -1,0 +1,31 @@
+# camera_controls.vsp - Interactive camera controls
+# Run: visionpipe.exe run camera_controls.vsp
+
+pipeline setup
+    video_input(0)
+    named_window("Output")
+    named_window("Controls")
+    trackbar_var("Brightness", "Controls", "bright", 0, 200, 100)
+    trackbar_var("Blur", "Controls", "blur", 0, 15, 0)
+    checkbox("Grayscale", "Controls", "gray", false)
+end
+
+pipeline main
+    video_read(0)
+    trackbar_value("Brightness", "Controls", "bright")
+    trackbar_value("Blur", "Controls", "blur")
+    get_checkbox("Grayscale", "Controls", "gray")
+    
+    get_var("bright")
+    add_value(bright)
+    
+    get_var("gray")
+    cvt_color(BGR2GRAY) -> "gray_img"
+    use("gray_img")
+    
+    imshow_with_vars("Output", "bright,blur,gray")
+    wait_key(30)
+end
+
+exec_seq setup
+exec_loop main

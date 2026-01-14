@@ -1,0 +1,7 @@
+# test_cache.vsp
+pipeline main
+    video_read(0) -> "test"
+    wait_key(30)
+end
+
+exec_loop main

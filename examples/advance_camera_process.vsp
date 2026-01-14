@@ -1,0 +1,44 @@
+# advance_camera_process.vsp - Advanced camera demo with edge detection
+# Run: visionpipe.exe run advance_camera_process.vsp
+# Press 'q' or ESC to exit
+
+pipeline setup
+    # Open camera and create windows
+    video_cap(0)
+    named_window("Live")
+    named_window("Edges")
+    
+    # Create trackbars for Canny edge detection
+    create_trackbar("Low Threshold", "Edges", 255, 50)
+    create_trackbar("High Threshold", "Edges", 255, 150)
+end
+
+pipeline main
+    # Capture frame
+    video_cap(0) -> "frame"
+    
+    # Show original
+    use("frame")
+    flip("horizontal")
+    imshow("Live")
+    
+    # Edge detection with current trackbar values
+    use("frame")
+    flip("horizontal")
+    cvt_color("bgr2gray")
+    gaussian_blur(5, 5)
+    canny(50, 150)
+    imshow("Edges")
+    
+    # Check for exit key
+    key = wait_key(30)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+exec_seq setup
+exec_loop main

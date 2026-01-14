@@ -1,0 +1,171 @@
+# We gonna make it happen!
+# In this program:
+# - Read video from capture device 0
+# - Display original video in window "Original"
+# - Having control panel to apply different filters (Gray, Blur, Canny, Skin detection)
+# - Display processed video in window "Processed"
+# - Press 'q' or ESC to exit
+
+# ============================================================================
+# Setup Pipeline - Create windows and trackbars
+# ============================================================================
+pipeline setup
+    named_window("Original", "autosize")
+    named_window("Processed", "autosize")
+    named_window("Controls", "autosize")
+    
+    # Filter selection: 0=None, 1=Gray, 2=Blur, 3=Canny, 4=Skin Detection, 5=Threshold
+    create_trackbar("Filter", "Controls", 5, 0)
+    
+    # Blur size (odd number, used when Filter=2)
+    create_trackbar("Blur Size", "Controls", 25, 5)
+    
+    # Canny thresholds (used when Filter=3)
+    create_trackbar("Canny Low", "Controls", 255, 50)
+    create_trackbar("Canny High", "Controls", 255, 150)
+    
+    # Threshold value (used when Filter=5)
+    create_trackbar("Threshold", "Controls", 255, 127)
+end
+
+# ============================================================================
+# Capture Pipeline - Read frame from camera
+# ============================================================================
+pipeline read_cap(let cap_id)
+    video_cap(cap_id) 
+    flip("horizontal") -> global "original_frame"
+end
+
+# ============================================================================
+# Filter Pipelines - Each filter as separate pipeline
+# ============================================================================
+pipeline filter_none
+    use(global "original_frame")
+    global_cache("processed_frame")
+end
+
+pipeline filter_gray
+    use(global "original_frame")
+    cvt_color("bgr2gray")
+    cvt_color("gray2bgr")
+    global_cache("processed_frame")
+end
+
+pipeline filter_blur(let blur_size)
+    use(global "original_frame")
+    gaussian_blur(blur_size)
+    global_cache("processed_frame")
+end
+
+pipeline filter_canny(let low_thresh, let high_thresh)
+    use(global "original_frame")
+    cvt_color("bgr2gray")
+    gaussian_blur(5)
+    canny(low_thresh, high_thresh)
+    cvt_color("gray2bgr")
+    global_cache("processed_frame")
+end
+
+pipeline filter_skin
+    use(global "original_frame")
+    cvt_color("bgr2hsv")
+    in_range([0, 48, 80], [20, 255, 255])
+    erode(3, "rect", 1)
+    dilate(3, "rect", 2)
+    find_contours("external", "simple", "skin_contours")
+    use(global "original_frame")
+    bounding_rect("skin_contours", "green", 2)
+    global_cache("processed_frame")
+end
+
+pipeline filter_threshold(let thresh_val)
+    use(global "original_frame")
+    cvt_color("bgr2gray")
+    threshold(thresh_val, 255, "binary")
+    cvt_color("gray2bgr")
+    global_cache("processed_frame")
+end
+
+# ============================================================================
+# Display Pipeline - Show frames in windows
+# ============================================================================
+pipeline display_frames
+    use(global "original_frame")
+    imshow("Original")
+    use(global "processed_frame")
+    if filter_mode == 0
+        put_text("No Filter", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    if filter_mode == 1
+        put_text("Grayscale", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    if filter_mode == 2
+        put_text("Gaussian Blur", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    if filter_mode == 3
+        put_text("Canny Edge Detection", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    if filter_mode == 4
+        put_text("Skin Detection", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    if filter_mode == 5
+        put_text("Threshold", 10, 30, "simplex", 1.0, "white", 2)
+    end
+    imshow("Processed")
+end
+
+# ============================================================================
+# Main Pipeline - Orchestrate everything
+# ============================================================================
+pipeline main
+    # Capture frame
+    exec_seq read_cap(0)
+    
+    # Read trackbar values into variables
+    trackbar_value("Filter", "Controls", "filter_mode")
+    trackbar_value("Blur Size", "Controls", "blur_val")
+    trackbar_value("Canny Low", "Controls", "canny_low")
+    trackbar_value("Canny High", "Controls", "canny_high")
+    trackbar_value("Threshold", "Controls", "thresh_val")
+    
+    # Apply filter based on mode
+    if filter_mode == 0
+        exec_seq filter_none
+    end
+    if filter_mode == 1
+        exec_seq filter_gray
+    end
+    if filter_mode == 2
+        blur_size = blur_val * 2 + 1
+        exec_seq filter_blur(blur_size)
+    end
+    if filter_mode == 3
+        exec_seq filter_canny(canny_low, canny_high)
+    end
+    if filter_mode == 4
+        exec_seq filter_skin
+    end
+    if filter_mode == 5
+        exec_seq filter_threshold(thresh_val)
+    end
+    
+    # Display results
+    exec_seq display_frames
+    
+    # Handle keyboard input
+    key = wait_key(1)
+    
+    # Exit on 'q' (113) or ESC (27)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+# ============================================================================
+# Program Entry Point
+# ============================================================================
+exec_seq setup
+exec_loop main

@@ -1,0 +1,197 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VisionPipe Script",
+  "scopeName": "source.vsp",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#execution" },
+    { "include": "#cache-operators" },
+    { "include": "#builtins" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.pound.vsp",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.vsp",
+          "match": "\\b(pipeline|end|if|else|while|for|break|continue|return)\\b"
+        },
+        {
+          "name": "keyword.other.vsp",
+          "match": "\\b(import|config|global|let|use|cache)\\b"
+        },
+        {
+          "name": "storage.modifier.vsp",
+          "match": "\\b(global)\\b"
+        }
+      ]
+    },
+    "execution": {
+      "patterns": [
+        {
+          "name": "keyword.control.execution.vsp",
+          "match": "\\b(exec_seq|exec_multi|exec_loop)\\b"
+        }
+      ]
+    },
+    "cache-operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.vsp",
+          "match": "->"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.video.vsp",
+          "match": "\\b(video_cap|video_write|save_image|load_image)\\b"
+        },
+        {
+          "name": "support.function.image.vsp",
+          "match": "\\b(resize|color_convert|cvt_color|gaussian_blur|median_blur|bilateral_filter|canny|canny_edge|threshold|adaptive_threshold|morphology|equalize_hist)\\b"
+        },
+        {
+          "name": "support.function.stereo.vsp",
+          "match": "\\b(undistort|stereo_sgbm|stereo_bm|apply_colormap)\\b"
+        },
+        {
+          "name": "support.function.display.vsp",
+          "match": "\\b(display|wait_key|print|debug_mat)\\b"
+        },
+        {
+          "name": "support.function.cache.vsp",
+          "match": "\\b(use|cache|pass)\\b"
+        },
+        {
+          "name": "support.function.drawing.vsp",
+          "match": "\\b(draw_text|draw_rect|draw_circle|draw_line)\\b"
+        },
+        {
+          "name": "support.function.frame.vsp",
+          "match": "\\b(hstack|vstack|crop|rotate|flip)\\b"
+        },
+        {
+          "name": "support.function.control.vsp",
+          "match": "\\b(sleep)\\b"
+        },
+        {
+          "name": "support.function.ipc.vsp",
+          "match": "\\b(publish_frame|subscribe_frame)\\b"
+        },
+        {
+          "name": "support.function.fastcv.vsp",
+          "match": "\\b(fast_gaussian_blur|fast_corner_detect|fast_pyramid)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.vsp",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.vsp",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.vsp",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.vsp",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.vsp",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.vsp",
+          "match": "\\b\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.hex.vsp",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.vsp",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.vsp",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.vsp",
+          "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.assignment.vsp",
+          "match": "="
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.vsp",
+          "match": ","
+        },
+        {
+          "name": "punctuation.definition.parameters.begin.vsp",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.definition.parameters.end.vsp",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.definition.array.begin.vsp",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.definition.array.end.vsp",
+          "match": "\\]"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.vsp",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

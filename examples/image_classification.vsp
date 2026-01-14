@@ -1,0 +1,59 @@
+# image_classification.vsp
+# Image classification using ResNet or MobileNet
+# Requires: VISIONPIPE_WITH_DNN=ON
+
+# Load classification model
+# Download from ONNX Model Zoo: https://github.com/onnx/models
+load_model("classifier", "models/mobilenetv2.onnx",
+    backend = "opencv",
+    device = "cpu",
+    input_width = 224,
+    input_height = 224
+)
+
+pipeline setup
+    named_window("Classification", "normal")
+end
+
+pipeline classify
+    # Capture frame
+    video_cap(0) -> global "frame"
+    
+    # Store original
+    use(global "frame")
+    cache("original")
+    
+    # Preprocess for classification (ImageNet normalization)
+    resize(224, 224)
+    normalize_mean_std([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    blob_from_image(1.0, 224, 224, true)
+    
+    # Run inference
+    model_infer("classifier") -> "logits"
+    
+    # Apply softmax and get top-5
+    use("logits")
+    softmax(1)
+    topk(5) -> "predictions"
+    
+    # Draw on original frame
+    use("original")
+    draw_classification("predictions", labels = "models/imagenet.txt", position = "top-left")
+    
+    imshow("Classification")
+end
+
+pipeline main
+    exec_seq classify
+    key = wait_key(1)
+    if key == 27
+        break
+    end
+end
+
+# Run
+exec_seq setup
+exec_loop main
+
+# Cleanup
+unload_model("classifier")

@@ -1,0 +1,40 @@
+# simple_dnn_inference.vsp
+# Simple DNN inference example - detect objects in a single image
+# Requires: VISIONPIPE_WITH_DNN=ON
+
+# Load YOLO model
+load_model("detector", "models/yolov8n.onnx", backend = "opencv")
+
+# List loaded models
+list_models()
+
+# Get model info
+model_info("detector")
+
+pipeline process_image
+    # Load image
+    imread("test_image.jpg") -> global "image"
+    
+    # Preprocess
+    use(global "image")
+    cache("original")
+    letterbox(640, 640)
+    
+    # Run detection
+    model_infer("detector") -> "output"
+    
+    # Decode and filter
+    use("output")
+    decode_yolo("v8", 0.5) -> "dets"
+    nms_boxes(0.4, 0.5) -> "final"
+    
+    # Draw and save
+    use("original")
+    draw_detections("final")
+    imwrite("output_detected.jpg")
+    
+    print("Detection complete! Saved to output_detected.jpg")
+end
+
+exec_seq process_image
+unload_model("detector")

@@ -1,0 +1,83 @@
+# yolov8_human_detection.vsp - YOLOv8 Human Detection Example
+# Detects humans/persons in real-time using YOLOv8 neural network.
+# 
+# Requirements:
+#   - VisionPipe compiled with VISIONPIPE_WITH_DNN=ON
+#   - YOLOv8 ONNX model (see README.md for download instructions)
+#
+# Usage:
+#   visionpipe run examples/DNN/yolov8_human_detection.vsp
+#
+# Press 'q' or ESC to exit
+
+pipeline setup
+    # Load the YOLOv8 model
+    # YOLOv8n expects 640x640 square input
+    # Use "cpu" target - OpenCL has driver compatibility issues on some systems
+    load_model("yolo", "./models/yolo-v8/model.onnx", "opencv", "cpu", 640, 640)
+    
+    # Create display window
+    named_window("YOLOv8 Human Detection", "normal")
+end
+
+pipeline detect
+    # Capture frame from camera
+    video_cap(0) -> "frame"
+    
+    # Store original for drawing
+    use("frame")
+    cache("original")
+    
+    # Preprocess for YOLO - center crop to square, then resize to 640x640
+
+    crop(420, 0, 640, 640)  # Crop to center 640x640 from 1280x720
+    
+    blob_from_image(0.00392156862, 640, 640, true)
+    
+    # Run YOLOv8 inference
+    model_infer("yolo") -> "raw_output"
+    
+    # Decode YOLO v8 output format
+    # Args: version, confidence_threshold, original_width, original_height, input_size
+    use("raw_output")
+    decode_yolo("v8", 0.5, 640, 640, 640) -> "detections"
+    
+    # Apply Non-Maximum Suppression
+    use("detections")
+    nms_boxes(0.45, 0.5) -> "final_detections"
+    
+    # Draw detections on original frame
+    use("original")
+    draw_detections("final_detections", "models/coco.names", true)
+    
+    # Add FPS counter
+    fps(true, 10, 30)
+    
+    # Display result
+    imshow("YOLOv8 Human Detection")
+end
+
+pipeline main
+    exec_seq detect
+    
+    # Check for exit key (q = 113, ESC = 27)
+    key = wait_key(1)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+# Initialize
+exec_seq setup
+
+# Run main loop
+exec_loop main
+
+# Cleanup
+pipeline cleanup
+    unload_model("yolo")
+end
+exec_seq cleanup

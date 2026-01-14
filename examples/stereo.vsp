@@ -1,0 +1,21 @@
+pipeline distort_cancel(let input_id, let output_frame, let distort_params)
+    video_cap(input_id)
+    undistort(distort_params) -> output_frame
+end
+
+pipeline stereo_preprocess
+exec_multi [
+    distort_cancel(0, "rect_l", camera_l_distort),
+    distort_cancel(2, "rect_r", camera_r_distort)
+]
+end
+
+pipeline main
+    exec_seq stereo_preprocess
+    exec_seq color_convert
+    exec_seq stereo_compute
+    use("disp_map")
+    display()
+end
+
+exec_loop main

@@ -1,0 +1,13 @@
+# test_simple.vsp - Test basic pipeline
+# Run: visionpipe.exe run test_simple.vsp
+# Press Ctrl+C in terminal to stop
+
+pipeline main
+    video_cap(0)
+    flip("horizontal")
+    fps(true, 10, 30)
+    imshow("Result")
+    wait_key(30)
+end
+
+exec_loop main
