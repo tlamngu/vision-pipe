@@ -30,6 +30,7 @@
 #include "interpreter/items/conditional_items.h"
 #include "interpreter/items/gui_enhanced_items.h"
 #include "interpreter/items/tensor_items.h"
+#include "interpreter/items/ip_stream_items.h"
 
 // Optional: DeepLearning/DNN items (when VISIONPIPE_WITH_DNN is enabled)
 #ifdef VISIONPIPE_WITH_DNN

@@ -1,0 +1,89 @@
+# streaming_example.vsp - IP Camera Streaming Example
+# ============================================================================
+# This example demonstrates HTTP-based video streaming over LAN using the
+# IP Stream feature. Requires VISIONPIPE_IP_CAM=ON when building.
+#
+# Build with IP streaming support:
+#   cmake .. -DVISIONPIPE_IP_CAM=ON
+#   cmake --build . --config Release
+#
+# Run:
+#   visionpipe.exe run streaming_example.vsp
+#
+# Access the stream from any device on your network:
+#   http://<your-ip>:8080/stream
+#
+# Compatible with:
+#   - Web browsers (Chrome, Firefox, Edge, Safari)
+#   - VLC Media Player (Media > Open Network Stream)
+#   - ffmpeg: ffplay http://<ip>:8080/stream
+#   - Python/OpenCV: cv2.VideoCapture("http://<ip>:8080/stream")
+# ============================================================================
+
+# --- Variables for FPS calculation ---
+# We'll use a simple frame counter approach
+
+pipeline setup
+    
+    # Initialize tick counter for FPS
+    get_tick("last_tick")
+    
+    # Print stream information
+    print("==============================================")
+    print("VisionPipe IP Stream Server Starting...")
+    print("==============================================")
+end
+
+pipeline main
+    # Capture frame from camera (change index if needed)
+    video_cap(0)
+    
+    # Resize for better streaming performance (optional)
+    resize(1280, 720)
+    
+    # Add "Streamed from VisionPipe" text overlay
+    put_text("Streamed from VisionPipe", 10, 30, "simplex", 0.7, "white", 2)
+    put_text("Streamed from VisionPipe", 10, 30, "simplex", 0.7, "cyan", 1)
+    
+    fps(true, 20,  20)
+
+    
+    # Stream frames over HTTP on port 8080
+    # Binds to all interfaces (0.0.0.0) for LAN access
+    # JPEG quality: 85 (good balance of quality vs bandwidth)
+    ip_stream(8080, "0.0.0.0", 85)
+    
+    # Show local preview
+    # imshow("VisionPipe Stream")
+    
+    # Wait for key (30ms = ~33 FPS target)
+    # Press ESC or 'q' to quit
+    key = wait_key(1)
+    
+    # Check for 'q' key (ASCII 113) or ESC key (ASCII 27)
+    if key == 113
+        break
+    end
+    
+    if key == 27
+        break
+    end
+end
+
+pipeline shutdown
+    # Stop the stream server
+    ip_stream_stop(8080)
+    print("Stream server stopped.")
+end
+
+# Execute setup once
+exec_seq setup
+
+# Print connection info
+ip_stream_info()
+
+# Main processing loop
+exec_loop main
+
+# Cleanup
+exec_seq shutdown

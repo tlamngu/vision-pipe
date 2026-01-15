@@ -25,7 +25,7 @@ VisionPipe is designed for developers, researchers, and vision engineers who nee
 - **Cross-Platform**: Windows, Linux, and macOS support
 - **Interactive GUI**: Built-in visualization with trackbars and parameter controls
 
-## Release Status (v1.2)
+## Release Status (v1.2.1)
 
 ⚠️ **Pre-Production Notice**: VisionPipe v1.x is not yet production-ready. Please review the stability status below.
 
@@ -60,6 +60,10 @@ If you require production-ready software, please wait for v2.x or look for relea
 - Prototyping
 - Non-critical applications
 - Testing and evaluation
+
+### New features
+
+Now supports IP streaming of frames under feature flag of `-DVISIONPIPE_IP_CAM=ON`. You may check `examples/ip_stream_items.vsp` for details.  
 
 ## Quick Start
 

@@ -77,9 +77,16 @@ void printBanner() {
 | |  / (_)____(_)___  ____  / __ \(_)___  ___   
 | | / / / ___/ / __ \/ __ \/ /_/ / / __ \/ _ \  
 | |/ / (__  ) / /_/ / / / / ____/ / /_/ /  __/  
-|___/_/____/_/\____/_/ /_/_/   /_/ .___/\___/   standard edition v1.0.0
+|___/_/____/_/\____/_/ /_/_/   /_/ .___/\___/   
                                 /_/             
 )" << std::endl;
+
+    // VISIONPIPE_VERSION should be provided by CMake (e.g. add_definitions(-DVISIONPIPE_VERSION=\"${PROJECT_VERSION}\"))
+#ifndef VISIONPIPE_VERSION
+#define VISIONPIPE_VERSION "v1.0.0"
+#endif
+
+    std::cout << "  standard edition " << VISIONPIPE_VERSION << std::endl;
 }
 
 void printUsage() {

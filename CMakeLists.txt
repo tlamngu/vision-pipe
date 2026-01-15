@@ -20,6 +20,7 @@ option(VISIONPIPE_WITH_CUDA "Enable CUDA acceleration" OFF)
 option(VISIONPIPE_WITH_OPENCL "Enable OpenCL acceleration" ON)
 option(VISIONPIPE_WITH_DNN "Enable DeepLearning/DNN features (requires OpenCV DNN module)" ON)
 option(VISIONPIPE_WITH_ONNXRUNTIME "Enable ONNX Runtime backend for DNN (alternative to OpenCV DNN)" ON)
+option(VISIONPIPE_IP_CAM "Enable HTTP-based IP streaming (MJPEG) for remote frame access" OFF)
 
 # Performance options
 option(VISIONPIPE_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -210,7 +211,17 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/conditional_items.cpp
     src/interpreter/items/gui_enhanced_items.cpp
     src/interpreter/items/tensor_items.cpp
+    src/interpreter/items/ip_stream_items.cpp
 )
+
+# IP Stream sources (optional feature)
+if(VISIONPIPE_IP_CAM)
+    list(APPEND VISIONPIPE_CORE_SOURCES
+        src/utils/http_frame_server.cpp
+    )
+    add_definitions(-DVISIONPIPE_IP_STREAM_ENABLED)
+    message(STATUS "IP Stream (HTTP MJPEG streaming) enabled")
+endif()
 
 set(VISIONPIPE_CLI_SOURCES
     src/cli/main.cpp
@@ -319,6 +330,11 @@ target_link_libraries(visionpipe_core PUBLIC
     ${OpenCV_LIBS}
     Threads::Threads
 )
+
+# Link Winsock for IP Stream on Windows
+if(VISIONPIPE_IP_CAM AND WIN32)
+    target_link_libraries(visionpipe_core PRIVATE ws2_32 iphlpapi)
+endif()
 
 if(VISIONPIPE_WITH_FASTCV)
     target_include_directories(visionpipe_core PRIVATE ${FASTCV_INCLUDE_DIR})
@@ -609,6 +625,7 @@ message(STATUS "  CUDA:           ${VISIONPIPE_WITH_CUDA}")
 message(STATUS "  OpenCL:         ${VISIONPIPE_WITH_OPENCL}")
 message(STATUS "  DeepLearning:   ${VISIONPIPE_WITH_DNN}")
 message(STATUS "  ONNX Runtime:   ${VISIONPIPE_WITH_ONNXRUNTIME}")
+message(STATUS "  IP Stream:      ${VISIONPIPE_IP_CAM}")
 message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "========================================")
