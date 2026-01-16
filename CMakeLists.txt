@@ -235,12 +235,12 @@ set(VISIONPIPE_CLI_SOURCES
 #     )
 # endif()
 
-if(VISIONPIPE_WITH_ICEORYX2)
-    list(APPEND VISIONPIPE_CORE_SOURCES
-        src/extensions/iceoryx/iceoryx_publisher.cpp
-        src/extensions/iceoryx/publish_frame_item.cpp
-    )
-endif()
+# if(VISIONPIPE_WITH_ICEORYX2)
+#     list(APPEND VISIONPIPE_CORE_SOURCES
+#         src/extensions/iceoryx/iceoryx_publisher.cpp
+#         src/extensions/iceoryx/publish_frame_item.cpp
+#     )
+# endif()
 
 # DeepLearning/DNN sources (optional feature)
 if(VISIONPIPE_WITH_DNN)
