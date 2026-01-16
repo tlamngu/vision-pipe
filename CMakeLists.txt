@@ -81,6 +81,11 @@ find_package(OpenCV COMPONENTS
     videoio
     calib3d
     highgui
+    dnn
+    photo
+    stitching
+    xphoto
+    video
 )
 
 if(NOT OpenCV_FOUND)
