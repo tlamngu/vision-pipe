@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cstring>
 #include <algorithm>
+#include <thread>
+
 
 namespace visionpipe {
 namespace ml {

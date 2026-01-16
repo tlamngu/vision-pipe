@@ -74,6 +74,36 @@ Now supports IP streaming of frames under feature flag of `-DVISIONPIPE_IP_CAM=O
 - CMake 3.16 or higher
 - OpenCV 4.x
 
+#### Dependencies
+
+VisionPipe depends on several external libraries and toolchain components. The table below lists minimum and recommended versions and notes for enabling optional features.
+
+| Dependency | Minimum | Recommended | Notes |
+|------------|---------|-------------|-------|
+| OpenCV | 4.8.0 | 4.14 or latest | Required. Built with `core imgproc imgcodecs videoio highgui calib3d` components. If you enable OpenCL/CUDA or DNN features, use an OpenCV build that includes those modules. |
+| FastCV (optional) | copy of OpenCV with FastCV | copy matching OpenCV recommended version | When `VISIONPIPE_WITH_FASTCV` is enabled the project expects OpenCV variants including FastCV; typically available from vendor SDKs. |
+| Iceoryx2 (optional) | 0.8.0 | latest stable | Required only if `VISIONPIPE_WITH_ICEORYX2` is enabled. Install Iceoryx2 and make it discoverable to CMake. |
+| ONNX Runtime (optional) | Recent build | latest stable | Required if `VISIONPIPE_WITH_ONNXRUNTIME` is enabled. Ensure matching providers (CUDA/ORT, TensorRT, OpenVINO) are available for your target. |
+
+Other build/tooling prerequisites:
+- C++17 compatible compiler (GCC, Clang, or MSVC)
+- CMake 3.16 or higher
+
+Enable optional features at configure time using CMake flags, for example:
+
+```bash
+# Enable IP streaming (MJPEG) support
+cmake .. -DVISIONPIPE_IP_CAM=ON
+
+# Enable Iceoryx2 IPC support
+cmake .. -DVISIONPIPE_WITH_ICEORYX2=ON
+
+# Enable FastCV extensions (vendor SDK required)
+cmake .. -DVISIONPIPE_WITH_FASTCV=ON
+
+# Enable ONNX Runtime backend
+cmake .. -DVISIONPIPE_WITH_ONNXRUNTIME=ON
+```
 #### Building from Source
 
 ```bash
