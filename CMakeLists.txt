@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(VisionPipe VERSION 1.2.0 LANGUAGES CXX)
+project(VisionPipe VERSION 1.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -229,11 +229,11 @@ set(VISIONPIPE_CLI_SOURCES
 )
 
 # Optional extension sources
-if(VISIONPIPE_WITH_FASTCV)
-    list(APPEND VISIONPIPE_CORE_SOURCES
-        src/extensions/fastcv/fastcv_items.cpp
-    )
-endif()
+# if(VISIONPIPE_WITH_FASTCV)
+#     list(APPEND VISIONPIPE_CORE_SOURCES
+#         src/extensions/fastcv/fastcv_items.cpp
+#     )
+# endif()
 
 if(VISIONPIPE_WITH_ICEORYX2)
     list(APPEND VISIONPIPE_CORE_SOURCES
