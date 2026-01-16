@@ -511,7 +511,7 @@ HttpFrameServer* IPStreamManager::getServer(uint16_t port, const std::string& bi
     if (!server->start()) {
         return nullptr;
     }
-    std::cout << "getServer() returned, server=" << server << std::endl;
+    std::cout << "get server success."<< std::endl;
     
     HttpFrameServer* ptr = server.get();
     _servers[port] = std::move(server);
