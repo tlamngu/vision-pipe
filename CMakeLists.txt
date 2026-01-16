@@ -478,86 +478,10 @@ if(VISIONPIPE_BUILD_CLI)
     # For multi-config generators (VS, Xcode), output goes to ${CMAKE_BINARY_DIR}/<CONFIG>
     # For single-config generators, output goes to ${CMAKE_BINARY_DIR}
     if(WIN32)
-        # Windows: Generate script at build time to get correct config-specific path
-        set(UPDATE_PATH_SCRIPT "${CMAKE_BINARY_DIR}/update_path.ps1")
-        
-        # Create a script template that will be updated at build time
-        add_custom_command(TARGET visionpipe POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E echo "$binPath = '$<TARGET_FILE_DIR:visionpipe>'" > "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Normalize the path (resolve any .. or .)" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "$binPath = [System.IO.Path]::GetFullPath($binPath)" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "$currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "if ([string]::IsNullOrEmpty($currentPath)) { $currentPath = '' }" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Split current PATH into array and normalize each entry for comparison" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "$pathArray = $currentPath -split ';' | Where-Object { $_ -ne '' } | ForEach-Object { try { [System.IO.Path]::GetFullPath($_) } catch { $_ } }" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Check if binPath already exists in PATH (case-insensitive)" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "$alreadyExists = $pathArray | Where-Object { $_.ToLower() -eq $binPath.ToLower() }" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "if (-not $alreadyExists) {" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    $newPath = $binPath + ';' + $currentPath" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    Write-Host 'Added to USER PATH:' $binPath" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "} else {" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    Write-Host 'Already in PATH:' $binPath" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "}" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Also update current session" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "$env:PATH = $binPath + ';' + $env:PATH" >> "${UPDATE_PATH_SCRIPT}"
-            VERBATIM
-            COMMENT "Generating PATH update script"
-        )
-        
-        add_custom_command(TARGET visionpipe POST_BUILD
-            COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File "${UPDATE_PATH_SCRIPT}"
-            COMMENT "Adding visionpipe output directory to system PATH"
-        )
+        message("Auto path update was deprecated.")
     else()
         # Linux/macOS: Generate script at build time to get correct output path
-        set(UPDATE_PATH_SCRIPT "${CMAKE_BINARY_DIR}/update_path.sh")
-        
-        add_custom_command(TARGET visionpipe POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E echo "#!/bin/bash" > "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "BIN_PATH='$<TARGET_FILE_DIR:visionpipe>'" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Normalize path \\(resolve to absolute\\)" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "BIN_PATH=\\$\\(cd \"\\$BIN_PATH\" 2>/dev/null && pwd || echo \"\\$BIN_PATH\"\\)" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "# Function to add path to rc file if not already present" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "add_to_rc\\(\\) {" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    local rc_file=\"\\$1\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    if [ -f \"\\$rc_file\" ]; then" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "        if ! grep -qF \"\\$BIN_PATH\" \"\\$rc_file\"; then" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "            echo '' >> \"\\$rc_file\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "            echo '# VisionPipe binary path' >> \"\\$rc_file\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "            echo \"export PATH=\\\"\\$BIN_PATH:\\\\\\$PATH\\\"\" >> \"\\$rc_file\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "            echo \"Added to \\$rc_file\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "        else" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "            echo \"Already in \\$rc_file\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "        fi" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    fi" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "}" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "add_to_rc \"\\$HOME/.bashrc\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "add_to_rc \"\\$HOME/.zshrc\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "if [ ! -f \"\\$HOME/.bashrc\" ] && [ ! -f \"\\$HOME/.zshrc\" ]; then" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    if [ -f \"\\$HOME/.profile\" ]; then" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "        add_to_rc \"\\$HOME/.profile\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "    fi" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "fi" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "export PATH=\"\\$BIN_PATH:\\$PATH\"" >> "${UPDATE_PATH_SCRIPT}"
-            COMMAND ${CMAKE_COMMAND} -E echo "echo 'VisionPipe binary available at:' \\$BIN_PATH" >> "${UPDATE_PATH_SCRIPT}"
-            VERBATIM
-            COMMENT "Generating PATH update script for Linux/macOS"
-        )
-        
-        add_custom_command(TARGET visionpipe POST_BUILD
-            COMMAND chmod +x "${UPDATE_PATH_SCRIPT}" && bash "${UPDATE_PATH_SCRIPT}"
-            COMMENT "Adding visionpipe output directory to shell PATH"
-        )
+        message("Auto path update was deprecated.")        
     endif()
 
     # Install CLI to appropriate system location
