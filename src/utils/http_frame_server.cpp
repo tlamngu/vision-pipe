@@ -509,6 +509,7 @@ HttpFrameServer* IPStreamManager::getServer(uint16_t port, const std::string& bi
     // Create new server
     auto server = std::make_unique<HttpFrameServer>(port, bindAddress);
     if (!server->start()) {
+        std::cout << "! Failed to start server."<< std::endl;
         return nullptr;
     }
     std::cout << "get server success."<< std::endl;
