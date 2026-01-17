@@ -33,54 +33,96 @@ ColorConvertItem::ColorConvertItem() {
     _category = "color";
     _params = {
         ParamDef::required("code", BaseType::STRING, 
-            "Conversion code: bgr2gray, gray2bgr, bgr2rgb, rgb2bgr, bgr2hsv, hsv2bgr, "
-            "bgr2hls, hls2bgr, bgr2lab, lab2bgr, bgr2luv, luv2bgr, bgr2xyz, xyz2bgr, "
-            "bgr2ycrcb, ycrcb2bgr, bgr2yuv, yuv2bgr")
+            "Conversion code: bgr2gray, bgr2hsv, bgr2lab, yuv2bgr, uyvy2bgr, nv122bgr, bayerbg2bgr, etc.")
     };
-    _example = "cvt_color(\"bgr2gray\") | cvt_color(\"bgr2hsv\")";
+    _example = "cvt_color(\"bgr2gray\") | cvt_color(\"uyvy2bgr\")";
     _returnType = "mat";
-    _tags = {"color", "convert", "space"};
+    _tags = {"color", "convert", "space", "transform"};
 }
 
 ExecutionResult ColorConvertItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    static const std::map<std::string, int> conversions = {
+        // RGB/BGR <-> Gray
+        {"bgr2gray", cv::COLOR_BGR2GRAY}, {"gray2bgr", cv::COLOR_GRAY2BGR},
+        {"rgb2gray", cv::COLOR_RGB2GRAY}, {"gray2rgb", cv::COLOR_GRAY2RGB},
+        {"bgra2gray", cv::COLOR_BGRA2GRAY}, {"gray2bgra", cv::COLOR_GRAY2BGRA},
+        {"rgba2gray", cv::COLOR_RGBA2GRAY}, {"gray2rgba", cv::COLOR_GRAY2RGBA},
+        
+        // RGB <-> BGR
+        {"bgr2bgra", cv::COLOR_BGR2BGRA}, {"bgra2bgr", cv::COLOR_BGRA2BGR},
+        {"bgr2rgb", cv::COLOR_BGR2RGB}, {"rgb2bgr", cv::COLOR_RGB2BGR},
+        {"bgra2rgba", cv::COLOR_BGRA2RGBA}, {"rgba2bgra", cv::COLOR_RGBA2BGRA},
+        {"bgr2rgba", cv::COLOR_BGR2RGBA}, {"rgba2bgr", cv::COLOR_RGBA2BGR},
+        {"rgb2bgra", cv::COLOR_RGB2BGRA}, {"bgra2rgb", cv::COLOR_BGRA2RGB},
+        
+        // RGB/BGR <-> XYZ
+        {"bgr2xyz", cv::COLOR_BGR2XYZ}, {"xyz2bgr", cv::COLOR_XYZ2BGR},
+        {"rgb2xyz", cv::COLOR_RGB2XYZ}, {"xyz2rgb", cv::COLOR_XYZ2RGB},
+        
+        // RGB/BGR <-> YCrCb
+        {"bgr2ycrcb", cv::COLOR_BGR2YCrCb}, {"ycrcb2bgr", cv::COLOR_YCrCb2BGR},
+        {"rgb2ycrcb", cv::COLOR_RGB2YCrCb}, {"ycrcb2rgb", cv::COLOR_YCrCb2RGB},
+        
+        // RGB/BGR <-> HSV
+        {"bgr2hsv", cv::COLOR_BGR2HSV}, {"hsv2bgr", cv::COLOR_HSV2BGR},
+        {"rgb2hsv", cv::COLOR_RGB2HSV}, {"hsv2rgb", cv::COLOR_HSV2RGB},
+        {"bgr2hsv_full", cv::COLOR_BGR2HSV_FULL}, {"hsv2bgr_full", cv::COLOR_HSV2BGR_FULL},
+        
+        // RGB/BGR <-> HLS
+        {"bgr2hls", cv::COLOR_BGR2HLS}, {"hls2bgr", cv::COLOR_HLS2BGR},
+        {"rgb2hls", cv::COLOR_RGB2HLS}, {"hls2rgb", cv::COLOR_HLS2RGB},
+        {"bgr2hls_full", cv::COLOR_BGR2HLS_FULL}, {"hls2bgr_full", cv::COLOR_HLS2BGR_FULL},
+        
+        // RGB/BGR <-> Lab
+        {"bgr2lab", cv::COLOR_BGR2Lab}, {"lab2bgr", cv::COLOR_Lab2BGR},
+        {"rgb2lab", cv::COLOR_RGB2Lab}, {"lab2rgb", cv::COLOR_Lab2RGB},
+        {"lbgr2lab", cv::COLOR_LBGR2Lab}, {"lab2lbgr", cv::COLOR_Lab2LBGR},
+        {"lrgb2lab", cv::COLOR_LRGB2Lab}, {"lab2lrgb", cv::COLOR_Lab2LRGB},
+        
+        // RGB/BGR <-> Luv
+        {"bgr2luv", cv::COLOR_BGR2Luv}, {"luv2bgr", cv::COLOR_Luv2BGR},
+        {"rgb2luv", cv::COLOR_RGB2Luv}, {"luv2rgb", cv::COLOR_Luv2RGB},
+        
+        // RGB/BGR <-> YUV
+        {"bgr2yuv", cv::COLOR_BGR2YUV}, {"yuv2bgr", cv::COLOR_YUV2BGR},
+        {"rgb2yuv", cv::COLOR_RGB2YUV}, {"yuv2rgb", cv::COLOR_YUV2RGB},
+        
+        // YUV 4:2:2 (UYVY, YUYV, YVYU) -> RGB/BGR
+        {"uyvy2bgr", cv::COLOR_YUV2BGR_UYVY}, {"uyvy2rgb", cv::COLOR_YUV2RGB_UYVY},
+        {"yuyv2bgr", cv::COLOR_YUV2BGR_YUY2}, {"yuyv2rgb", cv::COLOR_YUV2RGB_YUY2},
+        {"yuy22bgr", cv::COLOR_YUV2BGR_YUY2}, {"yuy22rgb", cv::COLOR_YUV2RGB_YUY2},
+        {"yvyu2bgr", cv::COLOR_YUV2BGR_YVYU}, {"yvyu2rgb", cv::COLOR_YUV2RGB_YVYU},
+        {"uyvy2gray", cv::COLOR_YUV2GRAY_UYVY}, {"yuyv2gray", cv::COLOR_YUV2GRAY_YUY2},
+        {"yvyu2gray", cv::COLOR_YUV2GRAY_YVYU}, 
+        
+        // YUV 4:2:0 (NV12, NV21) -> RGB/BGR
+        {"nv122bgr", cv::COLOR_YUV2BGR_NV12}, {"nv122rgb", cv::COLOR_YUV2RGB_NV12},
+        {"nv212bgr", cv::COLOR_YUV2BGR_NV21}, {"nv212rgb", cv::COLOR_YUV2RGB_NV21},
+        {"nv122gray", cv::COLOR_YUV2GRAY_NV12}, {"nv212gray", cv::COLOR_YUV2GRAY_NV21},
+        
+        // Bayer -> RGB/BGR
+        {"bayerbg2bgr", cv::COLOR_BayerBG2BGR}, {"bayerbg2rgb", cv::COLOR_BayerBG2RGB},
+        {"bayergb2bgr", cv::COLOR_BayerGB2BGR}, {"bayergb2rgb", cv::COLOR_BayerGB2RGB},
+        {"bayerrg2bgr", cv::COLOR_BayerRG2BGR}, {"bayerrg2rgb", cv::COLOR_BayerRG2RGB},
+        {"bayergr2bgr", cv::COLOR_BayerGR2BGR}, {"bayergr2rgb", cv::COLOR_BayerGR2RGB}
+    };
+
     std::string code = args[0].asString();
+    // Normalize string to lowercase
+    std::transform(code.begin(), code.end(), code.begin(), ::tolower);
     
-    // Map string to cv::ColorConversionCodes
-    int cvCode = -1;
-    if (code == "bgr2gray") cvCode = cv::COLOR_BGR2GRAY;
-    else if (code == "gray2bgr") cvCode = cv::COLOR_GRAY2BGR;
-    else if (code == "bgr2rgb") cvCode = cv::COLOR_BGR2RGB;
-    else if (code == "rgb2bgr") cvCode = cv::COLOR_RGB2BGR;
-    else if (code == "bgr2hsv") cvCode = cv::COLOR_BGR2HSV;
-    else if (code == "hsv2bgr") cvCode = cv::COLOR_HSV2BGR;
-    else if (code == "bgr2hsv_full") cvCode = cv::COLOR_BGR2HSV_FULL;
-    else if (code == "hsv2bgr_full") cvCode = cv::COLOR_HSV2BGR_FULL;
-    else if (code == "bgr2hls") cvCode = cv::COLOR_BGR2HLS;
-    else if (code == "hls2bgr") cvCode = cv::COLOR_HLS2BGR;
-    else if (code == "bgr2lab") cvCode = cv::COLOR_BGR2Lab;
-    else if (code == "lab2bgr") cvCode = cv::COLOR_Lab2BGR;
-    else if (code == "bgr2luv") cvCode = cv::COLOR_BGR2Luv;
-    else if (code == "luv2bgr") cvCode = cv::COLOR_Luv2BGR;
-    else if (code == "bgr2xyz") cvCode = cv::COLOR_BGR2XYZ;
-    else if (code == "xyz2bgr") cvCode = cv::COLOR_XYZ2BGR;
-    else if (code == "bgr2ycrcb") cvCode = cv::COLOR_BGR2YCrCb;
-    else if (code == "ycrcb2bgr") cvCode = cv::COLOR_YCrCb2BGR;
-    else if (code == "bgr2yuv") cvCode = cv::COLOR_BGR2YUV;
-    else if (code == "yuv2bgr") cvCode = cv::COLOR_YUV2BGR;
-    else if (code == "rgb2gray") cvCode = cv::COLOR_RGB2GRAY;
-    else if (code == "gray2rgb") cvCode = cv::COLOR_GRAY2RGB;
-    else if (code == "bgra2rgba") cvCode = cv::COLOR_BGRA2RGBA;
-    else if (code == "rgba2bgra") cvCode = cv::COLOR_RGBA2BGRA;
-    else if (code == "bgr2bgra") cvCode = cv::COLOR_BGR2BGRA;
-    else if (code == "bgra2bgr") cvCode = cv::COLOR_BGRA2BGR;
-    else {
+    auto it = conversions.find(code);
+    if (it == conversions.end()) {
         return ExecutionResult::fail("Unknown color conversion code: " + code);
     }
     
-    cv::Mat result;
-    cv::cvtColor(ctx.currentMat, result, cvCode);
-    
-    return ExecutionResult::ok(result);
+    try {
+        cv::Mat result;
+        cv::cvtColor(ctx.currentMat, result, it->second);
+        return ExecutionResult::ok(result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail("OpenCV error: " + std::string(e.what()));
+    }
 }
 
 // ============================================================================

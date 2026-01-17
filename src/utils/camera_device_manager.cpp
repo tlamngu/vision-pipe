@@ -50,13 +50,13 @@ CameraBackend CameraDeviceManager::fromOpenCVBackend(int cvBackend) {
     }
 }
 
-bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame) {
+bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame, const std::string& requestedFormat) {
     std::unique_lock<std::mutex> lock(_mutex);
     
     auto it = _sessions.find(sourceId);
     if (it == _sessions.end()) {
         // Need to open camera
-        if (!openCamera(sourceId, backend)) {
+        if (!openCamera(sourceId, backend, requestedFormat)) {
             return false;
         }
         it = _sessions.find(sourceId);
@@ -176,12 +176,17 @@ bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const
 }
 #endif
 
-bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend backend) {
+bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat) {
     CameraSession session;
     session.backend = backend;
     
     if (backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        // Set format in config if requested
+        if (!requestedFormat.empty()) {
+            session.targetConfig.pixelFormat = requestedFormat;
+        } 
+        
         if (!openLibCamera(sourceId, session)) {
             return false;
         }
@@ -209,6 +214,14 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         } catch (...) {
             // Not an integer, treat as path/URL
             session.opencvCapture->open(sourceId, cvBackend);
+        }
+        
+        if (!requestedFormat.empty() && requestedFormat.length() >= 4) {
+            int fourcc = cv::VideoWriter::fourcc(
+                requestedFormat[0], requestedFormat[1], requestedFormat[2], requestedFormat[3]
+            );
+            session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
+            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + requestedFormat);
         }
         
         if (!session.opencvCapture->isOpened()) {
@@ -309,9 +322,15 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     
     // Parse pixel format
     // Simple mapping for common formats
-    if (session.targetConfig.pixelFormat == "YUYV") streamCfg.pixelFormat = libcamera::formats::YUYV;
-    else if (session.targetConfig.pixelFormat == "MJPEG") streamCfg.pixelFormat = libcamera::formats::MJPEG;
-    else if (session.targetConfig.pixelFormat == "NV12") streamCfg.pixelFormat = libcamera::formats::NV12;
+    std::string fmt = session.targetConfig.pixelFormat;
+    if (fmt == "YUYV" || fmt == "YUY2") streamCfg.pixelFormat = libcamera::formats::YUYV;
+    else if (fmt == "UYVY") streamCfg.pixelFormat = libcamera::formats::UYVY;
+    else if (fmt == "YVYU") streamCfg.pixelFormat = libcamera::formats::YVYU;
+    else if (fmt == "NV12") streamCfg.pixelFormat = libcamera::formats::NV12;
+    else if (fmt == "NV21") streamCfg.pixelFormat = libcamera::formats::NV21;
+    else if (fmt == "MJPEG" || fmt == "MJPG") streamCfg.pixelFormat = libcamera::formats::MJPEG;
+    else if (fmt == "RGB888") streamCfg.pixelFormat = libcamera::formats::RGB888;
+    else if (fmt == "BGR888") streamCfg.pixelFormat = libcamera::formats::BGR888;
     else streamCfg.pixelFormat = libcamera::formats::BGR888; // Default
     
     streamCfg.size = {static_cast<unsigned int>(session.targetConfig.width), static_cast<unsigned int>(session.targetConfig.height)};
@@ -407,7 +426,27 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                     void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
                     if (data != MAP_FAILED) {
                         libcamera::StreamConfiguration& streamCfg = session.config->at(0);
-                        session.latestFrame = cv::Mat(streamCfg.size.height, streamCfg.size.width, CV_8UC3, data).clone();
+                        
+                        // Determine type based on format
+                        int type = CV_8UC3;
+                        int width = streamCfg.size.width;
+                        int height = streamCfg.size.height;
+                        
+                        libcamera::PixelFormat fmt = streamCfg.pixelFormat;
+                        if (fmt == libcamera::formats::YUYV || fmt == libcamera::formats::UYVY || fmt == libcamera::formats::YVYU) {
+                            type = CV_8UC2; // 2 bytes per pixel
+                        } else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
+                            type = CV_8UC1; 
+                            height = height * 3 / 2; // 1.5 height for Y + UV planes
+                        } else if (fmt == libcamera::formats::MJPEG) {
+                            // Treat as 1D array
+                            type = CV_8UC1;
+                            width = plane.length; // Max buffer size
+                            height = 1;
+                            // Note: real size is in metadata, but for now we map full buffer
+                        }
+                        
+                        session.latestFrame = cv::Mat(height, width, type, data).clone();
                         session.frameReady = true;
                         if (session.activeControls.size() > 0) {
                              // Apply active controls to the next request

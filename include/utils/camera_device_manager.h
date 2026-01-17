@@ -62,9 +62,10 @@ public:
      * @param sourceId Camera identifier (index as string, path, or URL)
      * @param backend Backend to use for capture
      * @param frame Output frame
+     * @param requestedFormat Optional requested capture format (FourCC/pixel format)
      * @return true if frame was successfully acquired
      */
-    bool acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame);
+    bool acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame, const std::string& requestedFormat = "");
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
     /**
@@ -152,7 +153,7 @@ private:
 #endif
     };
 
-    bool openCamera(const std::string& sourceId, CameraBackend backend);
+    bool openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat = "");
     bool readOpenCVFrame(CameraSession& session, cv::Mat& frame);
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED

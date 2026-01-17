@@ -46,7 +46,8 @@ VideoCaptureItem::VideoCaptureItem() {
     _category = "video_io";
     _params = {
         ParamDef::required("source", BaseType::ANY, "Source: device index, file path, or URL"),
-        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg, libcamera", "auto")
+        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg, libcamera", "auto"),
+        ParamDef::optional("format", BaseType::STRING, "Capture format: MJPG, UYVY, NV12, etc.", "")
     };
     _example = "video_cap(0) | video_cap(\"video.mp4\")";
     _returnType = "mat";
@@ -62,16 +63,22 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
         sourceId = args[0].asString();
     }
     
-    // Parse API backend
+    // Parse API backend (Argument 1)
     std::string apiStr = "auto";
     if (args.size() > 1) {
         apiStr = args[1].asString();
     }
     CameraBackend backend = CameraDeviceManager::parseBackend(apiStr);
     
+    // Parse requested format (Argument 2) - optional
+    std::string format = "";
+    if (args.size() > 2) {
+        format = args[2].asString();
+    }
+    
     // Acquire frame via CameraDeviceManager
     cv::Mat frame;
-    if (!CameraDeviceManager::instance().acquireFrame(sourceId, backend, frame)) {
+    if (!CameraDeviceManager::instance().acquireFrame(sourceId, backend, frame, format)) {
         return ExecutionResult::fail("Failed to acquire frame from: " + sourceId);
     }
     
