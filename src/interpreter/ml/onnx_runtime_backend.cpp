@@ -579,10 +579,106 @@ InferenceResult OnnxRuntimeModel::forwardMulti(const std::vector<cv::Mat>& input
     if (inputs.empty()) {
         return InferenceResult::fail("No inputs provided");
     }
-    
-    // For now, process first input only
-    // TODO: Implement proper batching
-    return forward(inputs[0]);
+
+    try {
+        auto startTime = std::chrono::high_resolution_clock::now();
+
+        // 1. Determine input specs based on the first image (after preprocessing)
+        // We preprocess the first image to get exact dimensions
+        cv::Mat firstProcessed = preprocess(inputs[0]);
+        int H = firstProcessed.rows;
+        int W = firstProcessed.cols;
+        int C = firstProcessed.channels();
+        
+        // 2. Prepare batch buffer
+        // Size = Batch * C * H * W
+        size_t singleImageSize = C * H * W;
+        size_t batchSize = inputs.size();
+        std::vector<float> batchData(batchSize * singleImageSize);
+        
+        // 3. Process all images
+        for (size_t i = 0; i < batchSize; ++i) {
+            cv::Mat processed;
+            if (i == 0) processed = firstProcessed; // reuse
+            else processed = preprocess(inputs[i]);
+            
+            // Validate dimensions
+            if (processed.rows != H || processed.cols != W || processed.channels() != C) {
+                return InferenceResult::fail("Input images must have consistent dimensions after preprocessing");
+            }
+
+            // Write to batchData (HWC -> CHW)
+            float* dstPtr = batchData.data() + i * singleImageSize;
+            
+            if (C == 1) {
+                std::memcpy(dstPtr, processed.ptr<float>(), H * W * sizeof(float));
+            } else {
+                std::vector<cv::Mat> chw_channels(C);
+                for (int c = 0; c < C; ++c) {
+                    chw_channels[c] = cv::Mat(H, W, CV_32F, dstPtr + c * H * W);
+                }
+                // split writes separate channels directly to our buffer
+                cv::split(processed, chw_channels);
+            }
+        }
+        
+        // 4. Create Input Tensor
+        std::vector<int64_t> inputDims;
+        if (!_inputShapes.empty() && !_inputShapes[0].empty()) {
+            inputDims = _inputShapes[0];
+            // Handle dynamic batch dimension
+            if (inputDims[0] < 0) {
+                inputDims[0] = static_cast<int64_t>(batchSize);
+            }
+            // Ensure other dims match
+            // Note: If model expects fixed size that differs from our preprocessed size, ORT will throw.
+            // We assume preprocess() logic matched the model requirements.
+        } else {
+            // Default NCHW
+            inputDims = {static_cast<int64_t>(batchSize), static_cast<int64_t>(C), static_cast<int64_t>(H), static_cast<int64_t>(W)};
+        }
+
+        Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(
+            OrtArenaAllocator, OrtMemTypeDefault);
+        
+        Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo,
+            batchData.data(),
+            batchData.size(),
+            inputDims.data(),
+            inputDims.size()
+        );
+        
+        // 5. Run Inference
+        std::vector<Ort::Value> inputTensors;
+        inputTensors.push_back(std::move(inputTensor));
+        
+        auto outputTensors = _session->Run(
+            Ort::RunOptions{nullptr},
+            _inputNamesCStr.data(),
+            inputTensors.data(),
+            inputTensors.size(),
+            _outputNamesCStr.data(),
+            _outputNames.size()
+        );
+        
+        // 6. Convert outputs (Batched Tensors -> 2D/3D Mats)
+        
+        std::vector<cv::Mat> outputs;
+        for (auto& tensor : outputTensors) {
+            outputs.push_back(tensorToMat(tensor));
+        }
+        
+        auto endTime = std::chrono::high_resolution_clock::now();
+        double inferenceMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+        
+        auto result = InferenceResult::ok(outputs, _outputNames);
+        result.inferenceTimeMs = inferenceMs;
+        return result;
+        
+    } catch (const std::exception& e) {
+        return InferenceResult::fail(std::string("Batch inference failed: ") + e.what());
+    }
 }
 
 // ============================================================================

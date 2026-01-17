@@ -1,12 +1,12 @@
 #include "interpreter/items/video_io_items.h"
 #include "interpreter/cache_manager.h"
+#include "utils/camera_device_manager.h"
 #include <iostream>
 #include <map>
 
 namespace visionpipe {
 
-// Static storage for video captures and writers
-static std::map<std::string, std::shared_ptr<cv::VideoCapture>> s_captures;
+// Static storage for video writers only (captures now managed by CameraDeviceManager)
 static std::map<std::string, std::shared_ptr<cv::VideoWriter>> s_writers;
 
 void registerVideoIOItems(ItemRegistry& registry) {
@@ -46,7 +46,7 @@ VideoCaptureItem::VideoCaptureItem() {
     _category = "video_io";
     _params = {
         ParamDef::required("source", BaseType::ANY, "Source: device index, file path, or URL"),
-        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg", "auto")
+        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg, libcamera", "auto")
     };
     _example = "video_cap(0) | video_cap(\"video.mp4\")";
     _returnType = "mat";
@@ -55,7 +55,6 @@ VideoCaptureItem::VideoCaptureItem() {
 
 ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId;
-    int apiBackend = cv::CAP_ANY;
     
     if (args[0].isNumeric()) {
         sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
@@ -64,34 +63,16 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
     }
     
     // Parse API backend
+    std::string apiStr = "auto";
     if (args.size() > 1) {
-        std::string api = args[1].asString();
-        if (api == "dshow") apiBackend = cv::CAP_DSHOW;
-        else if (api == "v4l2") apiBackend = cv::CAP_V4L2;
-        else if (api == "ffmpeg") apiBackend = cv::CAP_FFMPEG;
-        else if (api == "gstreamer") apiBackend = cv::CAP_GSTREAMER;
+        apiStr = args[1].asString();
     }
+    CameraBackend backend = CameraDeviceManager::parseBackend(apiStr);
     
-    // Get or create capture
-    if (s_captures.find(sourceId) == s_captures.end()) {
-        auto cap = std::make_shared<cv::VideoCapture>();
-        
-        if (args[0].isNumeric()) {
-            cap->open(static_cast<int>(args[0].asNumber()), apiBackend);
-        } else {
-            cap->open(args[0].asString(), apiBackend);
-        }
-        
-        if (!cap->isOpened()) {
-            return ExecutionResult::fail("Failed to open video source: " + sourceId);
-        }
-        
-        s_captures[sourceId] = cap;
-    }
-    
+    // Acquire frame via CameraDeviceManager
     cv::Mat frame;
-    if (!s_captures[sourceId]->read(frame)) {
-        return ExecutionResult::fail("Failed to read frame from: " + sourceId);
+    if (!CameraDeviceManager::instance().acquireFrame(sourceId, backend, frame)) {
+        return ExecutionResult::fail("Failed to acquire frame from: " + sourceId);
     }
     
     return ExecutionResult::ok(frame);
@@ -169,11 +150,11 @@ VideoCloseItem::VideoCloseItem() {
 ExecutionResult VideoCloseItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     if (args.empty() || args[0].asString().empty()) {
         // Close all
-        s_captures.clear();
+        CameraDeviceManager::instance().releaseAll();
         s_writers.clear();
     } else {
         std::string id = args[0].asString();
-        s_captures.erase(id);
+        CameraDeviceManager::instance().releaseCamera(id);
         s_writers.erase(id);
     }
     return ExecutionResult::ok(ctx.currentMat);
@@ -363,9 +344,9 @@ ExecutionResult GetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
     std::string sourceId = args[0].asString();
     std::string prop = args[1].asString();
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Video source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Video source not found or not using OpenCV backend: " + sourceId);
     }
     
     int propId = -1;
@@ -392,7 +373,7 @@ ExecutionResult GetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
         return ExecutionResult::fail("Unknown video property: " + prop);
     }
     
-    double value = it->second->get(propId);
+    double value = cap->get(propId);
     // Store value in context variable and return current mat
     ctx.variables["_video_prop"] = RuntimeValue(value);
     return ExecutionResult::ok(ctx.currentMat);
@@ -421,9 +402,9 @@ ExecutionResult SetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
     std::string prop = args[1].asString();
     double value = args[2].asNumber();
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Video source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Video source not found or not using OpenCV backend: " + sourceId);
     }
     
     int propId = -1;
@@ -446,7 +427,7 @@ ExecutionResult SetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
         return ExecutionResult::fail("Unknown video property: " + prop);
     }
     
-    bool success = it->second->set(propId, value);
+    bool success = cap->set(propId, value);
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -473,16 +454,16 @@ ExecutionResult VideoSeekItem::execute(const std::vector<RuntimeValue>& args, Ex
     double position = args[1].asNumber();
     std::string unit = args.size() > 2 ? args[2].asString() : "frames";
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Video source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Video source not found or not controlled by OpenCV: " + sourceId);
     }
     
     int propId = cv::CAP_PROP_POS_FRAMES;
     if (unit == "msec") propId = cv::CAP_PROP_POS_MSEC;
     else if (unit == "ratio") propId = cv::CAP_PROP_POS_AVI_RATIO;
     
-    bool success = it->second->set(propId, position);
+    bool success = cap->set(propId, position);
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -509,9 +490,9 @@ ExecutionResult SetCameraExposureItem::execute(const std::vector<RuntimeValue>& 
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     double value = args.size() > 2 ? args[2].asNumber() : 0.0;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Set auto exposure mode
@@ -519,11 +500,11 @@ ExecutionResult SetCameraExposureItem::execute(const std::vector<RuntimeValue>& 
     if (mode == "aperture_priority") autoExpMode = 0.5;
     else if (mode == "shutter_priority") autoExpMode = 0.5;
     
-    it->second->set(cv::CAP_PROP_AUTO_EXPOSURE, autoExpMode);
+    cap->set(cv::CAP_PROP_AUTO_EXPOSURE, autoExpMode);
     
     // Set exposure value if in manual mode
     if (mode == "manual") {
-        it->second->set(cv::CAP_PROP_EXPOSURE, value);
+        cap->set(cv::CAP_PROP_EXPOSURE, value);
     }
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -552,26 +533,26 @@ ExecutionResult SetCameraWhiteBalanceItem::execute(const std::vector<RuntimeValu
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int temperature = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 5500;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Set auto white balance
     double autoWB = (mode == "auto") ? 1.0 : 0.0;
-    it->second->set(cv::CAP_PROP_AUTO_WB, autoWB);
+    cap->set(cv::CAP_PROP_AUTO_WB, autoWB);
     
     // Set manual temperature
     if (mode == "manual") {
-        it->second->set(cv::CAP_PROP_WB_TEMPERATURE, temperature);
+        cap->set(cv::CAP_PROP_WB_TEMPERATURE, temperature);
     } else if (mode == "daylight") {
-        it->second->set(cv::CAP_PROP_WB_TEMPERATURE, 5500);
+        cap->set(cv::CAP_PROP_WB_TEMPERATURE, 5500);
     } else if (mode == "cloudy") {
-        it->second->set(cv::CAP_PROP_WB_TEMPERATURE, 6500);
+        cap->set(cv::CAP_PROP_WB_TEMPERATURE, 6500);
     } else if (mode == "tungsten") {
-        it->second->set(cv::CAP_PROP_WB_TEMPERATURE, 3200);
+        cap->set(cv::CAP_PROP_WB_TEMPERATURE, 3200);
     } else if (mode == "fluorescent") {
-        it->second->set(cv::CAP_PROP_WB_TEMPERATURE, 4000);
+        cap->set(cv::CAP_PROP_WB_TEMPERATURE, 4000);
     }
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -600,22 +581,22 @@ ExecutionResult SetCameraFocusItem::execute(const std::vector<RuntimeValue>& arg
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int value = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 128;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Set autofocus
     double autoFocus = (mode == "auto" || mode == "continuous") ? 1.0 : 0.0;
-    it->second->set(cv::CAP_PROP_AUTOFOCUS, autoFocus);
+    cap->set(cv::CAP_PROP_AUTOFOCUS, autoFocus);
     
     // Set manual focus value
     if (mode == "manual") {
-        it->second->set(cv::CAP_PROP_FOCUS, value);
+        cap->set(cv::CAP_PROP_FOCUS, value);
     } else if (mode == "infinity") {
-        it->second->set(cv::CAP_PROP_FOCUS, 255);
+        cap->set(cv::CAP_PROP_FOCUS, 255);
     } else if (mode == "macro") {
-        it->second->set(cv::CAP_PROP_FOCUS, 0);
+        cap->set(cv::CAP_PROP_FOCUS, 0);
     }
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -644,20 +625,20 @@ ExecutionResult SetCameraISOItem::execute(const std::vector<RuntimeValue>& args,
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int value = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 400;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Try setting ISO if supported
     if (mode == "manual") {
-        it->second->set(cv::CAP_PROP_ISO_SPEED, value);
+        cap->set(cv::CAP_PROP_ISO_SPEED, value);
         // Also set gain as normalized value (ISO/100)
         double gain = value / 100.0;
-        it->second->set(cv::CAP_PROP_GAIN, gain);
+        cap->set(cv::CAP_PROP_GAIN, gain);
     } else {
         // Enable auto gain
-        it->second->set(cv::CAP_PROP_GAIN, 0);
+        cap->set(cv::CAP_PROP_GAIN, 0);
     }
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -688,14 +669,14 @@ ExecutionResult SetCameraZoomItem::execute(const std::vector<RuntimeValue>& args
     double pan = args.size() > 2 ? args[2].asNumber() : 0.0;
     double tilt = args.size() > 3 ? args[3].asNumber() : 0.0;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
-    it->second->set(cv::CAP_PROP_ZOOM, zoom);
-    it->second->set(cv::CAP_PROP_PAN, pan);
-    it->second->set(cv::CAP_PROP_TILT, tilt);
+    cap->set(cv::CAP_PROP_ZOOM, zoom);
+    cap->set(cv::CAP_PROP_PAN, pan);
+    cap->set(cv::CAP_PROP_TILT, tilt);
     
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -731,17 +712,17 @@ ExecutionResult SetCameraImageAdjustmentItem::execute(const std::vector<RuntimeV
     double sharpness = args.size() > 5 ? args[5].asNumber() : 50.0;
     double gamma = args.size() > 6 ? args[6].asNumber() : 100.0;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
-    it->second->set(cv::CAP_PROP_BRIGHTNESS, brightness);
-    it->second->set(cv::CAP_PROP_CONTRAST, contrast);
-    it->second->set(cv::CAP_PROP_SATURATION, saturation);
-    it->second->set(cv::CAP_PROP_HUE, hue);
-    it->second->set(cv::CAP_PROP_SHARPNESS, sharpness);
-    it->second->set(cv::CAP_PROP_GAMMA, gamma);
+    cap->set(cv::CAP_PROP_BRIGHTNESS, brightness);
+    cap->set(cv::CAP_PROP_CONTRAST, contrast);
+    cap->set(cv::CAP_PROP_SATURATION, saturation);
+    cap->set(cv::CAP_PROP_HUE, hue);
+    cap->set(cv::CAP_PROP_SHARPNESS, sharpness);
+    cap->set(cv::CAP_PROP_GAMMA, gamma);
     
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -765,12 +746,12 @@ GetCameraCapabilitiesItem::GetCameraCapabilitiesItem() {
 ExecutionResult GetCameraCapabilitiesItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId = args[0].asString();
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!capPtr) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
-    auto& cap = *it->second;
+    auto& cap = *capPtr;
     
     std::cout << "\n=== Camera Capabilities: " << sourceId << " ===" << std::endl;
     std::cout << "Resolution: " << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x" 
@@ -856,13 +837,13 @@ ExecutionResult SetCameraBackendItem::execute(const std::vector<RuntimeValue>& a
     std::string backend = args.size() > 1 ? args[1].asString() : "auto";
     int bufferSize = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 4;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Set buffer size
-    it->second->set(cv::CAP_PROP_BUFFERSIZE, bufferSize);
+    cap->set(cv::CAP_PROP_BUFFERSIZE, bufferSize);
     
     std::cout << "Camera backend and buffer settings updated" << std::endl;
     std::cout << "Note: Backend must be set during camera initialization" << std::endl;
@@ -895,9 +876,9 @@ ExecutionResult SetCameraTriggerItem::execute(const std::vector<RuntimeValue>& a
     int triggerDelay = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 0;
     bool strobeEnabled = args.size() > 3 ? args[3].asBool() : false;
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!cap) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Set trigger mode
@@ -905,8 +886,8 @@ ExecutionResult SetCameraTriggerItem::execute(const std::vector<RuntimeValue>& a
     if (triggerMode == "software") triggerModeValue = 1.0;
     else if (triggerMode == "hardware") triggerModeValue = 2.0;
     
-    it->second->set(cv::CAP_PROP_TRIGGER, triggerModeValue);
-    it->second->set(cv::CAP_PROP_TRIGGER_DELAY, triggerDelay);
+    cap->set(cv::CAP_PROP_TRIGGER, triggerModeValue);
+    cap->set(cv::CAP_PROP_TRIGGER_DELAY, triggerDelay);
     
     std::cout << "Camera trigger configured: " << triggerMode << std::endl;
     
@@ -934,12 +915,12 @@ ExecutionResult SaveCameraProfileItem::execute(const std::vector<RuntimeValue>& 
     std::string sourceId = args[0].asString();
     std::string path = args[1].asString();
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!capPtr) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
-    auto& cap = *it->second;
+    auto& cap = *capPtr;
     
     // Save camera settings to file
     cv::FileStorage fs(path, cv::FileStorage::WRITE);
@@ -995,9 +976,9 @@ ExecutionResult LoadCameraProfileItem::execute(const std::vector<RuntimeValue>& 
     std::string sourceId = args[0].asString();
     std::string path = args[1].asString();
     
-    auto it = s_captures.find(sourceId);
-    if (it == s_captures.end()) {
-        return ExecutionResult::fail("Camera source not found: " + sourceId);
+    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    if (!capPtr) {
+        return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
     
     // Load camera settings from file
@@ -1006,7 +987,7 @@ ExecutionResult LoadCameraProfileItem::execute(const std::vector<RuntimeValue>& 
         return ExecutionResult::fail("Failed to open file for reading: " + path);
     }
     
-    auto& cap = *it->second;
+    auto& cap = *capPtr;
     cv::FileNode profile = fs["camera_profile"];
     
     if (!profile.empty()) {

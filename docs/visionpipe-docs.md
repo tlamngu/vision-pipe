@@ -18,6 +18,7 @@ Auto-generated documentation for VisionPipe interpreter items.
 - [feature](#feature) (20 items)
 - [filter](#filter) (14 items)
 - [gui](#gui) (16 items)
+- [ip_stream](#ip_stream) (5 items)
 - [math](#math) (28 items)
 - [morphology](#morphology) (14 items)
 - [stereo](#stereo) (22 items)
@@ -5882,6 +5883,105 @@ update_window_title("Output", "Threshold: {threshold} - FPS: {fps}")
 ```
 
 **Tags:** `gui`, `window`, `title`
+
+---
+
+## ip_stream
+
+### `ip_stream()`
+
+Stream frames over HTTP (MJPEG) to remote clients. Access the stream from any web browser, VLC, or MJPEG viewer at http://<ip>:<port>/stream
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `port` | int | No | TCP port to stream on (default: `RuntimeValue(int: 8080)`) |
+| `bind_address` | string | No | IP address to bind to. Use '0.0.0.0' for all interfaces (LAN access) (default: `RuntimeValue(string: "0.0.0.0")`) |
+| `quality` | int | No | JPEG encoding quality (1-100) (default: `RuntimeValue(int: 80)`) |
+
+**Example:**
+
+```vsp
+ip_stream(8080) | ip_stream(9000, "0.0.0.0", 90)
+```
+
+**Tags:** `stream`, `http`, `mjpeg`, `network`, `ip`, `camera`, `remote`
+
+---
+
+### `ip_stream_info()`
+
+Get information about active IP streams
+
+**Example:**
+
+```vsp
+ip_stream_info()
+```
+
+**Tags:** `stream`, `info`, `status`
+
+---
+
+### `ip_stream_quality()`
+
+Set the JPEG encoding quality for an IP stream
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `port` | int | Yes | Port of the stream to configure |
+| `quality` | int | Yes | JPEG quality 1-100 |
+
+**Example:**
+
+```vsp
+ip_stream_quality(8080, 90)
+```
+
+**Tags:** `stream`, `quality`, `config`
+
+---
+
+### `ip_stream_stop()`
+
+Stop an IP stream server
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `port` | int | Yes | Port of the stream to stop |
+
+**Example:**
+
+```vsp
+ip_stream_stop(8080)
+```
+
+**Tags:** `stream`, `stop`, `close`
+
+---
+
+### `ip_stream_url()`
+
+Get the URL for an IP stream
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `port` | int | No | Port of the stream (default: `RuntimeValue(int: 8080)`) |
+
+**Example:**
+
+```vsp
+$url = ip_stream_url(8080)
+```
+
+**Tags:** `stream`, `url`, `address`
 
 ---
 

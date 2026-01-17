@@ -21,6 +21,7 @@ option(VISIONPIPE_WITH_OPENCL "Enable OpenCL acceleration" ON)
 option(VISIONPIPE_WITH_DNN "Enable DeepLearning/DNN features (requires OpenCV DNN module)" ON)
 option(VISIONPIPE_WITH_ONNXRUNTIME "Enable ONNX Runtime backend for DNN (alternative to OpenCV DNN)" ON)
 option(VISIONPIPE_IP_CAM "Enable HTTP-based IP streaming (MJPEG) for remote frame access" OFF)
+option(LIBCAMERA_BACKEND "Enable native libcamera backend for Linux camera support" OFF)
 
 # Performance options
 option(VISIONPIPE_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -84,7 +85,7 @@ find_package(OpenCV COMPONENTS
     dnn
     photo
     stitching
-    xphoto
+    # xphoto
     video
 )
 
@@ -172,6 +173,24 @@ if(VISIONPIPE_WITH_CUDA)
     endif()
 endif()
 
+# LibCamera support (Linux only)
+if(LIBCAMERA_BACKEND)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(WARNING "libcamera is only supported on Linux, disabling LIBCAMERA_BACKEND")
+        set(LIBCAMERA_BACKEND OFF)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(LIBCAMERA libcamera)
+        if(LIBCAMERA_FOUND)
+            add_definitions(-DVISIONPIPE_LIBCAMERA_ENABLED)
+            message(STATUS "libcamera support enabled: ${LIBCAMERA_VERSION}")
+        else()
+            message(WARNING "libcamera not found, disabling LIBCAMERA_BACKEND")
+            set(LIBCAMERA_BACKEND OFF)
+        endif()
+    endif()
+endif()
+
 # Threading support
 find_package(Threads REQUIRED)
 
@@ -226,6 +245,19 @@ if(VISIONPIPE_IP_CAM)
     )
     add_definitions(-DVISIONPIPE_IP_STREAM_ENABLED)
     message(STATUS "IP Stream (HTTP MJPEG streaming) enabled")
+endif()
+
+# Camera Device Manager (always included for refactored camera handling)
+list(APPEND VISIONPIPE_CORE_SOURCES
+    src/utils/camera_device_manager.cpp
+)
+
+# LibCamera sources (optional feature)
+if(LIBCAMERA_BACKEND)
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/interpreter/items/libcamera_items.cpp
+    )
+    message(STATUS "libcamera items enabled")
 endif()
 
 set(VISIONPIPE_CLI_SOURCES
@@ -353,6 +385,12 @@ if(VISIONPIPE_WITH_ICEORYX2)
         target_include_directories(visionpipe_core PRIVATE ${ICEORYX2_INCLUDE_DIRS})
         target_link_libraries(visionpipe_core PRIVATE ${ICEORYX2_LIBRARIES})
     endif()
+endif()
+
+# Link libcamera
+if(LIBCAMERA_BACKEND)
+    target_include_directories(visionpipe_core PRIVATE ${LIBCAMERA_INCLUDE_DIRS})
+    target_link_libraries(visionpipe_core PRIVATE ${LIBCAMERA_LIBRARIES})
 endif()
 
 # ============================================================================
