@@ -209,11 +209,27 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         session.opencvCapture = std::make_shared<cv::VideoCapture>();
         
         // Try to parse sourceId as integer for camera index
+        int index = -1;
+        bool isIndex = false;
+
         try {
-            int index = std::stoi(sourceId);
-            session.opencvCapture->open(index, cvBackend);
+            index = std::stoi(sourceId);
+            isIndex = true;
         } catch (...) {
-            // Not an integer, treat as path/URL
+            // Check for /dev/videoN pattern
+            if (sourceId.find("/dev/video") == 0 && sourceId.length() > 10) {
+                try {
+                    std::string num = sourceId.substr(10); // length of "/dev/video"
+                    index = std::stoi(num);
+                    isIndex = true;
+                } catch (...) {}
+            }
+        }
+
+        if (isIndex) {
+            session.opencvCapture->open(index, cvBackend);
+        } else {
+            // Not an integer or /dev/videoN, treat as path/URL
             session.opencvCapture->open(sourceId, cvBackend);
         }
         
