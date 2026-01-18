@@ -167,30 +167,38 @@ CameraBackend CameraDeviceManager::getBackend(const std::string& sourceId) const
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
 void CameraDeviceManager::setLibCameraConfig(const std::string& sourceId, const LibCameraConfig& config) {
     std::lock_guard<std::mutex> lock(_mutex);
-    // Create session if not exists, or update existing
-    _sessions[sourceId].targetConfig = config;
+    // Ensure session exists and is set to libcamera
+    CameraSession& session = _sessions[sourceId];
+    session.backend = CameraBackend::LIBCAMERA;
+    session.targetConfig = config;
 }
 
 bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const std::string& controlName, float value) {
     std::lock_guard<std::mutex> lock(_mutex);
-    auto it = _sessions.find(sourceId);
-    if (it == _sessions.end()) return false;
+    // Create session if it doesn't exist (to allow pre-set controls)
+    CameraSession& session = _sessions[sourceId];
+    session.backend = CameraBackend::LIBCAMERA;
     
-    CameraSession& session = it->second;
-    if (session.backend != CameraBackend::LIBCAMERA) return false;
+    // Cache the control
+    session.activeControls[controlName] = value;
 
-    if (!session.libcameraDevice) return false;
-    
-    // Validate control exists
-    const auto& controls = session.libcameraDevice->controls();
-    for (const auto& [id, info] : controls) {
-        if (id->name() == controlName) {
-            session.activeControls[controlName] = value;
-            return true;
+    // If camera is already open, we can try to validate it immediately,
+    // but caching it is enough as it will be applied to the next request.
+    if (session.libcameraDevice) {
+        const auto& controls = session.libcameraDevice->controls();
+        bool found = false;
+        for (const auto& [id, info] : controls) {
+            if (id->name() == controlName) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            SystemLogger::warning(LOG_COMPONENT, "Control not supported by hardware: " + controlName);
         }
     }
-    SystemLogger::warning(LOG_COMPONENT, "Control not supported: " + controlName);
-    return false;
+    
+    return true;
 }
 #endif
 
@@ -516,6 +524,10 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
             return false;
         }
         request->addBuffer(stream, buffer.get());
+        
+        // Apply initial controls to these requests
+        applyLibCameraControls(session, request.get());
+        
         session.requests.push_back(std::move(request));
     }
     
@@ -729,35 +741,8 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                     
                     session.frameReady = true;
                     
-                    // Apply active controls to next request
-                    if (session.activeControls.size() > 0) {
-                        libcamera::ControlList& ctrls = request->controls();
-                        for (const auto& [id, info] : session.libcameraDevice->controls()) {
-                            auto it = session.activeControls.find(id->name());
-                            if (it != session.activeControls.end()) {
-                                float val = it->second;
-                                switch(id->type()) {
-                                    case libcamera::ControlTypeBool:
-                                        ctrls.set(id->id(), static_cast<bool>(val));
-                                        break;
-                                    case libcamera::ControlTypeByte:
-                                        ctrls.set(id->id(), static_cast<uint8_t>(val));
-                                        break;
-                                    case libcamera::ControlTypeInteger32:
-                                        ctrls.set(id->id(), static_cast<int32_t>(val));
-                                        break;
-                                    case libcamera::ControlTypeInteger64:
-                                        ctrls.set(id->id(), static_cast<int64_t>(val));
-                                        break;
-                                    case libcamera::ControlTypeFloat:
-                                        ctrls.set(id->id(), val);
-                                        break;
-                                    default:
-                                        break;
-                                }
-                            }
-                        }
-                    }
+                    // Apply active controls to next request for ongoing stream
+                    applyLibCameraControls(session, request);
                     
                     // Unmap buffer after processing
                     munmap(data, plane.length);
@@ -771,6 +756,48 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                 session.libcameraDevice->queueRequest(request);
                 return;
             }
+        }
+    }
+}
+
+void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcamera::Request* request) {
+    if (session.activeControls.empty() || !session.libcameraDevice) {
+        return;
+    }
+
+    libcamera::ControlList& ctrls = request->controls();
+    const auto& hardwareControls = session.libcameraDevice->controls();
+
+    for (const auto& [name, val] : session.activeControls) {
+        // Find the ControlId for this name
+        libcamera::ControlId* targetId = nullptr;
+        for (const auto& [id, info] : hardwareControls) {
+            if (id->name() == name) {
+                targetId = const_cast<libcamera::ControlId*>(id);
+                break;
+            }
+        }
+
+        if (!targetId) continue;
+
+        switch(targetId->type()) {
+            case libcamera::ControlTypeBool:
+                ctrls.set(targetId->id(), static_cast<bool>(val));
+                break;
+            case libcamera::ControlTypeByte:
+                ctrls.set(targetId->id(), static_cast<uint8_t>(val));
+                break;
+            case libcamera::ControlTypeInteger32:
+                ctrls.set(targetId->id(), static_cast<int32_t>(val));
+                break;
+            case libcamera::ControlTypeInteger64:
+                ctrls.set(targetId->id(), static_cast<int64_t>(val));
+                break;
+            case libcamera::ControlTypeFloat:
+                ctrls.set(targetId->id(), val);
+                break;
+            default:
+                break;
         }
     }
 }

@@ -81,17 +81,23 @@ LibCamPropItem::LibCamPropItem() {
     _description = "Set a libcamera control by name";
     _category = "video_io";
     _params = {
-        ParamDef::required("source", BaseType::STRING, "Camera source identifier"),
+        ParamDef::required("source", BaseType::ANY, "Camera source identifier (index or ID)"),
         ParamDef::required("control", BaseType::STRING, "Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness)"),
         ParamDef::required("value", BaseType::ANY, "Control value (number or boolean)")
     };
-    _example = "libcam_prop(\"0\", \"AeEnable\", 0)";
+    _example = "libcam_prop(0, \"AeEnable\", 0)";
     _returnType = "mat";
     _tags = {"libcamera", "camera", "control", "property"};
 }
 
 ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    std::string sourceId = args[0].asString();
+    std::string sourceId;
+    if (args[0].isNumeric()) {
+        sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
+    } else {
+        sourceId = args[0].asString();
+    }
+    
     std::string controlName = args[1].asString();
     
     float value = 0.0f;

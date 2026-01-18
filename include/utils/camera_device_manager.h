@@ -138,7 +138,9 @@ private:
     ~CameraDeviceManager();
 
     struct CameraSession {
-        CameraSession() : frameCond(std::make_unique<std::condition_variable>()) {}
+        CameraSession() 
+            : backend(CameraBackend::OPENCV_AUTO),
+              frameCond(std::make_unique<std::condition_variable>()) {}
 
         CameraBackend backend;
         std::shared_ptr<cv::VideoCapture> opencvCapture;
@@ -162,6 +164,7 @@ private:
     bool openLibCamera(const std::string& sourceId, CameraSession& session);
     // Updated to take unique_lock for condition_variable
     bool readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock);
+    void applyLibCameraControls(CameraSession& session, libcamera::Request* request);
 
     cv::Mat unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride);
     
