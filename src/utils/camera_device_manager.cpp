@@ -182,6 +182,15 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
     CameraSession session;
     session.backend = backend;
     
+    // Preserve existing config if session already exists
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end()) {
+        session.targetConfig = it->second.targetConfig;
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        session.activeControls = it->second.activeControls;
+#endif
+    }
+    
     if (backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         // Set format in config if requested
@@ -228,10 +237,8 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         }
 
         if (isIndex) {
-            std::cerr << "[DEBUG] Opening camera with index: " << index << " backend: " << cvBackend << std::endl;
             session.opencvCapture->open(index, cvBackend);
         } else {
-            std::cerr << "[DEBUG] Opening camera with path: " << sourceId << " backend: " << cvBackend << std::endl;
             session.opencvCapture->open(sourceId, cvBackend);
         }
         
@@ -243,15 +250,15 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
                 fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
             );
             session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
-            std::cerr << "[DEBUG] Requested FourCC: " << fmtUpper << " (" << fourcc << ")" << std::endl;
+            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + fmtUpper);
         }
         
         if (!session.opencvCapture->isOpened()) {
-            std::cerr << "[ERROR] Failed to open camera with OpenCV: " << sourceId << std::endl;
+            SystemLogger::error(LOG_COMPONENT, "Failed to open camera with OpenCV: " + sourceId);
             return false;
         }
         
-        std::cerr << "[DEBUG] Camera opened successfully: " << sourceId << std::endl;
+        SystemLogger::info(LOG_COMPONENT, "Opened camera with OpenCV backend: " + sourceId);
     }
     
     _sessions[sourceId] = std::move(session);
@@ -338,7 +345,10 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     else if (session.targetConfig.streamRole == "Viewfinder") 
         role = libcamera::StreamRole::Viewfinder;
 
-    session.config = camera->generateConfiguration({role});
+    if (!session.config) {
+        session.config = camera->generateConfiguration({role});
+    }
+    
     if (!session.config) {
         SystemLogger::error(LOG_COMPONENT, "Failed to generate libcamera configuration");
         camera->release();
@@ -396,6 +406,8 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         { "SRGGB16", libcamera::formats::SRGGB16 },
     };
     
+    //TODO: Don't override the config if it already set.
+
     // Apply configuration
     libcamera::StreamConfiguration& streamCfg = session.config->at(0);
     
