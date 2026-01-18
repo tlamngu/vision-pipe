@@ -500,7 +500,7 @@ bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& fr
 }
 
 // Helper function to unpack MIPI CSI-2 RAW10 to 16-bit
-cv::Mat CameraDeviceManager::lunpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+cv::Mat CameraDeviceManager::unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
     cv::Mat unpacked(height, width, CV_16UC1);
     
     for (int y = 0; y < height; ++y) {
@@ -529,7 +529,7 @@ cv::Mat CameraDeviceManager::lunpackRAW10CSI2P(const uint8_t* packed, int width,
 }
 
 // Helper function to unpack MIPI CSI-2 RAW12 to 16-bit
-cv::Mat CameraDeviceManager::lunpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+cv::Mat CameraDeviceManager::unpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
     cv::Mat unpacked(height, width, CV_16UC1);
     
     for (int y = 0; y < height; ++y) {
