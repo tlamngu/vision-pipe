@@ -1,0 +1,125 @@
+# libcam_camera_props_calib.vsp - Libcamera Calibration Tool
+# ============================================================================
+# Use this tool to tune camera properties interactively via GUI.
+# Follows the standard VisionPipe GUI patterns.
+# ============================================================================
+
+pipeline setup
+    # Initial print
+    print("==============================================")
+    print("Libcamera Control Calibration Tool Starting...")
+    print("==============================================")
+    
+    # List available cameras
+    libcam_list()
+    
+    # Initialize camera 0 with libcamera
+    # Using a common format, change if your hardware requires BGR888 or others
+    libcam_setup(0, 1280, 720, "SRGGB8")
+    
+    # Create Windows
+    named_window("Controls", "autosize")
+    named_window("Live Feed", "autosize")
+    
+    # --- Exposure Controls ---
+    # AE: 0=Manual, 1=Auto
+    create_trackbar("Auto Exposure", "Controls", 1, 1)
+    # Exp Comp: 0 to 200 (scaled to 0.0 to 2.0)
+    create_trackbar("Exp Comp", "Controls", 200, 100)
+    
+    # --- White Balance ---
+    # AWB: 0=Off, 1=On
+    create_trackbar("Auto WB", "Controls", 1, 1)
+    
+    # --- Image Adjustments ---
+    # Brightness: 0 to 200 (mapped to -1.0 to 1.0)
+    create_trackbar("Brightness", "Controls", 200, 100)
+    # Contrast: 0 to 200 (scaled to 0.0 to 2.0)
+    create_trackbar("Contrast", "Controls", 200, 100)
+    # Saturation: 0 to 200 (scaled to 0.0 to 2.0)
+    create_trackbar("Saturation", "Controls", 200, 100)
+    # Sharpness: 0 to 100
+    create_trackbar("Sharpness", "Controls", 100, 10)
+end
+
+pipeline apply_tuning
+    # Read values from GUI
+    trackbar_value("Auto Exposure", "Controls", "ae_val")
+    trackbar_value("Exp Comp", "Controls", "exp_raw")
+    trackbar_value("Auto WB", "Controls", "awb_val")
+    trackbar_value("Brightness", "Controls", "bright_raw")
+    trackbar_value("Contrast", "Controls", "cont_raw")
+    trackbar_value("Saturation", "Controls", "sat_raw")
+    trackbar_value("Sharpness", "Controls", "sharp_raw")
+    
+    # 1. Apply AE
+    libcam_prop(0, "AeEnable", ae_val)
+    
+    # 2. Scale and Apply Exposure (0-200 -> 0.0-2.0)
+    exp_scaled = exp_raw / 100.0
+    libcam_prop(0, "ExposureValue", exp_scaled)
+    
+    # 3. Apply AWB
+    libcam_prop(0, "AwbEnable", awb_val)
+    
+    # 4. Scale and Apply Brightness (0-200 -> -1.0 to 1.0)
+    # Note: Using (val - 100) / 100.0 to center 0 at 100
+    bright_scaled = (bright_raw - 100) / 100.0
+    libcam_prop(0, "Brightness", bright_scaled)
+    
+    # 5. Scale and Apply Contrast (0-200 -> 0.0-2.0)
+    cont_scaled = cont_raw / 100.0
+    libcam_prop(0, "Contrast", cont_scaled)
+    
+    # 6. Scale and Apply Saturation
+    sat_scaled = sat_raw / 100.0
+    libcam_prop(0, "Saturation", sat_scaled)
+    
+    # 7. Apply Sharpness
+    sharp_scaled = sharp_raw / 10.0
+    libcam_prop(0, "Sharpness", sharp_scaled)
+end
+
+pipeline main
+    # 1. Capture Frame
+    # Reuses the session opened in setup
+    img = video_cap(0, "libcamera", "SRGGB8")
+    
+    # 2. Apply Tuning From GUI
+    exec_seq apply_tuning
+    
+    # 3. Processing for Display
+    # Convert Bayer to BGR for viewing
+    cvt_color("bayerrg2bgr")
+    
+    # 4. Display
+    fps(true, 20, 20)
+    # Using traditional imshow for simplicity or imshow_with_vars for debug
+    imshow_with_vars("Live Feed", "ae_val,awb_val,exp_scaled,bright_scaled,cont_scaled")
+    
+    # 5. Handle Keyboard Input
+    key = wait_key(1)
+    
+    # Exit on 'q' (113) or ESC (27)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+pipeline shutdown
+    print("Closing camera and cleaning up...")
+    video_close()
+    destroy_all_windows()
+end
+
+# Execution Flow
+exec_seq setup
+
+# Main Loop
+exec_loop main
+
+# Cleanup
+exec_seq shutdown
