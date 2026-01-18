@@ -349,6 +349,7 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     }
 
     // Extended pixel format mapping covering YUV, RGB, Bayer, MJPEG, Greyscale
+    // Extended pixel format mapping covering YUV, RGB, Bayer, MJPEG
     static const std::map<std::string, libcamera::PixelFormat> lcFormats = {
         // Packed YUV 4:2:2
         { "YUYV",  libcamera::formats::YUYV },
@@ -372,10 +373,6 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         { "MJPEG", libcamera::formats::MJPEG },
         { "MJPG",  libcamera::formats::MJPEG },
         { "JPEG",  libcamera::formats::MJPEG },
-
-        // Greyscale
-        { "GREY",  libcamera::formats::GREY },
-        { "Y8",    libcamera::formats::GREY },
 
         // 8-bit Bayer
         { "SBGGR8", libcamera::formats::SBGGR8 },
