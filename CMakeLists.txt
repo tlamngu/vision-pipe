@@ -184,6 +184,8 @@ if(LIBCAMERA_BACKEND)
         if(LIBCAMERA_FOUND)
             add_definitions(-DVISIONPIPE_LIBCAMERA_ENABLED)
             message(STATUS "libcamera support enabled: ${LIBCAMERA_VERSION}")
+            message(STATUS "  Includes: ${LIBCAMERA_INCLUDE_DIRS}")
+            message(STATUS "  Libraries: ${LIBCAMERA_LIBRARIES}")
         else()
             message(WARNING "libcamera not found, disabling LIBCAMERA_BACKEND")
             set(LIBCAMERA_BACKEND OFF)
@@ -389,8 +391,8 @@ endif()
 
 # Link libcamera
 if(LIBCAMERA_BACKEND)
-    target_include_directories(visionpipe_core PRIVATE ${LIBCAMERA_INCLUDE_DIRS})
-    target_link_libraries(visionpipe_core PRIVATE ${LIBCAMERA_LIBRARIES})
+    target_include_directories(visionpipe_core PUBLIC ${LIBCAMERA_INCLUDE_DIRS})
+    target_link_libraries(visionpipe_core PUBLIC ${LIBCAMERA_LIBRARIES})
 endif()
 
 # ============================================================================
