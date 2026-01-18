@@ -56,8 +56,24 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
     std::unique_lock<std::mutex> lock(_mutex);
     
     auto it = _sessions.find(sourceId);
+    bool needsOpen = false;
+    
     if (it == _sessions.end()) {
-        // Need to open camera
+        needsOpen = true;
+    } else {
+        // Check if camera is actually initialized and opened
+        if (it->second.backend == CameraBackend::LIBCAMERA) {
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+            if (!it->second.libcameraDevice) needsOpen = true;
+#endif
+        } else {
+            if (!it->second.opencvCapture || !it->second.opencvCapture->isOpened()) {
+                needsOpen = true;
+            }
+        }
+    }
+
+    if (needsOpen) {
         if (!openCamera(sourceId, backend, requestedFormat)) {
             return false;
         }
@@ -188,25 +204,48 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         session.targetConfig = it->second.targetConfig;
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         session.activeControls = it->second.activeControls;
+        
+        // Properly release old hardware resources if they were active
+        if (it->second.libcameraDevice) {
+            it->second.requests.clear();
+            it->second.allocator.reset();
+            it->second.config.reset();
+            it->second.libcameraDevice->stop();
+            it->second.libcameraDevice->release();
+            SystemLogger::info(LOG_COMPONENT, "Closing existing libcamera session for reassignment: " + sourceId);
+        }
 #endif
+        if (it->second.opencvCapture) {
+            it->second.opencvCapture->release();
+            SystemLogger::info(LOG_COMPONENT, "Closing existing OpenCV session for reassignment: " + sourceId);
+        }
     }
     
+    // Move session into map to ensure stable storage
+    _sessions[sourceId] = std::move(session);
+    CameraSession& finalSession = _sessions[sourceId];
+
     if (backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         // Set format in config if requested
         if (!requestedFormat.empty()) {
-            session.targetConfig.pixelFormat = requestedFormat;
+            finalSession.targetConfig.pixelFormat = requestedFormat;
         } 
         
-        if (!openLibCamera(sourceId, session)) {
+        if (!openLibCamera(sourceId, finalSession)) {
+            _sessions.erase(sourceId);
             return false;
         }
 #else
         SystemLogger::error(LOG_COMPONENT, "libcamera backend not available");
+        _sessions.erase(sourceId);
         return false;
 #endif
     } else {
-        // OpenCV backend
+        // OpenCV backend initialization...
+        // Note: For OpenCV, we could still use the local session if we wanted, 
+        // but let's be consistent.
+        
         int cvBackend = cv::CAP_ANY;
         switch (backend) {
             case CameraBackend::OPENCV_DSHOW: cvBackend = cv::CAP_DSHOW; break;
@@ -216,7 +255,7 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             default: cvBackend = cv::CAP_ANY; break;
         }
         
-        session.opencvCapture = std::make_shared<cv::VideoCapture>();
+        finalSession.opencvCapture = std::make_shared<cv::VideoCapture>();
         
         // Try to parse sourceId as integer for camera index
         int index = -1;
@@ -226,10 +265,9 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             index = std::stoi(sourceId);
             isIndex = true;
         } catch (...) {
-            // Check for /dev/videoN pattern
             if (sourceId.find("/dev/video") == 0 && sourceId.length() > 10) {
                 try {
-                    std::string num = sourceId.substr(10); // length of "/dev/video"
+                    std::string num = sourceId.substr(10);
                     index = std::stoi(num);
                     isIndex = true;
                 } catch (...) {}
@@ -237,9 +275,9 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         }
 
         if (isIndex) {
-            session.opencvCapture->open(index, cvBackend);
+            finalSession.opencvCapture->open(index, cvBackend);
         } else {
-            session.opencvCapture->open(sourceId, cvBackend);
+            finalSession.opencvCapture->open(sourceId, cvBackend);
         }
         
         if (!requestedFormat.empty() && requestedFormat.length() >= 4) {
@@ -249,19 +287,19 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             int fourcc = cv::VideoWriter::fourcc(
                 fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
             );
-            session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
+            finalSession.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
             SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + fmtUpper);
         }
         
-        if (!session.opencvCapture->isOpened()) {
+        if (!finalSession.opencvCapture->isOpened()) {
             SystemLogger::error(LOG_COMPONENT, "Failed to open camera with OpenCV: " + sourceId);
+            _sessions.erase(sourceId);
             return false;
         }
         
         SystemLogger::info(LOG_COMPONENT, "Opened camera with OpenCV backend: " + sourceId);
     }
     
-    _sessions[sourceId] = std::move(session);
     return true;
 }
 
@@ -482,6 +520,7 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     }
     
     // Connect signal for completed requests
+    camera->requestCompleted.disconnect(this);
     camera->requestCompleted.connect(this, &CameraDeviceManager::libcameraRequestComplete);
     
     // Start camera
