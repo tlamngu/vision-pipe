@@ -156,6 +156,9 @@ void printVersion() {
 #ifdef VISIONPIPE_OPENCL_ENABLED
     std::cout << "  + OpenCL acceleration" << std::endl;
 #endif
+#ifdef LIBCAMERA_BACKEND
+    std::cout << "  + LibCamera camera support" << std::endl;
+#endif
 }
 
 // ============================================================================
