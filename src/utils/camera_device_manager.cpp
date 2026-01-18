@@ -2,6 +2,7 @@
 #include "utils/Logger.h"
 #include <algorithm>
 #include <iostream>
+#include <sys/mman.h>
 
 namespace visionpipe {
 
@@ -396,7 +397,7 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
 
 bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock) {
     // Wait for frame with timeout
-    if (session.frameCond.wait_for(lock, std::chrono::milliseconds(500), [&]{ return session.frameReady; })) {
+    if (session.frameCond->wait_for(lock, std::chrono::milliseconds(500), [&]{ return session.frameReady; })) {
         frame = session.latestFrame.clone();
         session.frameReady = false;
         return true;
@@ -420,7 +421,9 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                 const libcamera::Request::BufferMap& buffers = request->buffers();
                 for (const auto& bufferPair : buffers) {
                     libcamera::FrameBuffer* buffer = bufferPair.second;
-                    const libcamera::FrameBuffer::Plane& plane = buffer->planes()[0];
+                    const auto& planes = buffer->planes();
+                    if (planes.empty()) continue;
+                    const libcamera::FrameBuffer::Plane& plane = planes[0];
                     
                     // Memory map the buffer
                     void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
@@ -472,7 +475,7 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                 }
                 
                 // Signal waiting threads
-                session.frameCond.notify_all();
+                session.frameCond->notify_all();
 
                 // Requeue the request
                 request->reuse(libcamera::Request::ReuseBuffers);

@@ -138,6 +138,8 @@ private:
     ~CameraDeviceManager();
 
     struct CameraSession {
+        CameraSession() : frameCond(std::make_unique<std::condition_variable>()) {}
+
         CameraBackend backend;
         std::shared_ptr<cv::VideoCapture> opencvCapture;
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
@@ -147,7 +149,7 @@ private:
         std::vector<std::unique_ptr<libcamera::Request>> requests;
         cv::Mat latestFrame;
         bool frameReady = false;
-        std::condition_variable frameCond;
+        std::unique_ptr<std::condition_variable> frameCond;
         LibCameraConfig targetConfig;
         std::map<std::string, float> activeControls;
 #endif
