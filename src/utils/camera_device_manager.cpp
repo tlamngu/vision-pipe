@@ -347,6 +347,7 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         SystemLogger::info(LOG_COMPONENT, "libcamera configuration was adjusted by camera");
     }
     
+    
     if (camera->configure(session.config.get()) < 0) {
         SystemLogger::error(LOG_COMPONENT, "Failed to configure libcamera");
         camera->release();
@@ -409,6 +410,9 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
     if (request->status() == libcamera::Request::RequestCancelled) {
         return;
     }
+    
+    // Protect access to _sessions map
+    std::lock_guard<std::mutex> lock(_mutex);
     
     // Find the session this request belongs to
     for (auto& pair : _sessions) {
