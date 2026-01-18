@@ -33,11 +33,15 @@ CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
     std::string lower = backendStr;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
     
-    if (lower == "dshow") return CameraBackend::OPENCV_DSHOW;
-    if (lower == "v4l2") return CameraBackend::OPENCV_V4L2;
-    if (lower == "ffmpeg") return CameraBackend::OPENCV_FFMPEG;
-    if (lower == "gstreamer") return CameraBackend::OPENCV_GSTREAMER;
-    if (lower == "libcamera") return CameraBackend::LIBCAMERA;
+    std::cerr << "[DEBUG] parseBackend input: '" << backendStr << "' lower: '" << lower << "'" << std::endl;
+
+    if (lower == "dshow") { std::cerr << "[DEBUG] Backend parsed as DSHOW" << std::endl; return CameraBackend::OPENCV_DSHOW; }
+    if (lower == "v4l2") { std::cerr << "[DEBUG] Backend parsed as V4L2" << std::endl; return CameraBackend::OPENCV_V4L2; }
+    if (lower == "ffmpeg") { std::cerr << "[DEBUG] Backend parsed as FFMPEG" << std::endl; return CameraBackend::OPENCV_FFMPEG; }
+    if (lower == "gstreamer") { std::cerr << "[DEBUG] Backend parsed as GSTREAMER" << std::endl; return CameraBackend::OPENCV_GSTREAMER; }
+    if (lower == "libcamera") { std::cerr << "[DEBUG] Backend parsed as LIBCAMERA" << std::endl; return CameraBackend::LIBCAMERA; }
+    
+    std::cerr << "[DEBUG] Backend parsed as AUTO (default)" << std::endl;
     return CameraBackend::OPENCV_AUTO;
 }
 
@@ -259,14 +263,14 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
 
 bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame) {
     if (!session.opencvCapture || !session.opencvCapture->isOpened()) {
-        SystemLogger::error(LOG_COMPONENT, "readOpenCVFrame: Camera not open");
+        std::cerr << "[ERROR] readOpenCVFrame: Camera not open" << std::endl;
         return false;
     }
     bool success = session.opencvCapture->read(frame);
     if (!success) {
-        SystemLogger::warning(LOG_COMPONENT, "readOpenCVFrame: Failed to read frame (returned false)");
+        std::cerr << "[ERROR] readOpenCVFrame: Failed to read frame (returned false)" << std::endl;
     } else if (frame.empty()) {
-        SystemLogger::warning(LOG_COMPONENT, "readOpenCVFrame: Success but frame empty");
+        std::cerr << "[ERROR] readOpenCVFrame: Success but frame empty" << std::endl;
     }
     return success;
 }

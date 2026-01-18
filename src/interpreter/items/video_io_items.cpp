@@ -68,6 +68,9 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
     if (args.size() > 1) {
         apiStr = args[1].asString();
     }
+    
+    std::cerr << "[DEBUG] VideoCaptureItem source: '" << sourceId << "' api: '" << apiStr << "'" << std::endl;
+
     CameraBackend backend = CameraDeviceManager::parseBackend(apiStr);
     
     // Parse requested format (Argument 2) - optional
