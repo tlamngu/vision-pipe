@@ -35,7 +35,7 @@ LibCamSetupItem::LibCamSetupItem() {
     _tags = {"libcamera", "camera", "setup", "configuration"};
 }
 
-ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext&) {
     std::string sourceId;
     
     if (args[0].isNumeric()) {
@@ -66,7 +66,7 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
         return ExecutionResult::fail("Failed to setup libcamera device: " + sourceId);
     }
     
-    Logger::info("libcam-setup: Configured camera " + sourceId + " with resolution " + 
+    SystemLogger::info("LibCameraItems", "libcam-setup: Configured camera " + sourceId + " with resolution " + 
                  std::to_string(width) + "x" + std::to_string(height));
     
     return ExecutionResult::ok(frame);
@@ -97,12 +97,12 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
     float value = 0.0f;
     if (args[2].isNumeric()) {
         value = static_cast<float>(args[2].asNumber());
-    } else if (args[2].isBoolean()) {
-        value = args[2].asBoolean() ? 1.0f : 0.0f;
+    } else if (args[2].isBool()) {
+        value = args[2].asBool() ? 1.0f : 0.0f;
     } else {
         // Try parsing string if possible, or support string controls later
         // For now, default to 0
-        Logger::warning("libcam-prop: Unsupported value type for control " + controlName);
+        SystemLogger::warning("LibCameraItems", "libcam-prop: Unsupported value type for control " + controlName);
     }
     
     if (!CameraDeviceManager::instance().setLibCameraControl(sourceId, controlName, value)) {
@@ -110,7 +110,7 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
                                      " (camera might not be open or control not supported)");
     }
     
-    Logger::info("libcam-prop: Set " + controlName + " to " + std::to_string(value));
+    SystemLogger::info("LibCameraItems", "libcam-prop: Set " + controlName + " to " + std::to_string(value));
     
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -129,7 +129,7 @@ LibCamListItem::LibCamListItem() {
     _tags = {"libcamera", "camera", "list", "enumerate"};
 }
 
-ExecutionResult LibCamListItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+ExecutionResult LibCamListItem::execute(const std::vector<RuntimeValue>&, ExecutionContext& ctx) {
     auto* manager = CameraDeviceManager::instance().getLibCameraManager();
     if (!manager) {
         return ExecutionResult::fail("Failed to initialize libcamera manager");
@@ -145,7 +145,7 @@ ExecutionResult LibCamListItem::execute(const std::vector<RuntimeValue>& args, E
         std::cout << "  [" << i << "] " << camera->id() << std::endl;
         
         // Print camera properties if available
-        const auto& props = camera->properties();
+        // const auto& props = camera->properties();
         // Note: Accessing properties requires the camera to be acquired
         // For listing, we just show the ID
     }
