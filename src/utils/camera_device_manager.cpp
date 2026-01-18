@@ -334,13 +334,12 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     
     session.libcameraDevice = camera;
     
-    // Configure for video capture
-    // Use stored config if available (it defaults to safe values in constructor)
-    
     // Map string role to StreamRole
     libcamera::StreamRole role = libcamera::StreamRole::VideoRecording;
-    if (session.targetConfig.streamRole == "StillCapture") role = libcamera::StreamRole::StillCapture;
-    else if (session.targetConfig.streamRole == "Viewfinder") role = libcamera::StreamRole::Viewfinder;
+    if (session.targetConfig.streamRole == "StillCapture") 
+        role = libcamera::StreamRole::StillCapture;
+    else if (session.targetConfig.streamRole == "Viewfinder") 
+        role = libcamera::StreamRole::Viewfinder;
 
     session.config = camera->generateConfiguration({role});
     if (!session.config) {
@@ -348,25 +347,87 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         camera->release();
         return false;
     }
+
+    // Extended pixel format mapping covering YUV, RGB, Bayer, MJPEG, Greyscale
+    static const std::map<std::string, libcamera::PixelFormat> lcFormats = {
+        // Packed YUV 4:2:2
+        { "YUYV",  libcamera::formats::YUYV },
+        { "YUY2",  libcamera::formats::YUYV },
+        { "UYVY",  libcamera::formats::UYVY },
+        { "YVYU",  libcamera::formats::YVYU },
+        { "VYUY",  libcamera::formats::VYUY },
+
+        // Planar / semi-planar YUV 4:2:0
+        { "NV12",  libcamera::formats::NV12 },
+        { "NV21",  libcamera::formats::NV21 },
+        { "YUV420", libcamera::formats::YUV420 },
+
+        // RGB / BGR (8-bit)
+        { "RGB888", libcamera::formats::RGB888 },
+        { "BGR888", libcamera::formats::BGR888 },
+        { "RGB24",  libcamera::formats::RGB888 },
+        { "BGR24",  libcamera::formats::BGR888 },
+
+        // Compressed
+        { "MJPEG", libcamera::formats::MJPEG },
+        { "MJPG",  libcamera::formats::MJPEG },
+        { "JPEG",  libcamera::formats::MJPEG },
+
+        // Greyscale
+        { "GREY",  libcamera::formats::GREY },
+        { "Y8",    libcamera::formats::GREY },
+
+        // 8-bit Bayer
+        { "SBGGR8", libcamera::formats::SBGGR8 },
+        { "SGBRG8", libcamera::formats::SGBRG8 },
+        { "SGRBG8", libcamera::formats::SGRBG8 },
+        { "SRGGB8", libcamera::formats::SRGGB8 },
+
+        // 10-bit Bayer packed (CSI2P; IMX219, IMX477, etc.)
+        { "SBGGR10", libcamera::formats::SBGGR10_CSI2P },
+        { "SGBRG10", libcamera::formats::SGBRG10_CSI2P },
+        { "SGRBG10", libcamera::formats::SGRBG10_CSI2P },
+        { "SRGGB10", libcamera::formats::SRGGB10_CSI2P },
+
+        // 12-bit Bayer packed
+        { "SBGGR12", libcamera::formats::SBGGR12_CSI2P },
+        { "SGBRG12", libcamera::formats::SGBRG12_CSI2P },
+        { "SGRBG12", libcamera::formats::SGRBG12_CSI2P },
+        { "SRGGB12", libcamera::formats::SRGGB12_CSI2P },
+
+        // 16-bit unpacked Bayer
+        { "SBGGR16", libcamera::formats::SBGGR16 },
+        { "SGBRG16", libcamera::formats::SGBRG16 },
+        { "SGRBG16", libcamera::formats::SGRBG16 },
+        { "SRGGB16", libcamera::formats::SRGGB16 },
+    };
     
     // Apply configuration
     libcamera::StreamConfiguration& streamCfg = session.config->at(0);
     
-    // Parse pixel format
-    // Simple mapping for common formats
-    std::string fmt = session.targetConfig.pixelFormat;
-    if (fmt == "YUYV" || fmt == "YUY2") streamCfg.pixelFormat = libcamera::formats::YUYV;
-    else if (fmt == "UYVY") streamCfg.pixelFormat = libcamera::formats::UYVY;
-    else if (fmt == "YVYU") streamCfg.pixelFormat = libcamera::formats::YVYU;
-    else if (fmt == "NV12") streamCfg.pixelFormat = libcamera::formats::NV12;
-    else if (fmt == "NV21") streamCfg.pixelFormat = libcamera::formats::NV21;
-    else if (fmt == "MJPEG" || fmt == "MJPG") streamCfg.pixelFormat = libcamera::formats::MJPEG;
-    else if (fmt == "RGB888") streamCfg.pixelFormat = libcamera::formats::RGB888;
-    else if (fmt == "BGR888") streamCfg.pixelFormat = libcamera::formats::BGR888;
-    else streamCfg.pixelFormat = libcamera::formats::BGR888; // Default
+    // Look up pixel format (case-insensitive)
+    std::string fmtKey = session.targetConfig.pixelFormat;
+    std::transform(fmtKey.begin(), fmtKey.end(), fmtKey.begin(), ::toupper);
     
-    streamCfg.size = {static_cast<unsigned int>(session.targetConfig.width), static_cast<unsigned int>(session.targetConfig.height)};
+    auto it = lcFormats.find(fmtKey);
+    if (it != lcFormats.end()) {
+        streamCfg.pixelFormat = it->second;
+        SystemLogger::info(LOG_COMPONENT, "Requested pixel format: " + fmtKey);
+    } else {
+        streamCfg.pixelFormat = libcamera::formats::BGR888; // Safe default
+        SystemLogger::warning(LOG_COMPONENT, "Unknown format '" + fmtKey + "', defaulting to BGR888");
+    }
+    
+    streamCfg.size = {
+        static_cast<unsigned int>(session.targetConfig.width), 
+        static_cast<unsigned int>(session.targetConfig.height)
+    };
     streamCfg.bufferCount = static_cast<unsigned int>(session.targetConfig.bufferCount);
+    
+    SystemLogger::info(LOG_COMPONENT, 
+        "Requested config: " + std::to_string(streamCfg.size.width) + "x" + 
+        std::to_string(streamCfg.size.height) + " " + 
+        streamCfg.pixelFormat.toString());
     
     // Validate configuration
     libcamera::CameraConfiguration::Status validation = session.config->validate();
@@ -375,9 +436,15 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         camera->release();
         return false;
     } else if (validation == libcamera::CameraConfiguration::Adjusted) {
-        SystemLogger::info(LOG_COMPONENT, "libcamera configuration was adjusted by camera");
+        auto& finalCfg = session.config->at(0);
+        SystemLogger::warning(LOG_COMPONENT, 
+            "libcamera configuration adjusted to: " + 
+            std::to_string(finalCfg.size.width) + "x" + 
+            std::to_string(finalCfg.size.height) + " " + 
+            finalCfg.pixelFormat.toString());
+    } else {
+        SystemLogger::info(LOG_COMPONENT, "libcamera configuration validated successfully");
     }
-    
     
     if (camera->configure(session.config.get()) < 0) {
         SystemLogger::error(LOG_COMPONENT, "Failed to configure libcamera");
@@ -423,9 +490,10 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         camera->queueRequest(request.get());
     }
     
-    SystemLogger::info(LOG_COMPONENT, "Opened camera with libcamera backend: " + sourceId);
+    SystemLogger::info(LOG_COMPONENT, "Successfully opened camera with libcamera backend: " + sourceId);
     return true;
 }
+
 
 bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock) {
     // Wait for frame with timeout
