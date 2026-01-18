@@ -19,7 +19,7 @@ void registerLibCameraItems(ItemRegistry& registry) {
 // ============================================================================
 
 LibCamSetupItem::LibCamSetupItem() {
-    _functionName = "libcam-setup";
+    _functionName = "libcam_setup";
     _description = "Configure libcamera-specific settings for a camera";
     _category = "video_io";
     _params = {
@@ -30,7 +30,7 @@ LibCamSetupItem::LibCamSetupItem() {
         ParamDef::optional("buffer_count", BaseType::INT, "Number of buffers", 4),
         ParamDef::optional("stream_role", BaseType::STRING, "Stream role: VideoRecording, StillCapture, Viewfinder", "VideoRecording")
     };
-    _example = "libcam-setup(0, 1920, 1080)";
+    _example = "libcam_setup(0, 1920, 1080)";
     _returnType = "mat";
     _tags = {"libcamera", "camera", "setup", "configuration"};
 }
@@ -66,7 +66,7 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
         return ExecutionResult::fail("Failed to setup libcamera device: " + sourceId);
     }
     
-    SystemLogger::info("LibCameraItems", "libcam-setup: Configured camera " + sourceId + " with resolution " + 
+    SystemLogger::info("LibCameraItems", "libcam_setup: Configured camera " + sourceId + " with resolution " + 
                  std::to_string(width) + "x" + std::to_string(height));
     
     return ExecutionResult::ok(frame);
@@ -77,7 +77,7 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
 // ============================================================================
 
 LibCamPropItem::LibCamPropItem() {
-    _functionName = "libcam-prop";
+    _functionName = "libcam_prop";
     _description = "Set a libcamera control by name";
     _category = "video_io";
     _params = {
@@ -85,7 +85,7 @@ LibCamPropItem::LibCamPropItem() {
         ParamDef::required("control", BaseType::STRING, "Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness)"),
         ParamDef::required("value", BaseType::ANY, "Control value (number or boolean)")
     };
-    _example = "libcam-prop(\"0\", \"AeEnable\", 0)";
+    _example = "libcam_prop(\"0\", \"AeEnable\", 0)";
     _returnType = "mat";
     _tags = {"libcamera", "camera", "control", "property"};
 }
@@ -102,7 +102,7 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
     } else {
         // Try parsing string if possible, or support string controls later
         // For now, default to 0
-        SystemLogger::warning("LibCameraItems", "libcam-prop: Unsupported value type for control " + controlName);
+        SystemLogger::warning("LibCameraItems", "libcam_prop: Unsupported value type for control " + controlName);
     }
     
     if (!CameraDeviceManager::instance().setLibCameraControl(sourceId, controlName, value)) {
@@ -110,7 +110,7 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
                                      " (camera might not be open or control not supported)");
     }
     
-    SystemLogger::info("LibCameraItems", "libcam-prop: Set " + controlName + " to " + std::to_string(value));
+    SystemLogger::info("LibCameraItems", "libcam_prop: Set " + controlName + " to " + std::to_string(value));
     
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -120,11 +120,11 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
 // ============================================================================
 
 LibCamListItem::LibCamListItem() {
-    _functionName = "libcam-list";
+    _functionName = "libcam_list";
     _description = "List available libcamera devices";
     _category = "video_io";
     _params = {};
-    _example = "libcam-list()";
+    _example = "libcam_list()";
     _returnType = "mat";
     _tags = {"libcamera", "camera", "list", "enumerate"};
 }

@@ -14,7 +14,7 @@ void registerLibCameraItems(ItemRegistry& registry);
 // ============================================================================
 
 /**
- * @brief libcam-setup: Configure libcamera-specific settings
+ * @brief libcam_setup: Configure libcamera-specific settings
  * 
  * Parameters:
  * - source: Camera source identifier
@@ -31,7 +31,7 @@ public:
 };
 
 /**
- * @brief libcam-prop: Set libcamera control by name or ID
+ * @brief libcam_prop: Set libcamera control by name or ID
  * 
  * Parameters:
  * - source: Camera source identifier
@@ -45,7 +45,7 @@ public:
 };
 
 /**
- * @brief libcam-list: List available libcamera devices
+ * @brief libcam_list: List available libcamera devices
  * 
  * Returns information about all detected libcamera devices.
  */
