@@ -163,9 +163,10 @@ private:
     // Updated to take unique_lock for condition_variable
     bool readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock);
 
-    static cv::Mat unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride);
+    cv::Mat unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride);
+    
+    cv::Mat unpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride);
 
-    static cv::Mat unpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride);
     
     void libcameraRequestComplete(libcamera::Request* request);
     
