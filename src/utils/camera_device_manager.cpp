@@ -499,6 +499,60 @@ bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& fr
     return false;
 }
 
+// Helper function to unpack MIPI CSI-2 RAW10 to 16-bit
+cv::Mat unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+    cv::Mat unpacked(height, width, CV_16UC1);
+    
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* srcRow = packed + y * stride;
+        uint16_t* dstRow = unpacked.ptr<uint16_t>(y);
+        
+        for (int x = 0; x < width; x += 4) {
+            // RAW10 CSI2P: 4 pixels in 5 bytes
+            // [P0[9:2]] [P1[9:2]] [P2[9:2]] [P3[9:2]] [P3[1:0]P2[1:0]P1[1:0]P0[1:0]]
+            uint8_t b0 = srcRow[0];
+            uint8_t b1 = srcRow[1];
+            uint8_t b2 = srcRow[2];
+            uint8_t b3 = srcRow[3];
+            uint8_t b4 = srcRow[4];
+            
+            dstRow[x + 0] = (static_cast<uint16_t>(b0) << 2) | ((b4 >> 0) & 0x03);
+            dstRow[x + 1] = (static_cast<uint16_t>(b1) << 2) | ((b4 >> 2) & 0x03);
+            dstRow[x + 2] = (static_cast<uint16_t>(b2) << 2) | ((b4 >> 4) & 0x03);
+            dstRow[x + 3] = (static_cast<uint16_t>(b3) << 2) | ((b4 >> 6) & 0x03);
+            
+            srcRow += 5;
+        }
+    }
+    
+    return unpacked;
+}
+
+// Helper function to unpack MIPI CSI-2 RAW12 to 16-bit
+cv::Mat unpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+    cv::Mat unpacked(height, width, CV_16UC1);
+    
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* srcRow = packed + y * stride;
+        uint16_t* dstRow = unpacked.ptr<uint16_t>(y);
+        
+        for (int x = 0; x < width; x += 2) {
+            // RAW12 CSI2P: 2 pixels in 3 bytes
+            // [P0[11:4]] [P1[11:4]] [P1[3:0]P0[3:0]]
+            uint8_t b0 = srcRow[0];
+            uint8_t b1 = srcRow[1];
+            uint8_t b2 = srcRow[2];
+            
+            dstRow[x + 0] = (static_cast<uint16_t>(b0) << 4) | (b2 & 0x0F);
+            dstRow[x + 1] = (static_cast<uint16_t>(b1) << 4) | ((b2 >> 4) & 0x0F);
+            
+            srcRow += 3;
+        }
+    }
+    
+    return unpacked;
+}
+
 void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) {
     if (request->status() == libcamera::Request::RequestCancelled) {
         return;
@@ -520,61 +574,148 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                     libcamera::FrameBuffer* buffer = bufferPair.second;
                     const auto& planes = buffer->planes();
                     if (planes.empty()) continue;
+                    
                     const libcamera::FrameBuffer::Plane& plane = planes[0];
                     
                     // Memory map the buffer
                     void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
-                    if (data != MAP_FAILED) {
-                        libcamera::StreamConfiguration& streamCfg = session.config->at(0);
-                        
-                        // Determine type based on format
-                        int type = CV_8UC3;
-                        int width = streamCfg.size.width;
-                        int height = streamCfg.size.height;
-                        
-                        libcamera::PixelFormat fmt = streamCfg.pixelFormat;
-                        if (fmt == libcamera::formats::YUYV || fmt == libcamera::formats::UYVY || fmt == libcamera::formats::YVYU) {
-                            type = CV_8UC2; // 2 bytes per pixel
-                        } else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
-                            type = CV_8UC1; 
-                            height = height * 3 / 2; // 1.5 height for Y + UV planes
-                        } else if (fmt == libcamera::formats::MJPEG) {
-                            // Treat as 1D array
-                            type = CV_8UC1;
-                            width = plane.length; // Max buffer size
-                            height = 1;
-                            // Note: real size is in metadata, but for now we map full buffer
-                        }
-                        
-                        session.latestFrame = cv::Mat(height, width, type, data).clone();
-                        session.frameReady = true;
-                        if (session.activeControls.size() > 0) {
-                             // Apply active controls to the next request
-                             libcamera::ControlList& ctrls = request->controls();
-                             // Iterate over supported controls to match our active map
-                             for (const auto& [id, info] : session.libcameraDevice->controls()) {
-                                 auto it = session.activeControls.find(id->name());
-                                 if (it != session.activeControls.end()) {
-                                     float val = it->second;
-                                     switch(id->type()) {
-                                         case libcamera::ControlTypeBool: ctrls.set(id->id(), static_cast<bool>(val)); break;
-                                         case libcamera::ControlTypeByte: ctrls.set(id->id(), static_cast<uint8_t>(val)); break;
-                                         case libcamera::ControlTypeInteger32: ctrls.set(id->id(), static_cast<int32_t>(val)); break;
-                                         case libcamera::ControlTypeInteger64: ctrls.set(id->id(), static_cast<int64_t>(val)); break;
-                                         case libcamera::ControlTypeFloat: ctrls.set(id->id(), val); break;
-                                         default: break;
-                                     }
-                                 }
-                             }
-                        }
-                        munmap(data, plane.length);
+                    if (data == MAP_FAILED) {
+                        SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer");
+                        continue;
                     }
+                    
+                    libcamera::StreamConfiguration& streamCfg = session.config->at(0);
+                    libcamera::PixelFormat fmt = streamCfg.pixelFormat;
+                    
+                    int width = streamCfg.size.width;
+                    int height = streamCfg.size.height;
+                    size_t stride = streamCfg.stride;
+                    
+                    cv::Mat frameMat;
+                    bool needsUnpacking = false;
+                    
+                    // Determine format and create appropriate cv::Mat
+                    
+                    // --- YUV 4:2:2 Packed (2 bytes per pixel) ---
+                    if (fmt == libcamera::formats::YUYV ||
+                        fmt == libcamera::formats::UYVY ||
+                        fmt == libcamera::formats::YVYU ||
+                        fmt == libcamera::formats::VYUY) {
+                        frameMat = cv::Mat(height, width, CV_8UC2, data, stride);
+                    }
+                    
+                    // --- YUV 4:2:0 Semi-Planar ---
+                    else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
+                        int totalHeight = height * 3 / 2;
+                        frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+                    }
+                    
+                    // --- YUV 4:2:0 Planar ---
+                    else if (fmt == libcamera::formats::YUV420) {
+                        int totalHeight = height * 3 / 2;
+                        frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+                    }
+                    
+                    // --- RGB/BGR 8-bit ---
+                    else if (fmt == libcamera::formats::RGB888 || fmt == libcamera::formats::BGR888) {
+                        frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+                    }
+                    
+                    // --- MJPEG compressed ---
+                    else if (fmt == libcamera::formats::MJPEG) {
+                        frameMat = cv::Mat(1, plane.length, CV_8UC1, data, plane.length);
+                    }
+                    
+                    // --- 8-bit Bayer ---
+                    else if (fmt == libcamera::formats::SBGGR8 ||
+                             fmt == libcamera::formats::SGBRG8 ||
+                             fmt == libcamera::formats::SGRBG8 ||
+                             fmt == libcamera::formats::SRGGB8) {
+                        frameMat = cv::Mat(height, width, CV_8UC1, data, stride);
+                    }
+                    
+                    // --- 10-bit Bayer Packed CSI-2 → Unpack to 16-bit ---
+                    else if (fmt == libcamera::formats::SBGGR10_CSI2P ||
+                             fmt == libcamera::formats::SGBRG10_CSI2P ||
+                             fmt == libcamera::formats::SGRBG10_CSI2P ||
+                             fmt == libcamera::formats::SRGGB10_CSI2P) {
+                        frameMat = unpackRAW10CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+                        needsUnpacking = true;
+                    }
+                    
+                    // --- 12-bit Bayer Packed CSI-2 → Unpack to 16-bit ---
+                    else if (fmt == libcamera::formats::SBGGR12_CSI2P ||
+                             fmt == libcamera::formats::SGBRG12_CSI2P ||
+                             fmt == libcamera::formats::SGRBG12_CSI2P ||
+                             fmt == libcamera::formats::SRGGB12_CSI2P) {
+                        frameMat = unpackRAW12CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+                        needsUnpacking = true;
+                    }
+                    
+                    // --- 16-bit Bayer (already unpacked) ---
+                    else if (fmt == libcamera::formats::SBGGR16 ||
+                             fmt == libcamera::formats::SGBRG16 ||
+                             fmt == libcamera::formats::SGRBG16 ||
+                             fmt == libcamera::formats::SRGGB16) {
+                        frameMat = cv::Mat(height, width, CV_16UC1, data, stride);
+                    }
+                    
+                    // --- Unknown format fallback ---
+                    else {
+                        SystemLogger::warning(LOG_COMPONENT, 
+                            "Unknown pixel format: " + fmt.toString() + ", defaulting to CV_8UC3");
+                        frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+                    }
+                    
+                    // Clone or assign based on whether we unpacked
+                    if (needsUnpacking) {
+                        // Already cloned during unpacking
+                        session.latestFrame = frameMat;
+                    } else {
+                        // Clone to own memory before unmapping
+                        session.latestFrame = frameMat.clone();
+                    }
+                    
+                    session.frameReady = true;
+                    
+                    // Apply active controls to next request
+                    if (session.activeControls.size() > 0) {
+                        libcamera::ControlList& ctrls = request->controls();
+                        for (const auto& [id, info] : session.libcameraDevice->controls()) {
+                            auto it = session.activeControls.find(id->name());
+                            if (it != session.activeControls.end()) {
+                                float val = it->second;
+                                switch(id->type()) {
+                                    case libcamera::ControlTypeBool:
+                                        ctrls.set(id->id(), static_cast<bool>(val));
+                                        break;
+                                    case libcamera::ControlTypeByte:
+                                        ctrls.set(id->id(), static_cast<uint8_t>(val));
+                                        break;
+                                    case libcamera::ControlTypeInteger32:
+                                        ctrls.set(id->id(), static_cast<int32_t>(val));
+                                        break;
+                                    case libcamera::ControlTypeInteger64:
+                                        ctrls.set(id->id(), static_cast<int64_t>(val));
+                                        break;
+                                    case libcamera::ControlTypeFloat:
+                                        ctrls.set(id->id(), val);
+                                        break;
+                                    default:
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Unmap buffer after processing
+                    munmap(data, plane.length);
                 }
                 
                 // Signal waiting threads
                 session.frameCond->notify_all();
-
-                // Requeue the request
+                
+                // Requeue the request for next frame
                 request->reuse(libcamera::Request::ReuseBuffers);
                 session.libcameraDevice->queueRequest(request);
                 return;
