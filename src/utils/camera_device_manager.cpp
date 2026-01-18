@@ -33,8 +33,6 @@ CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
     std::string lower = backendStr;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
     
-    // std::cerr << "[DEBUG] parseBackend input: '" << backendStr << "' lower: '" << lower << "'" << std::endl;
-
     if (lower == "dshow") {  return CameraBackend::OPENCV_DSHOW; }
     if (lower == "v4l2") {  return CameraBackend::OPENCV_V4L2; }
     if (lower == "ffmpeg") {  return CameraBackend::OPENCV_FFMPEG; }
