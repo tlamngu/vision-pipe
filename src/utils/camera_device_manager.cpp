@@ -227,18 +227,22 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         }
 
         if (isIndex) {
+            SystemLogger::info(LOG_COMPONENT, "Opening camera with index: " + std::to_string(index) + " backend: " + std::to_string(cvBackend));
             session.opencvCapture->open(index, cvBackend);
         } else {
-            // Not an integer or /dev/videoN, treat as path/URL
+            SystemLogger::info(LOG_COMPONENT, "Opening camera with path: " + sourceId + " backend: " + std::to_string(cvBackend));
             session.opencvCapture->open(sourceId, cvBackend);
         }
         
         if (!requestedFormat.empty() && requestedFormat.length() >= 4) {
+            std::string fmtUpper = requestedFormat;
+            std::transform(fmtUpper.begin(), fmtUpper.end(), fmtUpper.begin(), ::toupper);
+            
             int fourcc = cv::VideoWriter::fourcc(
-                requestedFormat[0], requestedFormat[1], requestedFormat[2], requestedFormat[3]
+                fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
             );
             session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
-            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + requestedFormat);
+            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + fmtUpper + " (" + std::to_string(fourcc) + ")");
         }
         
         if (!session.opencvCapture->isOpened()) {
@@ -246,7 +250,7 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             return false;
         }
         
-        SystemLogger::info(LOG_COMPONENT, "Opened camera with OpenCV backend: " + sourceId);
+        SystemLogger::info(LOG_COMPONENT, "Camera opened successfully: " + sourceId);
     }
     
     _sessions[sourceId] = std::move(session);
@@ -255,9 +259,16 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
 
 bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame) {
     if (!session.opencvCapture || !session.opencvCapture->isOpened()) {
+        SystemLogger::error(LOG_COMPONENT, "readOpenCVFrame: Camera not open");
         return false;
     }
-    return session.opencvCapture->read(frame);
+    bool success = session.opencvCapture->read(frame);
+    if (!success) {
+        SystemLogger::warning(LOG_COMPONENT, "readOpenCVFrame: Failed to read frame (returned false)");
+    } else if (frame.empty()) {
+        SystemLogger::warning(LOG_COMPONENT, "readOpenCVFrame: Success but frame empty");
+    }
+    return success;
 }
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
