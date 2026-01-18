@@ -33,15 +33,15 @@ CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
     std::string lower = backendStr;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
     
-    std::cerr << "[DEBUG] parseBackend input: '" << backendStr << "' lower: '" << lower << "'" << std::endl;
+    // std::cerr << "[DEBUG] parseBackend input: '" << backendStr << "' lower: '" << lower << "'" << std::endl;
 
-    if (lower == "dshow") { std::cerr << "[DEBUG] Backend parsed as DSHOW" << std::endl; return CameraBackend::OPENCV_DSHOW; }
-    if (lower == "v4l2") { std::cerr << "[DEBUG] Backend parsed as V4L2" << std::endl; return CameraBackend::OPENCV_V4L2; }
-    if (lower == "ffmpeg") { std::cerr << "[DEBUG] Backend parsed as FFMPEG" << std::endl; return CameraBackend::OPENCV_FFMPEG; }
-    if (lower == "gstreamer") { std::cerr << "[DEBUG] Backend parsed as GSTREAMER" << std::endl; return CameraBackend::OPENCV_GSTREAMER; }
-    if (lower == "libcamera") { std::cerr << "[DEBUG] Backend parsed as LIBCAMERA" << std::endl; return CameraBackend::LIBCAMERA; }
+    // if (lower == "dshow") { std::cerr << "[DEBUG] Backend parsed as DSHOW" << std::endl; return CameraBackend::OPENCV_DSHOW; }
+    // if (lower == "v4l2") { std::cerr << "[DEBUG] Backend parsed as V4L2" << std::endl; return CameraBackend::OPENCV_V4L2; }
+    // if (lower == "ffmpeg") { std::cerr << "[DEBUG] Backend parsed as FFMPEG" << std::endl; return CameraBackend::OPENCV_FFMPEG; }
+    // if (lower == "gstreamer") { std::cerr << "[DEBUG] Backend parsed as GSTREAMER" << std::endl; return CameraBackend::OPENCV_GSTREAMER; }
+    // if (lower == "libcamera") { std::cerr << "[DEBUG] Backend parsed as LIBCAMERA" << std::endl; return CameraBackend::LIBCAMERA; }
     
-    std::cerr << "[DEBUG] Backend parsed as AUTO (default)" << std::endl;
+    // std::cerr << "[DEBUG] Backend parsed as AUTO (default)" << std::endl;
     return CameraBackend::OPENCV_AUTO;
 }
 
