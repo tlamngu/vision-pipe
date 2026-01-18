@@ -245,14 +245,18 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             int fourcc = cv::VideoWriter::fourcc(
                 fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
             );
-            session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
-            std::cerr << "[DEBUG] Requested FourCC: " << fmtUpper << " (" << fourcc << ")" << std::endl;
+            bool setRes = session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
+            std::cerr << "[DEBUG] Requested FourCC: " << fmtUpper << " (" << fourcc << ") Result: " << setRes << std::endl;
         }
         
         if (!session.opencvCapture->isOpened()) {
             std::cerr << "[ERROR] Failed to open camera with OpenCV: " << sourceId << std::endl;
             return false;
         }
+        
+        // Warmup delay for V4L2 cameras
+        std::cerr << "[DEBUG] Camera opened. Waiting 500ms for warmup..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
         std::cerr << "[DEBUG] Camera opened successfully: " << sourceId << std::endl;
     }
@@ -266,13 +270,21 @@ bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame
         std::cerr << "[ERROR] readOpenCVFrame: Camera not open" << std::endl;
         return false;
     }
-    bool success = session.opencvCapture->read(frame);
-    if (!success) {
-        std::cerr << "[ERROR] readOpenCVFrame: Failed to read frame (returned false)" << std::endl;
-    } else if (frame.empty()) {
-        std::cerr << "[ERROR] readOpenCVFrame: Success but frame empty" << std::endl;
+    
+    // Retry loop for reading frames (handles initial instability)
+    int retries = 5;
+    while (retries > 0) {
+        if (session.opencvCapture->read(frame) && !frame.empty()) {
+            return true;
+        }
+        
+        std::cerr << "[WARNING] readOpenCVFrame: Failed to read frame or empty. Retrying... (" << retries << " left)" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        retries--;
     }
-    return success;
+    
+    std::cerr << "[ERROR] readOpenCVFrame: Failed to capture frame after retries" << std::endl;
+    return false;
 }
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
