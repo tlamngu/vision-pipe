@@ -227,10 +227,10 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         }
 
         if (isIndex) {
-            SystemLogger::info(LOG_COMPONENT, "Opening camera with index: " + std::to_string(index) + " backend: " + std::to_string(cvBackend));
+            std::cerr << "[DEBUG] Opening camera with index: " << index << " backend: " << cvBackend << std::endl;
             session.opencvCapture->open(index, cvBackend);
         } else {
-            SystemLogger::info(LOG_COMPONENT, "Opening camera with path: " + sourceId + " backend: " + std::to_string(cvBackend));
+            std::cerr << "[DEBUG] Opening camera with path: " << sourceId << " backend: " << cvBackend << std::endl;
             session.opencvCapture->open(sourceId, cvBackend);
         }
         
@@ -242,15 +242,15 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
                 fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
             );
             session.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
-            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + fmtUpper + " (" + std::to_string(fourcc) + ")");
+            std::cerr << "[DEBUG] Requested FourCC: " << fmtUpper << " (" << fourcc << ")" << std::endl;
         }
         
         if (!session.opencvCapture->isOpened()) {
-            SystemLogger::error(LOG_COMPONENT, "Failed to open camera with OpenCV: " + sourceId);
+            std::cerr << "[ERROR] Failed to open camera with OpenCV: " << sourceId << std::endl;
             return false;
         }
         
-        SystemLogger::info(LOG_COMPONENT, "Camera opened successfully: " + sourceId);
+        std::cerr << "[DEBUG] Camera opened successfully: " << sourceId << std::endl;
     }
     
     _sessions[sourceId] = std::move(session);
