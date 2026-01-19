@@ -24,6 +24,10 @@ pipeline cap_r
 end
 
 pipeline main
+    exec_multi [
+        cap_l,
+        cap_r
+    ]
     # Capture frame from camera (change index if needed)
     use(global "frame_l")
 
