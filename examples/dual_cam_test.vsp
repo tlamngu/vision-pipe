@@ -53,16 +53,6 @@ pipeline main
     
     # Wait for key (30ms = ~33 FPS target)
     # Press ESC or 'q' to quit
-    key = wait_key(1)
-    
-    # Check for 'q' key (ASCII 113) or ESC key (ASCII 27)
-    if key == 113
-        break
-    end
-    
-    if key == 27
-        break
-    end
 end
 
 pipeline shutdown
