@@ -181,6 +181,15 @@ ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>&
                   << std::endl;
     }
     
+    std::cout << "=========================================================" << std::endl;
+
+    const auto& properties = camera->properties();
+    std::cout << "\n=== Camera Properties for libcamera [" << sourceId << "] ===" << std::endl;
+    for (const auto& [id, value] : properties) {
+        std::cout << std::left << std::setw(35) << id->name() 
+                  << " = " << value.toString() << std::endl;
+    }
+    
     std::cout << "=========================================================\n" << std::endl;
     
     return ExecutionResult::ok(ctx.currentMat);

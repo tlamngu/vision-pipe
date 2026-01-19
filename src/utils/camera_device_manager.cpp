@@ -118,10 +118,10 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
         }
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->stop();
             it->second.requests.clear();
             it->second.allocator.reset();
             it->second.config.reset();
-            it->second.libcameraDevice->stop();
             it->second.libcameraDevice->release();
         }
 #endif
@@ -138,10 +138,10 @@ void CameraDeviceManager::releaseAll() {
         }
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         if (pair.second.libcameraDevice) {
+            pair.second.libcameraDevice->stop();
             pair.second.requests.clear();
             pair.second.allocator.reset();
             pair.second.config.reset();
-            pair.second.libcameraDevice->stop();
             pair.second.libcameraDevice->release();
         }
 #endif
@@ -225,10 +225,10 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         
         // Properly release old hardware resources if they were active
         if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->stop();
             it->second.requests.clear();
             it->second.allocator.reset();
             it->second.config.reset();
-            it->second.libcameraDevice->stop();
             it->second.libcameraDevice->release();
             SystemLogger::info(LOG_COMPONENT, "Closing existing libcamera session for reassignment: " + sourceId);
         }

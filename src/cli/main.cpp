@@ -129,7 +129,7 @@ Examples:
   visionpipe validate mypipeline.vsp
   visionpipe docs --output ./docs --format html
   visionpipe serve --port 3000
-  visionpipe execute "libcam_list_controls()
+  visionpipe execute \"libcam_list_controls()\"
 
 Environment Variables:
   VISIONPIPE_LOG_LEVEL     Set log level (debug, info, warn, error)
@@ -567,37 +567,34 @@ int cmdExecute(const CLIOptions& opts) {
 // Main entry point
 // ============================================================================
 
+#include "utils/camera_device_manager.h"
+
 int main(int argc, char* argv[]) {
     CLIOptions opts = parseArgs(argc, argv);
+    
+    int result = 0;
     
     if (opts.help || opts.command == "help" || opts.command.empty()) {
         printBanner();
         printUsage();
-        return 0;
-    }
-    
-    if (opts.command == "version" || opts.command == "--version") {
+    } else if (opts.command == "version" || opts.command == "--version") {
         printVersion();
-        return 0;
+    } else if (opts.command == "run") {
+        result = cmdRun(opts);
+    } else if (opts.command == "validate") {
+        result = cmdValidate(opts);
+    } else if (opts.command == "docs") {
+        result = cmdDocs(opts);
+    } else if (opts.command == "execute") {
+        result = cmdExecute(opts);
+    } else {
+        std::cerr << "Unknown command: " << opts.command << std::endl;
+        std::cerr << "Run 'visionpipe help' for usage information" << std::endl;
+        result = 1;
     }
     
-    if (opts.command == "run") {
-        return cmdRun(opts);
-    }
+    // Clean shutdown
+    CameraDeviceManager::instance().releaseAll();
     
-    if (opts.command == "validate") {
-        return cmdValidate(opts);
-    }
-    
-    if (opts.command == "docs") {
-        return cmdDocs(opts);
-    }
-    
-    if (opts.command == "execute") {
-        return cmdExecute(opts);
-    }
-    
-    std::cerr << "Unknown command: " << opts.command << std::endl;
-    std::cerr << "Run 'visionpipe help' for usage information" << std::endl;
-    return 1;
+    return result;
 }
