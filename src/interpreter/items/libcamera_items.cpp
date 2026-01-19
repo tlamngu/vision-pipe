@@ -185,8 +185,10 @@ ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>&
 
     const auto& properties = camera->properties();
     std::cout << "\n=== Camera Properties for libcamera [" << sourceId << "] ===" << std::endl;
-    for (const auto& [id, value] : properties) {
-        std::cout << std::left << std::setw(35) << id->name() 
+    for (const auto& it : properties) {
+        unsigned int id = it.first;
+        const libcamera::ControlValue &value = it.second;
+        std::cout << "ID: " << std::left << std::setw(5) << id 
                   << " = " << value.toString() << std::endl;
     }
     
