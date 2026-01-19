@@ -186,15 +186,23 @@ bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const
     // but caching it is enough as it will be applied to the next request.
     if (session.libcameraDevice) {
         const auto& controls = session.libcameraDevice->controls();
-        bool found = false;
-        for (const auto& [id, info] : controls) {
+        const libcamera::ControlId* targetId = nullptr;
+        const libcamera::ControlInfo* info = nullptr;
+
+        for (const auto& [id, controlInfo] : controls) {
             if (id->name() == controlName) {
-                found = true;
+                targetId = id;
+                info = &controlInfo;
                 break;
             }
         }
-        if (!found) {
+
+        if (!targetId) {
             SystemLogger::warning(LOG_COMPONENT, "Control not supported by hardware: " + controlName);
+        } else if (info) {
+            SystemLogger::info(LOG_COMPONENT, "Control " + controlName + " supported. Range: " + 
+                               info->min().toString() + " to " + info->max().toString() + 
+                               ", Default: " + info->def().toString());
         }
     }
     
@@ -741,9 +749,6 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                     
                     session.frameReady = true;
                     
-                    // Apply active controls to next request for ongoing stream
-                    applyLibCameraControls(session, request);
-                    
                     // Unmap buffer after processing
                     munmap(data, plane.length);
                 }
@@ -753,6 +758,10 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
                 
                 // Requeue the request for next frame
                 request->reuse(libcamera::Request::ReuseBuffers);
+                
+                // Apply active controls to the reused request
+                applyLibCameraControls(session, request);
+                
                 session.libcameraDevice->queueRequest(request);
                 return;
             }
@@ -779,6 +788,9 @@ void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcame
         }
 
         if (!targetId) continue;
+        
+        // Debug logging for control application (throttled/limited would be better, but let's see)
+        // SystemLogger::debug(LOG_COMPONENT, "Applying control: " + name + " = " + std::to_string(val));
 
         switch(targetId->type()) {
             case libcamera::ControlTypeBool:
