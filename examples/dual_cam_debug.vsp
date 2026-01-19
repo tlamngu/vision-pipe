@@ -1,31 +1,29 @@
-// Dual Camera Deep Debug Script - VisionPipe v1.0
-// This script follows the correct pipeline syntax for diagnostics
+// Dual Camera Deep Debug Script - VisionPipe v1.2
+// This script follows the correct pipeline syntax and item names
 
 pipeline setup
     print("--- Probing Camera 0 ---")
     libcam_list_formats(0)
     libcam_setup(0, 1280, 720, "SRGGB8", 4, "Viewfinder")
-    libcam_debug_config(0)
 
     print("\n--- Probing Camera 1 ---")
     libcam_list_formats(1)
     libcam_setup(1, 1280, 720, "SRGGB8", 4, "Viewfinder")
-    libcam_debug_config(1)
 end
 
 pipeline capture
     // Sequential capture to avoid ISP race conditions
     video_cap(0, "libcamera")
     put_text("CAM 0", 20, 40)
-    cache_set("frame0")
+    cache("f0") // Correct name for storing in cache
     
     video_cap(1, "libcamera")
     put_text("CAM 1", 20, 40)
-    cache_set("frame1")
+    cache("f1") // Correct name for storing in cache
     
     // Combine and stream
-    cache_get("frame0")
-    hstack("frame1")
+    load_cache("f0") // Correct name for loading from cache
+    hstack("f1")
     ip_stream()
 end
 
