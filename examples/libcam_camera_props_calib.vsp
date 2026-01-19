@@ -39,7 +39,7 @@ pipeline setup
     create_trackbar("[IMG] Noise Red", "Controls", 2, 1)
 end
 
-pipeline apply_tuning
+pipeline apply_tuning_and_display
     # --- Read Current GUI State ---
     trackbar_value("[EXP] AE Enable", "Controls", "ae_en")
     trackbar_value("[EXP] Time (ms)", "Controls", "exp_ms")
@@ -90,7 +90,9 @@ pipeline apply_tuning
     libcam_prop(0, "NoiseReductionMode", nr_mode)
 
     use(global "display_frame")
-
+    cvt_color("bayerrg2bgr")
+    fps(true, 20, 20)
+    
     # Render variables manually
     # Header
     put_text("--- Hardware Tuning Status ---", 10, 25, "simplex", 0.6, "cyan", 2)
@@ -128,11 +130,7 @@ pipeline main
     video_cap(0, "libcamera", "SRGGB8") -> global "display_frame"
     
     # 2. Update Hardware Controls
-    exec_seq apply_tuning
-    
-    # 3. Post-Process for Visualization
-    cvt_color("bayerrg2bgr")
-    fps(true, 20, 20)
+    exec_seq apply_tuning_and_display
     
     # 4. Global Exit Handler
     key = wait_key(1)
