@@ -198,12 +198,14 @@ bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const
         }
 
         if (!targetId) {
-            SystemLogger::warning(LOG_COMPONENT, "Control not supported by hardware: " + controlName);
+            std::cout << "[ERROR] Control not supported by hardware: " << controlName << std::endl;
+            return false;
         } else if (info) {
-            SystemLogger::info(LOG_COMPONENT, "Control " + controlName + " supported. Range: " + 
-                               info->min().toString() + " to " + info->max().toString() + 
-                               ", Default: " + info->def().toString());
+            std::cout << "[DEBUG] Control " << controlName << " supported. Range: " << 
+                               info->min().toString() << " to " << info->max().toString() << std::endl;
         }
+    } else {
+        std::cout << "[DEBUG] Camera not open yet, caching control: " << controlName << std::endl;
     }
     
     return true;
@@ -787,10 +789,12 @@ void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcame
             }
         }
 
-        if (!targetId) continue;
+        if (!targetId) {
+            std::cout << "[ERROR] applyLibCameraControls: Unknown control in cache: " << name << std::endl;
+            continue;
+        }
         
-        // Debug logging for control application (throttled/limited would be better, but let's see)
-        // SystemLogger::debug(LOG_COMPONENT, "Applying control: " + name + " = " + std::to_string(val));
+        // std::cout << "[DEBUG] Applying " << name << " = " << val << std::endl;
 
         switch(targetId->type()) {
             case libcamera::ControlTypeBool:

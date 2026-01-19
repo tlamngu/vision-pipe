@@ -111,12 +111,15 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
         SystemLogger::warning("LibCameraItems", "libcam_prop: Unsupported value type for control " + controlName);
     }
     
+    std::cout << "[DEBUG] libcam_prop: Setting " << controlName << " to " << value << " on camera " << sourceId << std::endl;
+
     if (!CameraDeviceManager::instance().setLibCameraControl(sourceId, controlName, value)) {
+        std::cout << "[ERROR] libcam_prop: Failed to set control " << controlName << std::endl;
         return ExecutionResult::fail("Failed to set control " + controlName + " on camera " + sourceId + 
                                      " (camera might not be open or control not supported)");
     }
     
-    SystemLogger::info("LibCameraItems", "libcam_prop: Set " + controlName + " to " + std::to_string(value));
+    std::cout << "[DEBUG] libcam_prop: Success for " << controlName << std::endl;
     
     return ExecutionResult::ok(ctx.currentMat);
 }
