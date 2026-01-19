@@ -4,6 +4,7 @@
 
 #include "utils/camera_device_manager.h"
 #include "utils/Logger.h"
+#include <libcamera/property_ids.h>
 #include <iostream>
 
 namespace visionpipe {
@@ -184,7 +185,7 @@ ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>&
     std::cout << "=========================================================" << std::endl;
 
     const auto& properties = camera->properties();
-    const auto& propertyIds = libcamera::properties::controls;
+    const auto& propertyIds = libcamera::properties::properties;
     
     std::cout << "\n=== Camera Properties for libcamera [" << sourceId << "] ===" << std::endl;
     for (const auto& it : properties) {
