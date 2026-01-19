@@ -38,6 +38,12 @@ public:
  * - control: Control name (e.g., "AeEnable", "ExposureTime", "AwbMode")
  * - value: Control value
  */
+class LibCamListControlsItem : public InterpreterItem {
+public:
+    LibCamListControlsItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
 class LibCamPropItem : public InterpreterItem {
 public:
     LibCamPropItem();

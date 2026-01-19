@@ -57,6 +57,7 @@ struct CLIOptions {
     std::string outputDir = ".";
     std::string outputFormat = "html";
     std::string pipelineName;  // Specific pipeline to run
+    std::string executeItem;   // Item to execute
     bool verbose = false;
     bool quiet = false;
     bool help = false;
@@ -104,6 +105,7 @@ Commands:
   serve               Start documentation web server
   version             Show version information
   help                Show this help message
+  execute <item>      Execute a single interpreter item directly
 
 Run Options:
   --param, -p key=value    Set pipeline parameter (repeatable)
@@ -127,6 +129,7 @@ Examples:
   visionpipe validate mypipeline.vsp
   visionpipe docs --output ./docs --format html
   visionpipe serve --port 3000
+  visionpipe execute "libcam_list_controls()
 
 Environment Variables:
   VISIONPIPE_LOG_LEVEL     Set log level (debug, info, warn, error)
@@ -174,6 +177,10 @@ CLIOptions parseArgs(int argc, char* argv[]) {
     }
     
     opts.command = argv[1];
+    
+    if (opts.command == "execute" && argc > 2) {
+        opts.executeItem = argv[2];
+    }
     
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -519,6 +526,44 @@ int cmdDocs(const CLIOptions& opts) {
 }
 
 // ============================================================================
+// Command: execute
+// ============================================================================
+
+int cmdExecute(const CLIOptions& opts) {
+    if (opts.executeItem.empty()) {
+        std::cerr << "Error: No item specified for execution" << std::endl;
+        std::cerr << "Usage: visionpipe execute \"item_name(args)\"" << std::endl;
+        return 1;
+    }
+
+    std::stringstream ss;
+    ss << "pipeline execute\n"
+       << "  " << opts.executeItem << "\n"
+       << "end\n"
+       << "exec_seq execute\n";
+
+    std::string source = ss.str();
+
+    try {
+        RuntimeConfig config;
+        config.enableDisplay = opts.enableDisplay;
+        config.enableLogging = opts.verbose;
+        
+        Runtime runtime(config);
+        runtime.loadBuiltins();
+
+        if (opts.verbose) {
+            std::cout << "[VisionPipe] Executing item: " << opts.executeItem << std::endl;
+        }
+
+        return runtime.runSource(source, "command_line");
+    } catch (const std::exception& e) {
+        std::cerr << "[Error] " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+// ============================================================================
 // Main entry point
 // ============================================================================
 
@@ -546,6 +591,10 @@ int main(int argc, char* argv[]) {
     
     if (opts.command == "docs") {
         return cmdDocs(opts);
+    }
+    
+    if (opts.command == "execute") {
+        return cmdExecute(opts);
     }
     
     std::cerr << "Unknown command: " << opts.command << std::endl;

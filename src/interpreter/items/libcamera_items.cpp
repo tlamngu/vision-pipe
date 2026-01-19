@@ -12,6 +12,7 @@ void registerLibCameraItems(ItemRegistry& registry) {
     registry.add<LibCamSetupItem>();
     registry.add<LibCamPropItem>();
     registry.add<LibCamListItem>();
+    registry.add<LibCamListControlsItem>();
 }
 
 // ============================================================================
@@ -120,6 +121,67 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
     }
     
     std::cout << "[DEBUG] libcam_prop: Success for " << controlName << std::endl;
+    
+    return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// LibCamListControlsItem
+// ============================================================================
+
+LibCamListControlsItem::LibCamListControlsItem() {
+    _functionName = "libcam_list_controls";
+    _description = "List all available controls for a libcamera device";
+    _category = "video_io";
+    _params = {
+        ParamDef::optional("source", BaseType::ANY, "Camera source identifier (index or ID)", 0)
+    };
+    _example = "libcam_list_controls(0)";
+    _returnType = "mat";
+    _tags = {"libcamera", "camera", "controls", "list"};
+}
+
+ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    std::string sourceId;
+    if (args.size() > 0) {
+        if (args[0].isNumeric()) {
+            sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
+        } else {
+            sourceId = args[0].asString();
+        }
+    } else {
+        sourceId = "0";
+    }
+
+    auto camera = CameraDeviceManager::instance().getLibCamera(sourceId);
+    if (!camera) {
+        std::cout << "[INFO] Camera " << sourceId << " not open. Attempting to open for control discovery..." << std::endl;
+        cv::Mat dummy;
+        if (!CameraDeviceManager::instance().acquireFrame(sourceId, CameraBackend::LIBCAMERA, dummy)) {
+            return ExecutionResult::fail("libcamera device not found or could not be opened: " + sourceId);
+        }
+        camera = CameraDeviceManager::instance().getLibCamera(sourceId);
+    }
+
+    if (!camera) {
+        return ExecutionResult::fail("libcamera device not found or not open: " + sourceId);
+    }
+
+    const auto& controls = camera->controls();
+    
+    std::cout << "\n=== Available Controls for libcamera [" << sourceId << "] ===" << std::endl;
+    std::cout << "Found " << controls.size() << " control(s):" << std::endl;
+    
+    for (const auto& [id, info] : controls) {
+        std::cout << id->name()
+                  << " type=" << id->type()
+                  << " min="  << info.min().toString()
+                  << " max="  << info.max().toString()
+                  << " def="  << info.def().toString()
+                  << std::endl;
+    }
+    
+    std::cout << "=========================================================\n" << std::endl;
     
     return ExecutionResult::ok(ctx.currentMat);
 }
