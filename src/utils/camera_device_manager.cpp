@@ -882,7 +882,12 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
             int totalHeight = height * 3 / 2;
             frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
         }
-        else if (fmt == libcamera::formats::RGB888 || fmt == libcamera::formats::BGR888) {
+        else if (fmt == libcamera::formats::RGB888) {
+            cv::Mat rgb(height, width, CV_8UC3, data, stride);
+            cv::cvtColor(rgb, frameMat, cv::COLOR_RGB2BGR);
+            needsUnpacking = true; // Avoid cloning again since cvtColor created a new mat
+        }
+        else if (fmt == libcamera::formats::BGR888) {
             frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
         }
         else if (fmt == libcamera::formats::MJPEG) {

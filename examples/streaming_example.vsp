@@ -56,6 +56,7 @@ pipeline main
     
     fps(true, 20,  20)
 
+    cvt_color("bgr2rgb")
     
     # Stream frames over HTTP on port 8080
     # Binds to all interfaces (0.0.0.0) for LAN access
