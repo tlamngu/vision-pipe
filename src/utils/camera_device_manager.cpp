@@ -327,7 +327,12 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             case CameraBackend::OPENCV_DSHOW: cvBackend = cv::CAP_DSHOW; break;
             case CameraBackend::OPENCV_V4L2: cvBackend = cv::CAP_V4L2; break;
             case CameraBackend::OPENCV_FFMPEG: cvBackend = cv::CAP_FFMPEG; break;
-            case CameraBackend::OPENCV_GSTREAMER: cvBackend = cv::CAP_GSTREAMER; break;
+            case CameraBackend::OPENCV_GSTREAMER: 
+                cvBackend = cv::CAP_GSTREAMER; 
+                if (!cv::videoio_registry::hasBackend(cv::CAP_GSTREAMER)) {
+                    SystemLogger::warning(LOG_COMPONENT, "GStreamer backend requested but not supported by this OpenCV build.");
+                }
+                break;
             default: cvBackend = cv::CAP_ANY; break;
         }
         

@@ -80,7 +80,11 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
     // Acquire frame via CameraDeviceManager
     cv::Mat frame;
     if (!CameraDeviceManager::instance().acquireFrame(sourceId, backend, frame, format)) {
-        return ExecutionResult::fail("Failed to acquire frame from: " + sourceId);
+        std::string failMsg = "Failed to acquire frame from: " + sourceId;
+        if (backend == CameraBackend::OPENCV_GSTREAMER) {
+            failMsg += "\n  Hint: If using a GStreamer pipeline string, ensure it ends with ' ! videoconvert ! video/x-raw,format=BGR ! appsink'.";
+        }
+        return ExecutionResult::fail(failMsg);
     }
     
     return ExecutionResult::ok(frame);

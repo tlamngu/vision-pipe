@@ -139,9 +139,11 @@ Environment Variables:
 }
 
 void printVersion() {
-    std::cout << "VisionPipe v1.0.0" << std::endl;
+    std::cout << "VisionPipe Standard Edition " << VISIONPIPE_VERSION << std::endl;
     std::cout << "Build: " << __DATE__ << " " << __TIME__ << std::endl;
+    std::cout << "OpenCV: " << CV_VERSION << std::endl;
     std::cout << std::endl;
+    
     std::cout << "Core Features:" << std::endl;
     std::cout << "  + OpenCV image processing" << std::endl;
     std::cout << "  + Multi-threaded pipeline execution" << std::endl;
@@ -161,6 +163,25 @@ void printVersion() {
 #endif
 #ifdef LIBCAMERA_BACKEND
     std::cout << "  + LibCamera camera support" << std::endl;
+#endif
+
+    std::cout << "\nBackend Capabilities:" << std::endl;
+    
+    // Check GStreamer support in OpenCV
+    bool hasGStreamer = cv::videoio_registry::hasBackend(cv::CAP_GSTREAMER);
+    std::cout << "  - GStreamer: " << (hasGStreamer ? "[YES]" : "[NO]") << std::endl;
+    
+    // Check V4L2 support
+    bool hasV4L2 = cv::videoio_registry::hasBackend(cv::CAP_V4L2);
+    std::cout << "  - V4L2:      " << (hasV4L2 ? "[YES]" : "[NO]") << std::endl;
+    
+    // Check FFMPEG support
+    bool hasFFMPEG = cv::videoio_registry::hasBackend(cv::CAP_FFMPEG);
+    std::cout << "  - FFMPEG:    " << (hasFFMPEG ? "[YES]" : "[NO]") << std::endl;
+
+#ifdef _WIN32
+    bool hasDShow = cv::videoio_registry::hasBackend(cv::CAP_DSHOW);
+    std::cout << "  - MSMF/DShow: " << (hasDShow ? "[YES]" : "[NO]") << std::endl;
 #endif
 }
 
