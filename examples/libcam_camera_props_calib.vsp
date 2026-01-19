@@ -88,12 +88,9 @@ pipeline apply_tuning
     sh_val = sh_raw / 10.0
     libcam_prop(0, "Sharpness", sh_val)
     libcam_prop(0, "NoiseReductionMode", nr_mode)
-end
 
-pipeline ImageDisplay
-    # Uses globally cached frame
     use(global "display_frame")
-    
+
     # Render variables manually
     # Header
     put_text("--- Hardware Tuning Status ---", 10, 25, "simplex", 0.6, "cyan", 2)
@@ -123,11 +120,12 @@ pipeline ImageDisplay
     
     # Display the final frame
     imshow("Live Feed")
+
 end
 
 pipeline main
     # 1. Capture Raw Frame
-    video_cap(0, "libcamera", "SRGGB8")
+    video_cap(0, "libcamera", "SRGGB8") -> global "display_frame"
     
     # 2. Update Hardware Controls
     exec_seq apply_tuning
@@ -136,13 +134,7 @@ pipeline main
     cvt_color("bayerrg2bgr")
     fps(true, 20, 20)
     
-    # Cache for separate display pipeline
-    global_cache("display_frame")
-    
-    # 4. Invoke Display Pipeline
-    exec_seq ImageDisplay
-    
-    # 5. Global Exit Handler
+    # 4. Global Exit Handler
     key = wait_key(1)
     if key == 113 # 'q'
         break
