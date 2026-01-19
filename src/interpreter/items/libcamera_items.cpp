@@ -184,11 +184,23 @@ ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>&
     std::cout << "=========================================================" << std::endl;
 
     const auto& properties = camera->properties();
+    const auto& propertyIds = libcamera::properties::controls;
+    
     std::cout << "\n=== Camera Properties for libcamera [" << sourceId << "] ===" << std::endl;
     for (const auto& it : properties) {
         unsigned int id = it.first;
         const libcamera::ControlValue &value = it.second;
-        std::cout << "ID: " << std::left << std::setw(5) << id 
+        
+        // Try to find the name from the global properties map
+        std::string name = "Unknown (" + std::to_string(id) + ")";
+        for (const auto& [propId, propPtr] : propertyIds) {
+            if (propPtr->id() == id) {
+                name = propPtr->name();
+                break;
+            }
+        }
+        
+        std::cout << std::left << std::setw(35) << name 
                   << " = " << value.toString() << std::endl;
     }
     
