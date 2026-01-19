@@ -135,7 +135,8 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
         it->second.allocator.reset();
         it->second.config.reset();
         it->second.libcameraDevice->release();
-
+        }
+#endif
         _sessions.erase(it);
         SystemLogger::info(LOG_COMPONENT, "Released camera: " + sourceId);
     }
