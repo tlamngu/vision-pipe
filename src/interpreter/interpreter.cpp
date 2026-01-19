@@ -616,6 +616,17 @@ RuntimeValue Interpreter::evalFunctionCall(FunctionCallExpr* expr) {
 }
 
 RuntimeValue Interpreter::evalBinary(BinaryExpr* expr) {
+    // Special handling for assignment to avoid evaluating left side as r-value
+    if (expr->op == TokenType::OP_ASSIGN) {
+        RuntimeValue right = evalExpression(expr->right.get());
+        if (auto* ident = dynamic_cast<IdentifierExpr*>(expr->left.get())) {
+            setLocalVariable(ident->name, right);
+            return right;
+        }
+        reportError("Left side of assignment must be an identifier", expr->location);
+        return RuntimeValue();
+    }
+
     RuntimeValue left = evalExpression(expr->left.get());
     RuntimeValue right = evalExpression(expr->right.get());
     
@@ -712,14 +723,6 @@ RuntimeValue Interpreter::evalBinary(BinaryExpr* expr) {
             
         case TokenType::OP_OR:
             return RuntimeValue(left.asBool() || right.asBool());
-            
-        // Assignment
-        case TokenType::OP_ASSIGN:
-            if (auto* ident = dynamic_cast<IdentifierExpr*>(expr->left.get())) {
-                setLocalVariable(ident->name, right);
-                return right;
-            }
-            break;
             
         default:
             break;

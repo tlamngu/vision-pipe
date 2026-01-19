@@ -40,22 +40,22 @@ pipeline setup
 end
 
 pipeline apply_tuning_and_display
-    # --- Read Current GUI State ---
-    trackbar_value("[EXP] AE Enable", "Controls", "ae_en")
-    trackbar_value("[EXP] Time (ms)", "Controls", "exp_ms")
-    trackbar_value("[EXP] Gain (x10)", "Controls", "gain_raw")
-    trackbar_value("[EXP] Comp (x10)", "Controls", "comp_raw")
-    trackbar_value("[EXP] Metering", "Controls", "meter_mode")
-    trackbar_value("[EXP] Mode", "Controls", "exp_mode")
+    # --- Read Current GUI State using direct assignment ---
+    ae_en = trackbar_value("[EXP] AE Enable", "Controls")
+    exp_ms = trackbar_value("[EXP] Time (ms)", "Controls")
+    gain_raw = trackbar_value("[EXP] Gain (x10)", "Controls")
+    comp_raw = trackbar_value("[EXP] Comp (x10)", "Controls")
+    meter_mode = trackbar_value("[EXP] Metering", "Controls")
+    exp_mode = trackbar_value("[EXP] Mode", "Controls")
     
-    trackbar_value("[AWB] Enable", "Controls", "awb_en")
-    trackbar_value("[AWB] Preset", "Controls", "awb_preset")
+    awb_en = trackbar_value("[AWB] Enable", "Controls")
+    awb_preset = trackbar_value("[AWB] Preset", "Controls")
     
-    trackbar_value("[IMG] Brightness", "Controls", "br_raw")
-    trackbar_value("[IMG] Contrast", "Controls", "cn_raw")
-    trackbar_value("[IMG] Saturation", "Controls", "st_raw")
-    trackbar_value("[IMG] Sharpness", "Controls", "sh_raw")
-    trackbar_value("[IMG] Noise Red", "Controls", "nr_mode")
+    br_raw = trackbar_value("[IMG] Brightness", "Controls")
+    cn_raw = trackbar_value("[IMG] Contrast", "Controls")
+    st_raw = trackbar_value("[IMG] Saturation", "Controls")
+    sh_raw = trackbar_value("[IMG] Sharpness", "Controls")
+    nr_mode = trackbar_value("[IMG] Noise Red", "Controls")
     
     # --- 1. Apply Exposure Logic ---
     libcam_prop(0, "AeEnable", ae_en)
@@ -92,6 +92,7 @@ pipeline apply_tuning_and_display
     libcam_prop(0, "Sharpness", sh_val)
     libcam_prop(0, "NoiseReductionMode", nr_mode)
 
+    # --- 4. Process Display Frame ---
     use(global "display_frame")
     cvt_color("bayerrg2bgr")
     fps(true, 20, 20)
@@ -125,7 +126,6 @@ pipeline apply_tuning_and_display
     
     # Display the final frame
     imshow("Live Feed")
-
 end
 
 pipeline main
@@ -135,7 +135,7 @@ pipeline main
     # 2. Update Hardware Controls
     exec_seq apply_tuning_and_display
     
-    # 4. Global Exit Handler
+    # 3. Global Exit Handler
     key = wait_key(1)
     if key == 113 # 'q'
         break
