@@ -7,6 +7,9 @@ pipeline setup
     print("==============================================")
     print("VisionPipe IP Stream Server Starting...")
     print("==============================================")
+
+    libcam_list()
+
     libcam_setup(0, 1280, 720, "SRGGB8")
     libcam_setup(1, 1280, 720, "SRGGB8")
 end
