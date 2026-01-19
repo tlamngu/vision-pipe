@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iostream>
 #include <sys/mman.h>
+#include <thread>
 
 namespace visionpipe {
 
@@ -165,6 +166,15 @@ void CameraDeviceManager::releaseAll() {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         if (pair.second.libcameraDevice) {
             pair.second.libcameraDevice->stop();
+            
+            // Clean up mapped buffers
+            for (auto const& [buffer, mb] : pair.second.mappedBuffers) {
+                if (mb.data != MAP_FAILED) {
+                    munmap(mb.data, mb.length);
+                }
+            }
+            pair.second.mappedBuffers.clear();
+
             pair.second.requests.clear();
             pair.second.allocator.reset();
             pair.second.config.reset();
@@ -578,7 +588,9 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         for (auto const& [stream, buffer] : request->buffers()) {
             if (session.mappedBuffers.count(buffer)) continue;
             
-            const libcamera::FrameBuffer::Plane& plane = buffer->planes()[0];
+            const auto& planes = buffer->planes();
+            if (planes.empty()) continue;
+            const libcamera::FrameBuffer::Plane& plane = planes[0];
             void* data = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
             if (data != MAP_FAILED) {
                 session.mappedBuffers[buffer] = {data, plane.length};
@@ -741,7 +753,9 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
             frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
         }
         else if (fmt == libcamera::formats::MJPEG) {
-            frameMat = cv::Mat(1, plane.length, CV_8UC1, data, plane.length);
+            // For MJPEG, we might need the actual bytesused from metadata
+            size_t bytesUsed = buffer->metadata().planes()[0].bytesused;
+            frameMat = cv::Mat(1, bytesUsed, CV_8UC1, data, bytesUsed);
         }
         else if (fmt == libcamera::formats::SBGGR8 ||
                     fmt == libcamera::formats::SGBRG8 ||
