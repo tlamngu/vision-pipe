@@ -37,7 +37,7 @@ pipeline setup
     
     libcam_setup(0, 1280, 720, "BGR888")
  
-    libcam_prop("0", "Contrast", 2)
+    libcam_prop("0", "Contrast", 1.0)
 
 end
 
