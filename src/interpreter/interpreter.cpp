@@ -426,36 +426,29 @@ void Interpreter::execIf(IfStmt* stmt) {
     RuntimeValue condition = evalExpression(stmt->condition.get());
     
     if (condition.asBool()) {
-        pushScope();
         for (const auto& s : stmt->thenBranch) {
             executeStatement(s);
             if (_context.shouldBreak || _context.shouldContinue || _context.shouldReturn) {
                 break;
             }
         }
-        popScope();
     } else if (!stmt->elseBranch.empty()) {
-        pushScope();
         for (const auto& s : stmt->elseBranch) {
             executeStatement(s);
             if (_context.shouldBreak || _context.shouldContinue || _context.shouldReturn) {
                 break;
             }
         }
-        popScope();
     }
 }
 
 void Interpreter::execWhile(WhileStmt* stmt) {
-    pushScope();
-    
     while (evalExpression(stmt->condition.get()).asBool()) {
         for (const auto& s : stmt->body) {
             executeStatement(s);
             
             if (_context.shouldBreak) {
                 _context.shouldBreak = false;
-                popScope();
                 return;
             }
             
@@ -465,13 +458,10 @@ void Interpreter::execWhile(WhileStmt* stmt) {
             }
             
             if (_context.shouldReturn) {
-                popScope();
                 return;
             }
         }
     }
-    
-    popScope();
 }
 
 void Interpreter::execReturn(ReturnStmt* stmt) {
@@ -550,8 +540,9 @@ RuntimeValue Interpreter::evalIdentifier(IdentifierExpr* expr) {
         return it->second;
     }
     
-    // Return the identifier name as a string (for parameter passing)
-    return RuntimeValue(expr->name);
+    // NO FALLBACK: Report error if variable is not found
+    reportError("Variable not found: " + expr->name, expr->location);
+    return RuntimeValue();
 }
 
 RuntimeValue Interpreter::evalFunctionCall(FunctionCallExpr* expr) {

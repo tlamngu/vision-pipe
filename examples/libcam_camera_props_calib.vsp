@@ -65,6 +65,9 @@ pipeline apply_tuning_and_display
         libcam_prop(0, "ExposureTime", exp_us)
         gain_val = gain_raw / 10.0
         libcam_prop(0, "AnalogueGain", gain_val)
+    else
+        exp_us = "Auto"
+        gain_val = "Auto"
     end
     
     comp_val = (comp_raw - 20) / 10.0
