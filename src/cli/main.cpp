@@ -129,7 +129,7 @@ Examples:
   visionpipe validate mypipeline.vsp
   visionpipe docs --output ./docs --format html
   visionpipe serve --port 3000
-  visionpipe execute "libcam_list_controls()"
+  visionpipe execute 'libcam_list_controls()'
 
 Environment Variables:
   VISIONPIPE_LOG_LEVEL     Set log level (debug, info, warn, error)
