@@ -14,6 +14,7 @@ void registerLibCameraItems(ItemRegistry& registry) {
     registry.add<LibCamPropItem>();
     registry.add<LibCamListItem>();
     registry.add<LibCamListControlsItem>();
+    registry.add<LibCamGetBayerItem>();
 }
 
 // ============================================================================
@@ -32,7 +33,7 @@ LibCamSetupItem::LibCamSetupItem() {
         ParamDef::optional("buffer_count", BaseType::INT, "Number of buffers", 4),
         ParamDef::optional("stream_role", BaseType::STRING, "Stream role: VideoRecording, StillCapture, Viewfinder", "VideoRecording")
     };
-    _example = "libcam_setup(0, 1920, 1080)";
+    _example = "libcam_setup(0, 1920, 1080, \"SRGGB10\", 4, \"Viewfinder\")";
     _returnType = "mat";
     _tags = {"libcamera", "camera", "setup", "configuration"};
 }
@@ -243,6 +244,34 @@ ExecutionResult LibCamListItem::execute(const std::vector<RuntimeValue>&, Execut
     std::cout << "===================================\n" << std::endl;
     
     return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// LibCamGetBayerItem
+// ============================================================================
+
+LibCamGetBayerItem::LibCamGetBayerItem() {
+    _functionName = "libcam_get_bayer";
+    _description = "Get the Bayer pattern string for a camera";
+    _category = "video_io";
+    _params = {
+        ParamDef::required("source", BaseType::ANY, "Camera source identifier")
+    };
+    _example = "libcam_get_bayer(0)";
+    _returnType = "string";
+    _tags = {"libcamera", "bayer", "format"};
+}
+
+ExecutionResult LibCamGetBayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext&) {
+    std::string sourceId;
+    if (args[0].isNumeric()) {
+        sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
+    } else {
+        sourceId = args[0].asString();
+    }
+    
+    std::string pattern = CameraDeviceManager::instance().getBayerPattern(sourceId);
+    return ExecutionResult::ok(pattern);
 }
 
 } // namespace visionpipe

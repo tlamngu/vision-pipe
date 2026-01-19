@@ -34,7 +34,7 @@ struct LibCameraConfig {
     int height = 480;
     std::string pixelFormat = "BGR888"; 
     int bufferCount = 4;
-    std::string streamRole = "VideoRecording";
+    std::string streamRole = "VideoRecording"; // Default to VideoRecording
 };
 
 /**
@@ -131,7 +131,14 @@ public:
      * @brief Get libcamera Camera handle for a source.
      */
     std::shared_ptr<libcamera::Camera> getLibCamera(const std::string& sourceId);
+
+    /**
+     * @brief Get the Bayer pattern string for a libcamera source.
+     * Returns empty string if not a Bayer format or source not found.
+     */
+    std::string getBayerPattern(const std::string& sourceId);
 #endif
+
 
 private:
     CameraDeviceManager();
@@ -161,6 +168,10 @@ private:
             size_t length;
         };
         std::map<libcamera::FrameBuffer*, MappedBuffer> mappedBuffers;
+        
+        // Diagnostics
+        int framesCaptured = 0;
+        bool allZeros = false;
 #endif
     };
 

@@ -61,6 +61,13 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+class LibCamGetBayerItem : public InterpreterItem {
+public:
+    LibCamGetBayerItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+
 } // namespace visionpipe
 
 #endif // VISIONPIPE_LIBCAMERA_ENABLED

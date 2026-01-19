@@ -396,6 +396,21 @@ std::shared_ptr<libcamera::Camera> CameraDeviceManager::getLibCamera(const std::
     return nullptr;
 }
 
+std::string CameraDeviceManager::getBayerPattern(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end() || !it->second.config) return "";
+    
+    libcamera::PixelFormat fmt = it->second.config->at(0).pixelFormat;
+    
+    if (fmt == libcamera::formats::SBGGR8 || fmt == libcamera::formats::SBGGR10_CSI2P || fmt == libcamera::formats::SBGGR12_CSI2P || fmt == libcamera::formats::SBGGR16) return "BGGR";
+    if (fmt == libcamera::formats::SGBRG8 || fmt == libcamera::formats::SGBRG10_CSI2P || fmt == libcamera::formats::SGBRG12_CSI2P || fmt == libcamera::formats::SGBRG16) return "GBRG";
+    if (fmt == libcamera::formats::SGRBG8 || fmt == libcamera::formats::SGRBG10_CSI2P || fmt == libcamera::formats::SGRBG12_CSI2P || fmt == libcamera::formats::SGRBG16) return "GRBG";
+    if (fmt == libcamera::formats::SRGGB8 || fmt == libcamera::formats::SRGGB10_CSI2P || fmt == libcamera::formats::SRGGB12_CSI2P || fmt == libcamera::formats::SRGGB16) return "RGGB";
+    
+    return "";
+}
+
 bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSession& session) {
     auto* manager = getLibCameraManager();
     if (!manager) {
@@ -438,6 +453,8 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         role = libcamera::StreamRole::StillCapture;
     else if (session.targetConfig.streamRole == "Viewfinder") 
         role = libcamera::StreamRole::Viewfinder;
+    else if (session.targetConfig.streamRole == "Raw")
+        role = libcamera::StreamRole::Raw;
 
     if (!session.config) {
         session.config = camera->generateConfiguration({role});
@@ -793,6 +810,20 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
             session.latestFrame = frameMat.clone();
         }
         
+        // Diagnostic: check for blank frames in the first few requests
+        if (session.framesCaptured < 5 && !session.latestFrame.empty()) {
+            // Check a few points or sum 
+            double minVal, maxVal;
+            cv::minMaxLoc(session.latestFrame, &minVal, &maxVal);
+            if (maxVal == 0) {
+                session.allZeros = true;
+                SystemLogger::warning(LOG_COMPONENT, "Detected zero-filled frame from source: " + sourceId);
+            } else {
+                session.allZeros = false;
+            }
+        }
+        
+        session.framesCaptured++;
         session.frameReady = true;
     }
     
