@@ -13,7 +13,6 @@ pipeline setup
     libcam_list()
     
     # 1. Hardware Initialization
-    # Change format/resolution if needed (e.g., "BGR888", "YUYV")
     libcam_setup(0, 1280, 720, "SRGGB8")
     
     # 2. Window Management
@@ -21,45 +20,22 @@ pipeline setup
     named_window("Live Feed", "autosize")
     
     # --- [EXP] EXPOSURE & GAIN ---
-    # AeEnable: 0=Manual, 1=Auto
     create_trackbar("[EXP] AE Enable", "Controls", 1, 1)
-    
-    # ExposureTime: 100us to 66000us (66ms) - scaled in main
     create_trackbar("[EXP] Time (ms)", "Controls", 66, 33)
-    
-    # AnalogueGain: 1.0 to 16.0 - scaled in main
     create_trackbar("[EXP] Gain (x10)", "Controls", 160, 10)
-    
-    # ExposureValue: -2.0 to 2.0 (offset)
     create_trackbar("[EXP] Comp (x10)", "Controls", 40, 20)
-    
-    # Metering: 0=Centre, 1=Spot, 2=Matrix, 3=Custom
     create_trackbar("[EXP] Metering", "Controls", 3, 0)
-    
-    # ExposureMode: 0=Normal, 1=Short, 2=Long, 3=Custom
     create_trackbar("[EXP] Mode", "Controls", 3, 0)
 
     # --- [AWB] COLOR BALANCE ---
-    # AwbEnable: 0=Manual, 1=Auto
     create_trackbar("[AWB] Enable", "Controls", 1, 1)
-    
-    # AwbMode: 0=Auto, 1=Incand, 2=Tungst, 3=Fluor, 4=Daylight, 5=Cloudy
     create_trackbar("[AWB] Preset", "Controls", 5, 0)
 
     # --- [IMG] IMAGE QUALITY ---
-    # Brightness: -1.0 to 1.0 (centered at 100)
     create_trackbar("[IMG] Brightness", "Controls", 200, 100)
-    
-    # Contrast: 0.0 to 2.0
     create_trackbar("[IMG] Contrast", "Controls", 200, 100)
-    
-    # Saturation: 0.0 to 2.0
     create_trackbar("[IMG] Saturation", "Controls", 200, 100)
-    
-    # Sharpness: 0.0 to 10.0
     create_trackbar("[IMG] Sharpness", "Controls", 100, 10)
-    
-    # Noise Reduction: 0=Off, 1=Fast, 2=HighQual
     create_trackbar("[IMG] Noise Red", "Controls", 2, 1)
 end
 
@@ -85,19 +61,14 @@ pipeline apply_tuning
     libcam_prop(0, "AeEnable", ae_en)
     
     if ae_en == 0
-        # Manual Exposure: ms to microseconds
         exp_us = exp_ms * 1000
         libcam_prop(0, "ExposureTime", exp_us)
-        
-        # Manual Gain: x10 to float
         gain_val = gain_raw / 10.0
         libcam_prop(0, "AnalogueGain", gain_val)
     end
     
-    # Exposure Compensation (0-40 -> -2.0 to 2.0)
     comp_val = (comp_raw - 20) / 10.0
     libcam_prop(0, "ExposureValue", comp_val)
-    
     libcam_prop(0, "AeMeteringMode", meter_mode)
     libcam_prop(0, "AeExposureMode", exp_mode)
     
@@ -110,35 +81,66 @@ pipeline apply_tuning
     # --- 3. Apply Image Quality ---
     br_val = (br_raw - 100) / 100.0
     libcam_prop(0, "Brightness", br_val)
-    
     cn_val = cn_raw / 100.0
     libcam_prop(0, "Contrast", cn_val)
-    
     st_val = st_raw / 100.0
     libcam_prop(0, "Saturation", st_val)
-    
     sh_val = sh_raw / 10.0
     libcam_prop(0, "Sharpness", sh_val)
-    
     libcam_prop(0, "NoiseReductionMode", nr_mode)
+end
+
+pipeline ImageDisplay
+    # Uses globally cached frame
+    use(global "display_frame")
+    
+    # Render variables manually
+    # Header
+    put_text("--- Hardware Tuning Status ---", 10, 25, "simplex", 0.6, "cyan", 2)
+    
+    # Exposure Block
+    text_ae = "AE: " + ae_en
+    put_text(text_ae, 10, 50, "simplex", 0.5, "white", 1)
+    
+    text_exp = "Exp: " + exp_us + " us"
+    put_text(text_exp, 10, 70, "simplex", 0.5, "white", 1)
+    
+    text_gain = "Gain: " + gain_val + " x"
+    put_text(text_gain, 10, 90, "simplex", 0.5, "white", 1)
+    
+    text_comp = "Comp: " + comp_val + " EV"
+    put_text(text_comp, 10, 110, "simplex", 0.5, "white", 1)
+    
+    # Image Block
+    text_br = "Bright: " + br_val
+    put_text(text_br, 10, 140, "simplex", 0.5, "green", 1)
+    
+    text_cn = "Contr: " + cn_val
+    put_text(text_cn, 10, 160, "simplex", 0.5, "green", 1)
+    
+    text_st = "Satur: " + st_val
+    put_text(text_st, 10, 180, "simplex", 0.5, "green", 1)
+    
+    # Display the final frame
+    imshow("Live Feed")
 end
 
 pipeline main
     # 1. Capture Raw Frame
-    img = video_cap(0, "libcamera", "SRGGB8")
+    video_cap(0, "libcamera", "SRGGB8")
     
     # 2. Update Hardware Controls
     exec_seq apply_tuning
     
     # 3. Post-Process for Visualization
-    # Convert Bayer to BGR so we can see the results
     cvt_color("bayerrg2bgr")
-    
-    # 4. Display & Metrics
     fps(true, 20, 20)
     
-    # Use overlay to show critical manual settings
-    imshow_with_vars("Live Feed", "ae_en,awb_en,exp_us,gain_val,comp_val")
+    # Cache for separate display pipeline
+    global_cache("display_frame")
+    
+    # 4. Invoke Display Pipeline
+    exec_seq ImageDisplay
     
     # 5. Global Exit Handler
     key = wait_key(1)
