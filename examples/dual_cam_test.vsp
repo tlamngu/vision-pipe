@@ -10,8 +10,8 @@ pipeline setup
 
     libcam_list()
 
-    libcam_setup(0, 1280, 720, "SRGGB8")
-    libcam_setup(1, 1280, 720, "SRGGB8")
+    libcam_setup(0, 1280, 720, "SRGGB8", 4, "Viewfinder")
+    libcam_setup(1, 1280, 720, "SRGGB8", 4, "Viewfinder")
 end
 
 pipeline cap_l
