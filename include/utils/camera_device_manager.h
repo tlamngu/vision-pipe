@@ -148,6 +148,11 @@ public:
      * @brief List supported pixel formats and resolutions for a libcamera source.
      */
     void listLibCameraFormats(const std::string& sourceId);
+
+    /**
+     * @brief Print detailed debug information about a libcamera session configuration.
+     */
+    void debugLibCameraConfig(const std::string& sourceId);
 #endif
 
 

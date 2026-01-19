@@ -16,7 +16,9 @@ void registerLibCameraItems(ItemRegistry& registry) {
     registry.add<LibCamListControlsItem>();
     registry.add<LibCamGetBayerItem>();
     registry.add<LibCamListFormatsItem>();
+    registry.add<LibCamDebugConfigItem>();
 }
+
 
 
 // ============================================================================
@@ -306,6 +308,34 @@ ExecutionResult LibCamListFormatsItem::execute(const std::vector<RuntimeValue>& 
     }
     
     CameraDeviceManager::instance().listLibCameraFormats(sourceId);
+    return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// LibCamDebugConfigItem
+// ============================================================================
+
+LibCamDebugConfigItem::LibCamDebugConfigItem() {
+    _functionName = "libcam_debug_config";
+    _description = "Print detailed debug information about a libcamera session configuration";
+    _category = "video_io";
+    _params = {
+        ParamDef::required("source", BaseType::ANY, "Camera source identifier")
+    };
+    _example = "libcam_debug_config(0)";
+    _returnType = "mat";
+    _tags = {"libcamera", "debug", "configuration", "diagnostics"};
+}
+
+ExecutionResult LibCamDebugConfigItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    std::string sourceId;
+    if (args[0].isNumeric()) {
+        sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
+    } else {
+        sourceId = args[0].asString();
+    }
+    
+    CameraDeviceManager::instance().debugLibCameraConfig(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
 

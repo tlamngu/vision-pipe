@@ -491,6 +491,36 @@ void CameraDeviceManager::listLibCameraFormats(const std::string& sourceId) {
     if (needsRelease) camera->release();
 }
 
+void CameraDeviceManager::debugLibCameraConfig(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end()) {
+        SystemLogger::error(LOG_COMPONENT, "debugLibCameraConfig: Session not found: " + sourceId);
+        return;
+    }
+    
+    CameraSession& session = it->second;
+    if (!session.libcameraDevice || !session.config) {
+        SystemLogger::error(LOG_COMPONENT, "debugLibCameraConfig: Camera not configured: " + sourceId);
+        return;
+    }
+    
+    std::cout << "\n=== Debug Configuration for Camera [" << sourceId << "] ===" << std::endl;
+    std::cout << "Camera ID: " << session.libcameraDevice->id() << std::endl;
+    std::cout << "Started: " << (session.libcameraStarted ? "Yes" : "No") << std::endl;
+    
+    if (session.config->size() > 0) {
+        const libcamera::StreamConfiguration& cfg = session.config->at(0);
+        std::cout << "Stream 0:" << std::endl;
+        std::cout << "  Pixel Format: " << cfg.pixelFormat.toString() << std::endl;
+        std::cout << "  Size: " << cfg.size.toString() << std::endl;
+        std::cout << "  Stride: " << cfg.stride << std::endl;
+        std::cout << "  Frame Size: " << cfg.frameSize << std::endl;
+        std::cout << "  Buffer Count: " << cfg.bufferCount << std::endl;
+    }
+    std::cout << "===============================================\n" << std::endl;
+}
+
 bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSession& session, bool startImmediate) {
     auto* manager = getLibCameraManager();
     if (!manager) {

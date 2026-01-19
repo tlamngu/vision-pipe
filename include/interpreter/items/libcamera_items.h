@@ -73,6 +73,13 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+class LibCamDebugConfigItem : public InterpreterItem {
+public:
+    LibCamDebugConfigItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+
 
 
 } // namespace visionpipe
