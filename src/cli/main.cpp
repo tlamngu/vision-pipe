@@ -20,6 +20,7 @@
 #include <csignal>
 #include <iomanip>
 #include <chrono>
+#include <opencv2/videoio/registry.hpp>
 
 #include "interpreter/runtime.h"
 #include "interpreter/lexer.h"

@@ -1,5 +1,6 @@
 #include "utils/camera_device_manager.h"
 #include "utils/Logger.h"
+#include <opencv2/videoio/registry.hpp>
 #include <algorithm>
 #include <iostream>
 #include <sys/mman.h>
