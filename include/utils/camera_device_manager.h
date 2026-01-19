@@ -140,6 +140,7 @@ private:
     struct CameraSession {
         CameraSession() 
             : backend(CameraBackend::OPENCV_AUTO),
+              sessionMutex(std::make_unique<std::mutex>()),
               frameCond(std::make_unique<std::condition_variable>()) {}
 
         CameraBackend backend;
@@ -151,6 +152,7 @@ private:
         std::vector<std::unique_ptr<libcamera::Request>> requests;
         cv::Mat latestFrame;
         bool frameReady = false;
+        std::unique_ptr<std::mutex> sessionMutex;
         std::unique_ptr<std::condition_variable> frameCond;
         LibCameraConfig targetConfig;
         std::map<std::string, float> activeControls;
@@ -175,6 +177,7 @@ private:
     
     std::unique_ptr<libcamera::CameraManager> _libcameraManager;
     bool _libcameraManagerStarted = false;
+    std::map<libcamera::Request*, std::string> _requestToSource;
 #endif
 
     mutable std::mutex _mutex;

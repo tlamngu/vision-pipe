@@ -54,24 +54,19 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
     std::string streamRole = args.size() > 5 ? args[5].asString() : "VideoRecording";
     
     // Configure camera before acquiring
-    LibCameraConfig config;
-    config.width = width;
-    config.height = height;
-    config.pixelFormat = pixelFormat;
-    config.bufferCount = bufferCount;
-    config.streamRole = streamRole;
-    
-    CameraDeviceManager::instance().setLibCameraConfig(sourceId, config);
-    
-    cv::Mat frame;
-    if (!CameraDeviceManager::instance().acquireFrame(sourceId, CameraBackend::LIBCAMERA, frame)) {
-        return ExecutionResult::fail("Failed to setup libcamera device: " + sourceId);
-    }
+    LibCameraConfig lcConfig;
+    lcConfig.width = width;
+    lcConfig.height = height;
+    lcConfig.pixelFormat = pixelFormat;
+    lcConfig.bufferCount = bufferCount;
+    lcConfig.streamRole = streamRole;
+    // Set configuration
+    CameraDeviceManager::instance().setLibCameraConfig(sourceId, lcConfig);
     
     SystemLogger::info("LibCameraItems", "libcam_setup: Configured camera " + sourceId + " with resolution " + 
                  std::to_string(width) + "x" + std::to_string(height));
     
-    return ExecutionResult::ok(frame);
+    return ExecutionResult::ok();
 }
 
 // ============================================================================

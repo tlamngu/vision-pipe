@@ -90,7 +90,10 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
     // Read frame based on backend
     if (session.backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
-        return readLibCameraFrame(session, frame, lock);
+        // Switch to session-specific lock for waiting
+        std::unique_lock<std::mutex> sessionLock(*session.sessionMutex);
+        lock.unlock(); // Release global lock
+        return readLibCameraFrame(session, frame, sessionLock);
 #else
         SystemLogger::error(LOG_COMPONENT, "libcamera backend requested but not compiled in");
         return false;
@@ -119,12 +122,20 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         if (it->second.libcameraDevice) {
             it->second.libcameraDevice->stop();
-            it->second.requests.clear();
-            it->second.allocator.reset();
-            it->second.config.reset();
-            it->second.libcameraDevice->release();
+        // Clean up request mapping
+        for (auto itReq = _requestToSource.begin(); itReq != _requestToSource.end(); ) {
+            if (itReq->second == sourceId) {
+                itReq = _requestToSource.erase(itReq);
+            } else {
+                ++itReq;
+            }
         }
-#endif
+
+        it->second.requests.clear();
+        it->second.allocator.reset();
+        it->second.config.reset();
+        it->second.libcameraDevice->release();
+
         _sessions.erase(it);
         SystemLogger::info(LOG_COMPONENT, "Released camera: " + sourceId);
     }
@@ -147,6 +158,7 @@ void CameraDeviceManager::releaseAll() {
 #endif
     }
     _sessions.clear();
+    _requestToSource.clear();
     SystemLogger::info(LOG_COMPONENT, "Released all cameras");
 }
 
@@ -338,6 +350,7 @@ bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
 
 libcamera::CameraManager* CameraDeviceManager::getLibCameraManager() {
+    std::lock_guard<std::mutex> lock(_mutex);
     if (!_libcameraManagerStarted && _libcameraManager) {
         int ret = _libcameraManager->start();
         if (ret < 0) {
@@ -538,6 +551,9 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         // Apply initial controls to these requests
         applyLibCameraControls(session, request.get());
         
+        // Optimized mapping for callback
+        _requestToSource[request.get()] = sourceId;
+        
         session.requests.push_back(std::move(request));
     }
     
@@ -565,7 +581,7 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
 bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock) {
     // Wait for frame with timeout
     if (session.frameCond->wait_for(lock, std::chrono::milliseconds(500), [&]{ return session.frameReady; })) {
-        frame = session.latestFrame.clone();
+        frame = session.latestFrame; // Mat assignment is fast (ref counting)
         session.frameReady = false;
         return true;
     }
@@ -631,143 +647,133 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
         return;
     }
     
-    // Protect access to _sessions map
-    std::lock_guard<std::mutex> lock(_mutex);
-    
-    // Find the session this request belongs to
-    for (auto& pair : _sessions) {
-        CameraSession& session = pair.second;
-        if (session.backend != CameraBackend::LIBCAMERA) continue;
-        
-        for (auto& req : session.requests) {
-            if (req.get() == request) {
-                // Get the buffer and convert to cv::Mat
-                const libcamera::Request::BufferMap& buffers = request->buffers();
-                for (const auto& bufferPair : buffers) {
-                    libcamera::FrameBuffer* buffer = bufferPair.second;
-                    const auto& planes = buffer->planes();
-                    if (planes.empty()) continue;
-                    
-                    const libcamera::FrameBuffer::Plane& plane = planes[0];
-                    
-                    // Memory map the buffer
-                    void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
-                    if (data == MAP_FAILED) {
-                        SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer");
-                        continue;
-                    }
-                    
-                    libcamera::StreamConfiguration& streamCfg = session.config->at(0);
-                    libcamera::PixelFormat fmt = streamCfg.pixelFormat;
-                    
-                    int width = streamCfg.size.width;
-                    int height = streamCfg.size.height;
-                    size_t stride = streamCfg.stride;
-                    
-                    cv::Mat frameMat;
-                    bool needsUnpacking = false;
-                    
-                    // Determine format and create appropriate cv::Mat
-                    
-                    // --- YUV 4:2:2 Packed (2 bytes per pixel) ---
-                    if (fmt == libcamera::formats::YUYV ||
-                        fmt == libcamera::formats::UYVY ||
-                        fmt == libcamera::formats::YVYU ||
-                        fmt == libcamera::formats::VYUY) {
-                        frameMat = cv::Mat(height, width, CV_8UC2, data, stride);
-                    }
-                    
-                    // --- YUV 4:2:0 Semi-Planar ---
-                    else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
-                        int totalHeight = height * 3 / 2;
-                        frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
-                    }
-                    
-                    // --- YUV 4:2:0 Planar ---
-                    else if (fmt == libcamera::formats::YUV420) {
-                        int totalHeight = height * 3 / 2;
-                        frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
-                    }
-                    
-                    // --- RGB/BGR 8-bit ---
-                    else if (fmt == libcamera::formats::RGB888 || fmt == libcamera::formats::BGR888) {
-                        frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
-                    }
-                    
-                    // --- MJPEG compressed ---
-                    else if (fmt == libcamera::formats::MJPEG) {
-                        frameMat = cv::Mat(1, plane.length, CV_8UC1, data, plane.length);
-                    }
-                    
-                    // --- 8-bit Bayer ---
-                    else if (fmt == libcamera::formats::SBGGR8 ||
-                             fmt == libcamera::formats::SGBRG8 ||
-                             fmt == libcamera::formats::SGRBG8 ||
-                             fmt == libcamera::formats::SRGGB8) {
-                        frameMat = cv::Mat(height, width, CV_8UC1, data, stride);
-                    }
-                    
-                    // --- 10-bit Bayer Packed CSI-2 → Unpack to 16-bit ---
-                    else if (fmt == libcamera::formats::SBGGR10_CSI2P ||
-                             fmt == libcamera::formats::SGBRG10_CSI2P ||
-                             fmt == libcamera::formats::SGRBG10_CSI2P ||
-                             fmt == libcamera::formats::SRGGB10_CSI2P) {
-                        frameMat = unpackRAW10CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
-                        needsUnpacking = true;
-                    }
-                    
-                    // --- 12-bit Bayer Packed CSI-2 → Unpack to 16-bit ---
-                    else if (fmt == libcamera::formats::SBGGR12_CSI2P ||
-                             fmt == libcamera::formats::SGBRG12_CSI2P ||
-                             fmt == libcamera::formats::SGRBG12_CSI2P ||
-                             fmt == libcamera::formats::SRGGB12_CSI2P) {
-                        frameMat = unpackRAW12CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
-                        needsUnpacking = true;
-                    }
-                    
-                    // --- 16-bit Bayer (already unpacked) ---
-                    else if (fmt == libcamera::formats::SBGGR16 ||
-                             fmt == libcamera::formats::SGBRG16 ||
-                             fmt == libcamera::formats::SGRBG16 ||
-                             fmt == libcamera::formats::SRGGB16) {
-                        frameMat = cv::Mat(height, width, CV_16UC1, data, stride);
-                    }
-                    
-                    // --- Unknown format fallback ---
-                    else {
-                        SystemLogger::warning(LOG_COMPONENT, 
-                            "Unknown pixel format: " + fmt.toString() + ", defaulting to CV_8UC3");
-                        frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
-                    }
-                    
-                    // Clone or assign based on whether we unpacked
-                    if (needsUnpacking) {
-                        // Already cloned during unpacking
-                        session.latestFrame = frameMat;
-                    } else {
-                        // Clone to own memory before unmapping
-                        session.latestFrame = frameMat.clone();
-                    }
-                    
-                    session.frameReady = true;
-                    
-                    // Unmap buffer after processing
-                    munmap(data, plane.length);
-                }
-                
-                // Signal waiting threads
-                session.frameCond->notify_all();
-                
-                // Requeue the request for next frame
-                request->reuse(libcamera::Request::ReuseBuffers);
-                
-                // Apply active controls to the reused request
-                applyLibCameraControls(session, request);
-                
-                session.libcameraDevice->queueRequest(request);
-                return;
-            }
+    std::string sourceId;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = _requestToSource.find(request);
+        if (it != _requestToSource.end()) {
+            sourceId = it->second;
         }
+    }
+    
+    if (sourceId.empty()) {
+        SystemLogger::warning(LOG_COMPONENT, "Received complete for unknown request");
+        return;
+    }
+    
+    // Protect session lookup
+    std::unique_lock<std::mutex> mainLock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end()) return;
+    
+    CameraSession& session = it->second;
+    mainLock.unlock(); // Release global lock early
+    
+    // Use session-specific lock for data processing
+    std::lock_guard<std::mutex> sessionLock(*session.sessionMutex);
+    
+    // Get the buffer and convert to cv::Mat
+    const libcamera::Request::BufferMap& buffers = request->buffers();
+    for (const auto& bufferPair : buffers) {
+        libcamera::FrameBuffer* buffer = bufferPair.second;
+        const auto& planes = buffer->planes();
+        if (planes.empty()) continue;
+        
+        const libcamera::FrameBuffer::Plane& plane = planes[0];
+        
+        // Memory map the buffer
+        void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+        if (data == MAP_FAILED) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer");
+            continue;
+        }
+        
+        // Ensure session config still exists
+        if (!session.config) {
+            munmap(data, plane.length);
+            continue;
+        }
+
+        libcamera::StreamConfiguration& streamCfg = session.config->at(0);
+        libcamera::PixelFormat fmt = streamCfg.pixelFormat;
+        
+        int width = streamCfg.size.width;
+        int height = streamCfg.size.height;
+        size_t stride = streamCfg.stride;
+        
+        cv::Mat frameMat;
+        bool needsUnpacking = false;
+        
+        // --- Determine format and process ---
+        
+        if (fmt == libcamera::formats::YUYV ||
+            fmt == libcamera::formats::UYVY ||
+            fmt == libcamera::formats::YVYU ||
+            fmt == libcamera::formats::VYUY) {
+            frameMat = cv::Mat(height, width, CV_8UC2, data, stride);
+        }
+        else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
+            int totalHeight = height * 3 / 2;
+            frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::YUV420) {
+            int totalHeight = height * 3 / 2;
+            frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::RGB888 || fmt == libcamera::formats::BGR888) {
+            frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+        }
+        else if (fmt == libcamera::formats::MJPEG) {
+            frameMat = cv::Mat(1, plane.length, CV_8UC1, data, plane.length);
+        }
+        else if (fmt == libcamera::formats::SBGGR8 ||
+                    fmt == libcamera::formats::SGBRG8 ||
+                    fmt == libcamera::formats::SGRBG8 ||
+                    fmt == libcamera::formats::SRGGB8) {
+            frameMat = cv::Mat(height, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::SBGGR10_CSI2P ||
+                    fmt == libcamera::formats::SGBRG10_CSI2P ||
+                    fmt == libcamera::formats::SGRBG10_CSI2P ||
+                    fmt == libcamera::formats::SRGGB10_CSI2P) {
+            frameMat = unpackRAW10CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+            needsUnpacking = true;
+        }
+        else if (fmt == libcamera::formats::SBGGR12_CSI2P ||
+                    fmt == libcamera::formats::SGBRG12_CSI2P ||
+                    fmt == libcamera::formats::SGRBG12_CSI2P ||
+                    fmt == libcamera::formats::SRGGB12_CSI2P) {
+            frameMat = unpackRAW12CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+            needsUnpacking = true;
+        }
+        else if (fmt == libcamera::formats::SBGGR16 ||
+                    fmt == libcamera::formats::SGBRG16 ||
+                    fmt == libcamera::formats::SGRBG16 ||
+                    fmt == libcamera::formats::SRGGB16) {
+            frameMat = cv::Mat(height, width, CV_16UC1, data, stride);
+        }
+        else {
+            frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+        }
+        
+        if (needsUnpacking) {
+            session.latestFrame = frameMat;
+        } else {
+            session.latestFrame = frameMat.clone();
+        }
+        
+        session.frameReady = true;
+        munmap(data, plane.length);
+    }
+    
+    session.frameCond->notify_all();
+    
+    // Requeue
+    request->reuse(libcamera::Request::ReuseBuffers);
+    applyLibCameraControls(session, request);
+    
+    if (session.libcameraDevice) {
+        session.libcameraDevice->queueRequest(request);
     }
 }
 
