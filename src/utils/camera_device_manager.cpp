@@ -53,7 +53,7 @@ CameraBackend CameraDeviceManager::fromOpenCVBackend(int cvBackend) {
 }
 
 bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame, const std::string& requestedFormat) {
-    std::unique_lock<std::mutex> lock(_mutex);
+    std::unique_lock<std::recursive_mutex> lock(_mutex);
     
     auto it = _sessions.find(sourceId);
     bool needsOpen = false;
@@ -104,7 +104,7 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
 }
 
 std::shared_ptr<cv::VideoCapture> CameraDeviceManager::getOpenCVCapture(const std::string& sourceId) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     auto it = _sessions.find(sourceId);
     if (it != _sessions.end() && it->second.backend != CameraBackend::LIBCAMERA) {
         return it->second.opencvCapture;
@@ -113,7 +113,7 @@ std::shared_ptr<cv::VideoCapture> CameraDeviceManager::getOpenCVCapture(const st
 }
 
 void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     auto it = _sessions.find(sourceId);
     if (it != _sessions.end()) {
         if (it->second.opencvCapture) {
@@ -143,7 +143,7 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
 }
 
 void CameraDeviceManager::releaseAll() {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     for (auto& pair : _sessions) {
         if (pair.second.opencvCapture) {
             pair.second.opencvCapture->release();
@@ -164,12 +164,12 @@ void CameraDeviceManager::releaseAll() {
 }
 
 bool CameraDeviceManager::isOpen(const std::string& sourceId) const {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _sessions.find(sourceId) != _sessions.end();
 }
 
 CameraBackend CameraDeviceManager::getBackend(const std::string& sourceId) const {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     auto it = _sessions.find(sourceId);
     if (it != _sessions.end()) {
         return it->second.backend;
@@ -179,7 +179,7 @@ CameraBackend CameraDeviceManager::getBackend(const std::string& sourceId) const
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
 void CameraDeviceManager::setLibCameraConfig(const std::string& sourceId, const LibCameraConfig& config) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     // Ensure session exists and is set to libcamera
     CameraSession& session = _sessions[sourceId];
     session.backend = CameraBackend::LIBCAMERA;
@@ -187,7 +187,7 @@ void CameraDeviceManager::setLibCameraConfig(const std::string& sourceId, const 
 }
 
 bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const std::string& controlName, float value) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     // Create session if it doesn't exist (to allow pre-set controls)
     CameraSession& session = _sessions[sourceId];
     session.backend = CameraBackend::LIBCAMERA;
@@ -351,7 +351,7 @@ bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
 
 libcamera::CameraManager* CameraDeviceManager::getLibCameraManager() {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (!_libcameraManagerStarted && _libcameraManager) {
         int ret = _libcameraManager->start();
         if (ret < 0) {
@@ -364,7 +364,7 @@ libcamera::CameraManager* CameraDeviceManager::getLibCameraManager() {
 }
 
 std::shared_ptr<libcamera::Camera> CameraDeviceManager::getLibCamera(const std::string& sourceId) {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     auto it = _sessions.find(sourceId);
     if (it != _sessions.end() && it->second.backend == CameraBackend::LIBCAMERA) {
         return it->second.libcameraDevice;
@@ -650,7 +650,7 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
     
     std::string sourceId;
     {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         auto it = _requestToSource.find(request);
         if (it != _requestToSource.end()) {
             sourceId = it->second;
@@ -663,7 +663,7 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
     }
     
     // Protect session lookup
-    std::unique_lock<std::mutex> mainLock(_mutex);
+    std::unique_lock<std::recursive_mutex> mainLock(_mutex);
     auto it = _sessions.find(sourceId);
     if (it == _sessions.end()) return;
     

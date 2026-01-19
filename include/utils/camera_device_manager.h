@@ -180,7 +180,7 @@ private:
     std::map<libcamera::Request*, std::string> _requestToSource;
 #endif
 
-    mutable std::mutex _mutex;
+    mutable std::recursive_mutex _mutex;
     std::map<std::string, CameraSession> _sessions;
 };
 
