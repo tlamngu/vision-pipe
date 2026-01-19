@@ -41,6 +41,7 @@ ColorConvertItem::ColorConvertItem() {
 }
 
 ExecutionResult ColorConvertItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     static const std::map<std::string, int> conversions = {
         // RGB/BGR <-> Gray
         {"bgr2gray", cv::COLOR_BGR2GRAY}, {"gray2bgr", cv::COLOR_GRAY2BGR},

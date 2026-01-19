@@ -156,6 +156,11 @@ private:
         std::unique_ptr<std::condition_variable> frameCond;
         LibCameraConfig targetConfig;
         std::map<std::string, float> activeControls;
+        struct MappedBuffer {
+            void* data;
+            size_t length;
+        };
+        std::map<libcamera::FrameBuffer*, MappedBuffer> mappedBuffers;
 #endif
     };
 

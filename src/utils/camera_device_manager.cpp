@@ -77,6 +77,8 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
         if (!openCamera(sourceId, backend, requestedFormat)) {
             return false;
         }
+        // Small settle delay for hardware link setup
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
         it = _sessions.find(sourceId);
     }
     
@@ -122,6 +124,8 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         if (it->second.libcameraDevice) {
             it->second.libcameraDevice->stop();
+        }
+
         // Clean up request mapping
         for (auto itReq = _requestToSource.begin(); itReq != _requestToSource.end(); ) {
             if (itReq->second == sourceId) {
@@ -131,10 +135,20 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
             }
         }
 
+        // Clean up mapped buffers
+        for (auto const& [buffer, mb] : it->second.mappedBuffers) {
+            if (mb.data != MAP_FAILED) {
+                munmap(mb.data, mb.length);
+            }
+        }
+        it->second.mappedBuffers.clear();
+
         it->second.requests.clear();
         it->second.allocator.reset();
         it->second.config.reset();
-        it->second.libcameraDevice->release();
+        
+        if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->release();
         }
 #endif
         _sessions.erase(it);
@@ -557,6 +571,24 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
         
         session.requests.push_back(std::move(request));
     }
+
+    // Map buffers for fast access
+    session.mappedBuffers.clear();
+    for (const auto& request : session.requests) {
+        for (auto const& [stream, buffer] : request->buffers()) {
+            if (session.mappedBuffers.count(buffer)) continue;
+            
+            const libcamera::FrameBuffer::Plane& plane = buffer->planes()[0];
+            void* data = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+            if (data != MAP_FAILED) {
+                session.mappedBuffers[buffer] = {data, plane.length};
+            } else {
+                SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer during setup");
+                camera->release();
+                return false;
+            }
+        }
+    }
     
     // Connect signal for completed requests
     camera->requestCompleted.disconnect(this);
@@ -675,27 +707,11 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
     
     // Get the buffer and convert to cv::Mat
     const libcamera::Request::BufferMap& buffers = request->buffers();
-    for (const auto& bufferPair : buffers) {
-        libcamera::FrameBuffer* buffer = bufferPair.second;
-        const auto& planes = buffer->planes();
-        if (planes.empty()) continue;
+    for (auto const& [stream, buffer] : buffers) {
+        if (session.mappedBuffers.count(buffer) == 0) continue;
         
-        const libcamera::FrameBuffer::Plane& plane = planes[0];
-        
-        // Memory map the buffer
-        void* data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
-        if (data == MAP_FAILED) {
-            SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer");
-            continue;
-        }
-        
-        // Ensure session config still exists
-        if (!session.config) {
-            munmap(data, plane.length);
-            continue;
-        }
-
-        libcamera::StreamConfiguration& streamCfg = session.config->at(0);
+        void* data = session.mappedBuffers[buffer].data;
+        const libcamera::StreamConfiguration& streamCfg = stream->configuration();
         libcamera::PixelFormat fmt = streamCfg.pixelFormat;
         
         int width = streamCfg.size.width;
@@ -764,7 +780,6 @@ void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) 
         }
         
         session.frameReady = true;
-        munmap(data, plane.length);
     }
     
     session.frameCond->notify_all();

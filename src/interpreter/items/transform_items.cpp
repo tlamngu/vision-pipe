@@ -707,9 +707,8 @@ ExecutionResult HStackItem::execute(const std::vector<RuntimeValue>& args, Execu
     std::string otherId = args[0].asString();
     cv::Mat other = ctx.cacheManager->get(otherId);
     
-    if (other.empty()) {
-        return ExecutionResult::fail("Image not found: " + otherId);
-    }
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(other);
+    if (other.empty()) return ExecutionResult::ok(ctx.currentMat);
     
     // Ensure same height
     if (ctx.currentMat.rows != other.rows) {
@@ -747,9 +746,8 @@ ExecutionResult VStackItem::execute(const std::vector<RuntimeValue>& args, Execu
     std::string otherId = args[0].asString();
     cv::Mat other = ctx.cacheManager->get(otherId);
     
-    if (other.empty()) {
-        return ExecutionResult::fail("Image not found: " + otherId);
-    }
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(other);
+    if (other.empty()) return ExecutionResult::ok(ctx.currentMat);
     
     // Ensure same width
     if (ctx.currentMat.cols != other.cols) {
