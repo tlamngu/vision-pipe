@@ -67,6 +67,13 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+class LibCamListFormatsItem : public InterpreterItem {
+public:
+    LibCamListFormatsItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+
 
 } // namespace visionpipe
 

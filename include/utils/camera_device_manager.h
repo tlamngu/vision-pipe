@@ -67,6 +67,12 @@ public:
      */
     bool acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame, const std::string& requestedFormat = "");
 
+    /**
+     * @brief Proactively prepare (open/configure) a camera without starting the stream.
+     * Useful for multi-camera setups to avoid hardware link race conditions.
+     */
+    bool prepareCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat = "");
+
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
     /**
      * @brief Set configuration for a libcamera source.
@@ -137,7 +143,13 @@ public:
      * Returns empty string if not a Bayer format or source not found.
      */
     std::string getBayerPattern(const std::string& sourceId);
+
+    /**
+     * @brief List supported pixel formats and resolutions for a libcamera source.
+     */
+    void listLibCameraFormats(const std::string& sourceId);
 #endif
+
 
 
 private:
@@ -159,6 +171,7 @@ private:
         std::vector<std::unique_ptr<libcamera::Request>> requests;
         cv::Mat latestFrame;
         bool frameReady = false;
+        bool libcameraStarted = false;
         std::unique_ptr<std::mutex> sessionMutex;
         std::unique_ptr<std::condition_variable> frameCond;
         LibCameraConfig targetConfig;
@@ -175,11 +188,11 @@ private:
 #endif
     };
 
-    bool openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat = "");
+    bool openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat = "", bool startImmediate = true);
     bool readOpenCVFrame(CameraSession& session, cv::Mat& frame);
 
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
-    bool openLibCamera(const std::string& sourceId, CameraSession& session);
+    bool openLibCamera(const std::string& sourceId, CameraSession& session, bool startImmediate = true);
     // Updated to take unique_lock for condition_variable
     bool readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock);
     void applyLibCameraControls(CameraSession& session, libcamera::Request* request);

@@ -15,7 +15,9 @@ void registerLibCameraItems(ItemRegistry& registry) {
     registry.add<LibCamListItem>();
     registry.add<LibCamListControlsItem>();
     registry.add<LibCamGetBayerItem>();
+    registry.add<LibCamListFormatsItem>();
 }
+
 
 // ============================================================================
 // LibCamSetupItem
@@ -63,6 +65,11 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
     lcConfig.streamRole = streamRole;
     // Set configuration
     CameraDeviceManager::instance().setLibCameraConfig(sourceId, lcConfig);
+    
+    // Proactively prepare (open/configure) the camera without starting it.
+    // This allows multiple cameras to negotiate hardware links (like CSIDs)
+    // sequentially during the setup phase.
+    CameraDeviceManager::instance().prepareCamera(sourceId, CameraBackend::LIBCAMERA, pixelFormat);
     
     SystemLogger::info("LibCameraItems", "libcam_setup: Configured camera " + sourceId + " with resolution " + 
                  std::to_string(width) + "x" + std::to_string(height));
@@ -272,6 +279,34 @@ ExecutionResult LibCamGetBayerItem::execute(const std::vector<RuntimeValue>& arg
     
     std::string pattern = CameraDeviceManager::instance().getBayerPattern(sourceId);
     return ExecutionResult::ok(pattern);
+}
+
+// ============================================================================
+// LibCamListFormatsItem
+// ============================================================================
+
+LibCamListFormatsItem::LibCamListFormatsItem() {
+    _functionName = "libcam_list_formats";
+    _description = "List all supported pixel formats and resolutions for a camera";
+    _category = "video_io";
+    _params = {
+        ParamDef::required("source", BaseType::ANY, "Camera source identifier")
+    };
+    _example = "libcam_list_formats(0)";
+    _returnType = "mat";
+    _tags = {"libcamera", "formats", "resolutions", "diagnostics"};
+}
+
+ExecutionResult LibCamListFormatsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    std::string sourceId;
+    if (args[0].isNumeric()) {
+        sourceId = std::to_string(static_cast<int>(args[0].asNumber()));
+    } else {
+        sourceId = args[0].asString();
+    }
+    
+    CameraDeviceManager::instance().listLibCameraFormats(sourceId);
+    return ExecutionResult::ok(ctx.currentMat);
 }
 
 } // namespace visionpipe

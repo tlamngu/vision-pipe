@@ -93,6 +93,22 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
     // Read frame based on backend
     if (session.backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        // Handle deferred startup
+        if (!session.libcameraStarted && session.libcameraDevice) {
+            if (session.libcameraDevice->start() < 0) {
+                SystemLogger::error(LOG_COMPONENT, "Failed to deferred-start libcamera: " + sourceId);
+                return false;
+            }
+            // Queue initial requests
+            for (auto& request : session.requests) {
+                session.libcameraDevice->queueRequest(request.get());
+            }
+            session.libcameraStarted = true;
+            SystemLogger::info(LOG_COMPONENT, "Deferred-started libcamera for source: " + sourceId);
+            // Small settle delay after first start to avoid link contention
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+
         // Switch to session-specific lock for waiting
         std::unique_lock<std::mutex> sessionLock(*session.sessionMutex);
         lock.unlock(); // Release global lock
@@ -104,6 +120,11 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
     } else {
         return readOpenCVFrame(session, frame);
     }
+}
+
+bool CameraDeviceManager::prepareCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return openCamera(sourceId, backend, requestedFormat, false); // startImmediate = false
 }
 
 std::shared_ptr<cv::VideoCapture> CameraDeviceManager::getOpenCVCapture(const std::string& sourceId) {
@@ -249,7 +270,7 @@ bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const
 }
 #endif
 
-bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat) {
+bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat, bool startImmediate) {
     CameraSession session;
     session.backend = backend;
     
@@ -287,7 +308,7 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             finalSession.targetConfig.pixelFormat = requestedFormat;
         } 
         
-        if (!openLibCamera(sourceId, finalSession)) {
+        if (!openLibCamera(sourceId, finalSession, startImmediate)) {
             _sessions.erase(sourceId);
             return false;
         }
@@ -411,7 +432,66 @@ std::string CameraDeviceManager::getBayerPattern(const std::string& sourceId) {
     return "";
 }
 
-bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSession& session) {
+void CameraDeviceManager::listLibCameraFormats(const std::string& sourceId) {
+    auto* manager = getLibCameraManager();
+    if (!manager) return;
+    
+    auto cameras = manager->cameras();
+    std::shared_ptr<libcamera::Camera> camera;
+    try {
+        int index = std::stoi(sourceId);
+        if (index >= 0 && index < static_cast<int>(cameras.size())) camera = cameras[index];
+    } catch (...) {
+        camera = manager->get(sourceId);
+    }
+    
+    if (!camera) {
+        SystemLogger::error(LOG_COMPONENT, "listLibCameraFormats: Camera not found: " + sourceId);
+        return;
+    }
+    
+    bool needsRelease = false;
+    if (camera->acquire() == 0) needsRelease = true;
+    
+    std::cout << "\n=== Supported Formats for Camera [" << sourceId << "] ===" << std::endl;
+    
+    std::vector<libcamera::StreamRole> roles = {
+        libcamera::StreamRole::VideoRecording,
+        libcamera::StreamRole::Viewfinder,
+        libcamera::StreamRole::StillCapture,
+        libcamera::StreamRole::Raw
+    };
+    
+    for (auto role : roles) {
+        std::string roleName = "Unknown";
+        if (role == libcamera::StreamRole::VideoRecording) roleName = "VideoRecording";
+        else if (role == libcamera::StreamRole::Viewfinder) roleName = "Viewfinder";
+        else if (role == libcamera::StreamRole::StillCapture) roleName = "StillCapture";
+        else if (role == libcamera::StreamRole::Raw) roleName = "Raw";
+        
+        std::unique_ptr<libcamera::CameraConfiguration> config = camera->generateConfiguration({role});
+        if (!config) continue;
+        
+        std::cout << "Role: " << roleName << std::endl;
+        const libcamera::StreamConfiguration& streamCfg = config->at(0);
+        const libcamera::StreamFormats& formats = streamCfg.formats();
+        
+        for (const auto& fmt : formats.pixelformats()) {
+            std::cout << "  - Format: " << fmt.toString() << std::endl;
+            std::cout << "    Resolutions: ";
+            auto sizes = formats.sizes(fmt);
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                std::cout << sizes[i].toString() << (i < sizes.size() - 1 ? ", " : "");
+            }
+            std::cout << std::endl;
+        }
+    }
+    std::cout << "===========================================\n" << std::endl;
+    
+    if (needsRelease) camera->release();
+}
+
+bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSession& session, bool startImmediate) {
     auto* manager = getLibCameraManager();
     if (!manager) {
         return false;
@@ -623,19 +703,25 @@ bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSessi
     camera->requestCompleted.disconnect(this);
     camera->requestCompleted.connect(this, &CameraDeviceManager::libcameraRequestComplete);
     
-    // Start camera
-    if (camera->start() < 0) {
-        SystemLogger::error(LOG_COMPONENT, "Failed to start libcamera");
-        camera->release();
-        return false;
+    if (startImmediate) {
+        // Start camera
+        if (camera->start() < 0) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to start libcamera");
+            camera->release();
+            return false;
+        }
+        
+        // Queue initial requests
+        for (auto& request : session.requests) {
+            camera->queueRequest(request.get());
+        }
+        session.libcameraStarted = true;
+        SystemLogger::info(LOG_COMPONENT, "Successfully opened and started camera with libcamera backend: " + sourceId);
+    } else {
+        session.libcameraStarted = false;
+        SystemLogger::info(LOG_COMPONENT, "Successfully configured camera with libcamera backend (deferred start): " + sourceId);
     }
     
-    // Queue initial requests
-    for (auto& request : session.requests) {
-        camera->queueRequest(request.get());
-    }
-    
-    SystemLogger::info(LOG_COMPONENT, "Successfully opened camera with libcamera backend: " + sourceId);
     return true;
 }
 
