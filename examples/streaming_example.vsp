@@ -35,7 +35,7 @@ pipeline setup
     
     libcam_list()
     
-    libcam_setup(0, 1280, 720, "SRGGB8")
+    libcam_setup(0, 1280, 720, "BGR888")
  
     libcam_prop("0", "Contrast", 2)
 
@@ -43,10 +43,10 @@ end
 
 pipeline main
     # Capture frame from camera (change index if needed)    
-    video_cap(0, "libcamera", "SRGGB8")
+    video_cap(0, "libcamera", "BGR888")
            
     #cvt_color("yuyv2bgr")
-    cvt_color("bayerrg2bgr")
+    #cvt_color("bayerrg2bgr")
     # Resize for better streaming performance (optional)
     #resize(1280, 720)
     
