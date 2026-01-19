@@ -1,0 +1,77 @@
+pipeline setup
+    
+    # Initialize tick counter for FPS
+    get_tick("last_tick")
+    
+    # Print stream information
+    print("==============================================")
+    print("VisionPipe IP Stream Server Starting...")
+    print("==============================================")
+    libcam_setup(0, 1280, 720, "SRGGB8")
+    libcam_setup(1, 1280, 720, "SRGGB8")
+end
+
+pipeline cap_l
+    video_cap(0, "libcamera", "SRGGB8")
+    cvt_color("bayerrg2bgr")
+    global_cache("frame_l")
+end
+
+pipeline cap_r
+    video_cap(1, "libcamera", "SRGGB8")
+    cvt_color("bayerrg2bgr")
+    global_cache("frame_r")
+end
+
+pipeline main
+    # Capture frame from camera (change index if needed)
+    use(global "frame_l")
+
+    hstack("frame_r") #stack right
+
+    # Add "Streamed from VisionPipe" text overlay
+    put_text("Streamed from VisionPipe", 10, 30, "simplex", 0.7, "white", 2)
+    put_text("Streamed from VisionPipe", 10, 30, "simplex", 0.7, "cyan", 1)
+    
+    fps(true, 20,  20)
+
+    
+    # Stream frames over HTTP on port 8080
+    # Binds to all interfaces (0.0.0.0) for LAN access
+    # JPEG quality: 85 (good balance of quality vs bandwidth)
+    ip_stream(8080, "0.0.0.0", 85)
+    
+    # Show local preview
+    # imshow("VisionPipe Stream")
+    
+    # Wait for key (30ms = ~33 FPS target)
+    # Press ESC or 'q' to quit
+    key = wait_key(1)
+    
+    # Check for 'q' key (ASCII 113) or ESC key (ASCII 27)
+    if key == 113
+        break
+    end
+    
+    if key == 27
+        break
+    end
+end
+
+pipeline shutdown
+    # Stop the stream server
+    ip_stream_stop(8080)
+    print("Stream server stopped.")
+end
+
+# Execute setup once
+exec_seq setup
+
+# Print connection info
+ip_stream_info()
+
+# Main processing loop
+exec_loop main
+
+# Cleanup
+exec_seq shutdown

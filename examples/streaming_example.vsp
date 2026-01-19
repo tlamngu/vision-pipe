@@ -32,14 +32,23 @@ pipeline setup
     print("==============================================")
     print("VisionPipe IP Stream Server Starting...")
     print("==============================================")
+    
+    libcam_list()
+    
+    libcam_setup(0, 1280, 720, "SRGGB8")
+ 
+    libcam_prop("0", "Contrast", 2)
+
 end
 
 pipeline main
-    # Capture frame from camera (change index if needed)
-    video_cap(0)
-    
+    # Capture frame from camera (change index if needed)    
+    video_cap(0, "libcamera", "SRGGB8")
+           
+    #cvt_color("yuyv2bgr")
+    cvt_color("bayerrg2bgr")
     # Resize for better streaming performance (optional)
-    resize(1280, 720)
+    #resize(1280, 720)
     
     # Add "Streamed from VisionPipe" text overlay
     put_text("Streamed from VisionPipe", 10, 30, "simplex", 0.7, "white", 2)
@@ -55,23 +64,11 @@ pipeline main
     
     # Show local preview
     # imshow("VisionPipe Stream")
-    
-    # Wait for key (30ms = ~33 FPS target)
-    # Press ESC or 'q' to quit
-    key = wait_key(1)
-    
-    # Check for 'q' key (ASCII 113) or ESC key (ASCII 27)
-    if key == 113
-        break
-    end
-    
-    if key == 27
-        break
-    end
 end
 
 pipeline shutdown
     # Stop the stream server
+    video_close()
     ip_stream_stop(8080)
     print("Stream server stopped.")
 end
