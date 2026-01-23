@@ -30,6 +30,11 @@ void registerAllItems(ItemRegistry& registry) {
 #ifdef VISIONPIPE_WITH_DNN
     registerDNNItems(registry);
 #endif
+
+    // Optional: Register LibCamera items when feature is enabled
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+    registerLibCameraItems(registry);
+#endif
 }
 
 } // namespace visionpipe

@@ -20,6 +20,7 @@
 #include <csignal>
 #include <iomanip>
 #include <chrono>
+#include <opencv2/videoio/registry.hpp>
 
 #include "interpreter/runtime.h"
 #include "interpreter/lexer.h"
@@ -57,6 +58,7 @@ struct CLIOptions {
     std::string outputDir = ".";
     std::string outputFormat = "html";
     std::string pipelineName;  // Specific pipeline to run
+    std::string executeItem;   // Item to execute
     bool verbose = false;
     bool quiet = false;
     bool help = false;
@@ -104,6 +106,7 @@ Commands:
   serve               Start documentation web server
   version             Show version information
   help                Show this help message
+  execute <item>      Execute a single interpreter item directly
 
 Run Options:
   --param, -p key=value    Set pipeline parameter (repeatable)
@@ -127,6 +130,7 @@ Examples:
   visionpipe validate mypipeline.vsp
   visionpipe docs --output ./docs --format html
   visionpipe serve --port 3000
+  visionpipe execute 'libcam_list_controls()'
 
 Environment Variables:
   VISIONPIPE_LOG_LEVEL     Set log level (debug, info, warn, error)
@@ -136,9 +140,11 @@ Environment Variables:
 }
 
 void printVersion() {
-    std::cout << "VisionPipe v1.0.0" << std::endl;
+    std::cout << "VisionPipe Standard Edition " << VISIONPIPE_VERSION << std::endl;
     std::cout << "Build: " << __DATE__ << " " << __TIME__ << std::endl;
+    std::cout << "OpenCV: " << CV_VERSION << std::endl;
     std::cout << std::endl;
+    
     std::cout << "Core Features:" << std::endl;
     std::cout << "  + OpenCV image processing" << std::endl;
     std::cout << "  + Multi-threaded pipeline execution" << std::endl;
@@ -156,6 +162,28 @@ void printVersion() {
 #ifdef VISIONPIPE_OPENCL_ENABLED
     std::cout << "  + OpenCL acceleration" << std::endl;
 #endif
+#ifdef LIBCAMERA_BACKEND
+    std::cout << "  + LibCamera camera support" << std::endl;
+#endif
+
+    std::cout << "\nBackend Capabilities:" << std::endl;
+    
+    // Check GStreamer support in OpenCV
+    bool hasGStreamer = cv::videoio_registry::hasBackend(cv::CAP_GSTREAMER);
+    std::cout << "  - GStreamer: " << (hasGStreamer ? "[YES]" : "[NO]") << std::endl;
+    
+    // Check V4L2 support
+    bool hasV4L2 = cv::videoio_registry::hasBackend(cv::CAP_V4L2);
+    std::cout << "  - V4L2:      " << (hasV4L2 ? "[YES]" : "[NO]") << std::endl;
+    
+    // Check FFMPEG support
+    bool hasFFMPEG = cv::videoio_registry::hasBackend(cv::CAP_FFMPEG);
+    std::cout << "  - FFMPEG:    " << (hasFFMPEG ? "[YES]" : "[NO]") << std::endl;
+
+#ifdef _WIN32
+    bool hasDShow = cv::videoio_registry::hasBackend(cv::CAP_DSHOW);
+    std::cout << "  - MSMF/DShow: " << (hasDShow ? "[YES]" : "[NO]") << std::endl;
+#endif
 }
 
 // ============================================================================
@@ -171,6 +199,10 @@ CLIOptions parseArgs(int argc, char* argv[]) {
     }
     
     opts.command = argv[1];
+    
+    if (opts.command == "execute" && argc > 2) {
+        opts.executeItem = argv[2];
+    }
     
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -516,36 +548,75 @@ int cmdDocs(const CLIOptions& opts) {
 }
 
 // ============================================================================
+// Command: execute
+// ============================================================================
+
+int cmdExecute(const CLIOptions& opts) {
+    if (opts.executeItem.empty()) {
+        std::cerr << "Error: No item specified for execution" << std::endl;
+        std::cerr << "Usage: visionpipe execute \"item_name(args)\"" << std::endl;
+        return 1;
+    }
+
+    std::stringstream ss;
+    ss << "pipeline execute\n"
+       << "  " << opts.executeItem << "\n"
+       << "end\n"
+       << "exec_seq execute\n";
+
+    std::string source = ss.str();
+
+    try {
+        RuntimeConfig config;
+        config.enableDisplay = opts.enableDisplay;
+        config.enableLogging = opts.verbose;
+        
+        Runtime runtime(config);
+        runtime.loadBuiltins();
+
+        if (opts.verbose) {
+            std::cout << "[VisionPipe] Executing item: " << opts.executeItem << std::endl;
+        }
+
+        return runtime.runSource(source, "command_line");
+    } catch (const std::exception& e) {
+        std::cerr << "[Error] " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+// ============================================================================
 // Main entry point
 // ============================================================================
+
+#include "utils/camera_device_manager.h"
 
 int main(int argc, char* argv[]) {
     CLIOptions opts = parseArgs(argc, argv);
     
+    int result = 0;
+    
     if (opts.help || opts.command == "help" || opts.command.empty()) {
         printBanner();
         printUsage();
-        return 0;
-    }
-    
-    if (opts.command == "version" || opts.command == "--version") {
+    } else if (opts.command == "version" || opts.command == "--version") {
         printVersion();
-        return 0;
+    } else if (opts.command == "run") {
+        result = cmdRun(opts);
+    } else if (opts.command == "validate") {
+        result = cmdValidate(opts);
+    } else if (opts.command == "docs") {
+        result = cmdDocs(opts);
+    } else if (opts.command == "execute") {
+        result = cmdExecute(opts);
+    } else {
+        std::cerr << "Unknown command: " << opts.command << std::endl;
+        std::cerr << "Run 'visionpipe help' for usage information" << std::endl;
+        result = 1;
     }
     
-    if (opts.command == "run") {
-        return cmdRun(opts);
-    }
+    // Clean shutdown
+    CameraDeviceManager::instance().releaseAll();
     
-    if (opts.command == "validate") {
-        return cmdValidate(opts);
-    }
-    
-    if (opts.command == "docs") {
-        return cmdDocs(opts);
-    }
-    
-    std::cerr << "Unknown command: " << opts.command << std::endl;
-    std::cerr << "Run 'visionpipe help' for usage information" << std::endl;
-    return 1;
+    return result;
 }

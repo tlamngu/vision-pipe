@@ -184,7 +184,7 @@ TrackbarValueItem::TrackbarValueItem() {
     _params = {
         ParamDef::required("name", BaseType::STRING, "Trackbar name"),
         ParamDef::required("window", BaseType::STRING, "Window name"),
-        ParamDef::required("var_name", BaseType::STRING, "Variable name to store value")
+        ParamDef::optional("var_name", BaseType::STRING, "Return value into this variable", "")
     };
     _example = "trackbar_value(\"Threshold\", \"Control\", \"thresh\")";
     _returnType = "mat";
@@ -194,12 +194,15 @@ TrackbarValueItem::TrackbarValueItem() {
 ExecutionResult TrackbarValueItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string name = args[0].asString();
     std::string window = args[1].asString();
-    std::string varName = args[2].asString();
     
     int pos = cv::getTrackbarPos(name, window);
-    ctx.variables[varName] = RuntimeValue(static_cast<double>(pos));
+    RuntimeValue val(static_cast<double>(pos));
     
-    return ExecutionResult::ok(ctx.currentMat);
+    if (args.size() > 2 && !args[2].asString().empty()) {
+        ctx.variables[args[2].asString()] = val;
+    }
+    
+    return ExecutionResult::okWithMat(ctx.currentMat, val);
 }
 
 // ============================================================================
@@ -299,7 +302,7 @@ GetCheckboxItem::GetCheckboxItem() {
     _params = {
         ParamDef::required("name", BaseType::STRING, "Checkbox name"),
         ParamDef::required("window", BaseType::STRING, "Window name"),
-        ParamDef::required("var_name", BaseType::STRING, "Variable to store result")
+        ParamDef::optional("var_name", BaseType::STRING, "Return value into this variable", "")
     };
     _example = "get_checkbox(\"Enable Filter\", \"Control\", \"is_enabled\")";
     _returnType = "mat";
@@ -309,12 +312,15 @@ GetCheckboxItem::GetCheckboxItem() {
 ExecutionResult GetCheckboxItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string name = args[0].asString();
     std::string window = args[1].asString();
-    std::string varName = args[2].asString();
     
     int pos = cv::getTrackbarPos(name, window);
-    ctx.variables[varName] = RuntimeValue(pos != 0);
+    RuntimeValue val(pos != 0);
     
-    return ExecutionResult::ok(ctx.currentMat);
+    if (args.size() > 2 && !args[2].asString().empty()) {
+        ctx.variables[args[2].asString()] = val;
+    }
+    
+    return ExecutionResult::okWithMat(ctx.currentMat, val);
 }
 
 // ============================================================================
@@ -377,7 +383,7 @@ CheckButtonClickItem::CheckButtonClickItem() {
     _params = {
         ParamDef::required("name", BaseType::STRING, "Button name"),
         ParamDef::required("window", BaseType::STRING, "Window name"),
-        ParamDef::required("result_var", BaseType::STRING, "Variable to store click state")
+        ParamDef::optional("var_name", BaseType::STRING, "Return value into this variable", "")
     };
     _example = "check_button_click(\"Apply\", \"Control\", \"was_clicked\")";
     _returnType = "mat";
@@ -387,17 +393,20 @@ CheckButtonClickItem::CheckButtonClickItem() {
 ExecutionResult CheckButtonClickItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string name = args[0].asString();
     std::string window = args[1].asString();
-    std::string resultVar = args[2].asString();
     
     int pos = cv::getTrackbarPos(name, window);
-    ctx.variables[resultVar] = RuntimeValue(pos != 0);
+    RuntimeValue val(pos != 0);
+    
+    if (args.size() > 2 && !args[2].asString().empty()) {
+        ctx.variables[args[2].asString()] = val;
+    }
     
     // Reset button
     if (pos != 0) {
         cv::setTrackbarPos(name, window, 0);
     }
     
-    return ExecutionResult::ok(ctx.currentMat);
+    return ExecutionResult::okWithMat(ctx.currentMat, val);
 }
 
 // ============================================================================

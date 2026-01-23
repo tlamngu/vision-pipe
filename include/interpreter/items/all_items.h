@@ -37,6 +37,11 @@
 #include "interpreter/items/dnn_items.h"
 #endif
 
+// Optional: LibCamera items (when LIBCAMERA_BACKEND is enabled)
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+#include "interpreter/items/libcamera_items.h"
+#endif
+
 namespace visionpipe {
 
 /**
