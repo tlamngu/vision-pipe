@@ -1,3 +1,6 @@
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tlamngu/vision-pipe)
+
 # VisionPipe
 
 VisionPipe is a powerful, domain-specific language (DSL) and high-performance image processing framework designed for building complex computer vision pipelines. Built on modern C++17 and powered by OpenCV, VisionPipe enables developers to create, manage, and execute sophisticated image processing workflows with minimal boilerplate code.
