@@ -20,17 +20,18 @@ void registerColorItems(ItemRegistry& registry);
  * - dst_cn: Number of channels in destination (default: 0 = auto)
  * 
  * Supported conversions:
- * - BGR2GRAY, GRAY2BGR
- * - BGR2RGB, RGB2BGR
- * - BGR2HSV, HSV2BGR, BGR2HSV_FULL
+ * - BGR2GRAY, GRAY2BGR, RGB2GRAY, GRAY2RGB
+ * - BGR2HSV, HSV2BGR, BGR2HSV_FULL, HSV2BGR_FULL
  * - BGR2HLS, HLS2BGR
- * - BGR2LAB, LAB2BGR
- * - BGR2LUV, LUV2BGR
+ * - BGR2Lab, Lab2BGR
+ * - BGR2Luv, Luv2BGR
  * - BGR2YCrCb, YCrCb2BGR
  * - BGR2XYZ, XYZ2BGR
  * - BGR2YUV, YUV2BGR
- * - BGRA2GRAY, GRAY2BGRA
- * - And many more...
+ * - UYVY2BGR, UYVY2RGB, YUYV2BGR, YUYV2RGB, YVYU2BGR, YVYU2RGB
+ * - NV122BGR, NV122RGB, NV212BGR, NV212RGB
+ * - BayerBG2BGR, BayerGB2BGR, BayerRG2BGR, BayerGR2BGR
+ * - And many more (supports most cv::ColorConversionCodes)
  */
 class ColorConvertItem : public InterpreterItem {
 public:

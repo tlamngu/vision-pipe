@@ -65,6 +65,7 @@ LineItem::LineItem() {
 }
 
 ExecutionResult LineItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x1 = static_cast<int>(args[0].asNumber());
     int y1 = static_cast<int>(args[1].asNumber());
     int x2 = static_cast<int>(args[2].asNumber());
@@ -110,6 +111,7 @@ ArrowedLineItem::ArrowedLineItem() {
 }
 
 ExecutionResult ArrowedLineItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x1 = static_cast<int>(args[0].asNumber());
     int y1 = static_cast<int>(args[1].asNumber());
     int x2 = static_cast<int>(args[2].asNumber());
@@ -150,6 +152,7 @@ RectangleItem::RectangleItem() {
 }
 
 ExecutionResult RectangleItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x = static_cast<int>(args[0].asNumber());
     int y = static_cast<int>(args[1].asNumber());
     int w = static_cast<int>(args[2].asNumber());
@@ -188,6 +191,7 @@ CircleItem::CircleItem() {
 }
 
 ExecutionResult CircleItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x = static_cast<int>(args[0].asNumber());
     int y = static_cast<int>(args[1].asNumber());
     int radius = static_cast<int>(args[2].asNumber());
@@ -229,6 +233,7 @@ EllipseItem::EllipseItem() {
 }
 
 ExecutionResult EllipseItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x = static_cast<int>(args[0].asNumber());
     int y = static_cast<int>(args[1].asNumber());
     int ax = static_cast<int>(args[2].asNumber());
@@ -269,6 +274,7 @@ PolylinesItem::PolylinesItem() {
 }
 
 ExecutionResult PolylinesItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     std::string pointsCache = args[0].asString();
     bool closed = args.size() > 1 ? args[1].asBool() : false;
     std::string colorStr = args.size() > 2 ? args[2].asString() : "green";
@@ -313,6 +319,7 @@ FillPolyItem::FillPolyItem() {
 }
 
 ExecutionResult FillPolyItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     std::string pointsCache = args[0].asString();
     std::string colorStr = args.size() > 1 ? args[1].asString() : "green";
     
@@ -355,6 +362,7 @@ FillConvexPolyItem::FillConvexPolyItem() {
 }
 
 ExecutionResult FillConvexPolyItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     std::string pointsCache = args[0].asString();
     std::string colorStr = args.size() > 1 ? args[1].asString() : "green";
     
@@ -402,6 +410,7 @@ PutTextItem::PutTextItem() {
 }
 
 ExecutionResult PutTextItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     std::string text = args[0].asString();
     int x = static_cast<int>(args[1].asNumber());
     int y = static_cast<int>(args[2].asNumber());
@@ -494,6 +503,7 @@ DrawMarkerItem::DrawMarkerItem() {
 }
 
 ExecutionResult DrawMarkerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x = static_cast<int>(args[0].asNumber());
     int y = static_cast<int>(args[1].asNumber());
     std::string typeStr = args.size() > 2 ? args[2].asString() : "cross";
@@ -543,6 +553,7 @@ DrawLabeledRectItem::DrawLabeledRectItem() {
 }
 
 ExecutionResult DrawLabeledRectItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int x = static_cast<int>(args[0].asNumber());
     int y = static_cast<int>(args[1].asNumber());
     int w = static_cast<int>(args[2].asNumber());
@@ -591,6 +602,7 @@ DrawGridItem::DrawGridItem() {
 }
 
 ExecutionResult DrawGridItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
     int cellW = args.size() > 0 ? static_cast<int>(args[0].asNumber()) : 50;
     int cellH = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 50;
     std::string colorStr = args.size() > 2 ? args[2].asString() : "gray";

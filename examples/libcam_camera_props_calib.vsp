@@ -1,0 +1,271 @@
+# libcam_camera_props_calib.vsp - Professional Libcamera Calibration Tool (IMX219 Tuned)
+# ============================================================================
+# A comprehensive tool for tuning every aspect of your camera's light control,
+# color balance, and capture configuration interactively.
+# ============================================================================
+
+pipeline setup
+    print("====================================================")
+    print(" VisionPipe libcamera Professional Calibration Tool ")
+    print("====================================================")
+    
+    # List available hardware for reference
+    libcam_list()
+    
+    # 1. Hardware Initialization (IMX219 @ 1280x720)
+    libcam_setup(0, 1280, 720, "SRGGB8")
+    
+    # 2. Window Management
+    named_window("Controls", "autosize")
+    named_window("Live Feed", "autosize")
+    
+    # --- [EXP] EXPOSURE & GAIN ---
+    # AE mode is default (1)
+    create_trackbar("[EXP] AE Enable", "Controls", 1, 1)
+    
+    # Time slider: 0–200 ms, default 33 (frame period for 30fps)
+    create_trackbar("[EXP] Time (ms)", "Controls", 200, 33)
+    
+    # Gain slider: 10–160 (x10) → 1.0–16.0×, default 1.0x
+    create_trackbar("[EXP] Gain (x10)", "Controls", 160, 10)
+    
+    # Comp slider: 0-40 → -2.0 to +2.0 EV, default 0 EV (20)
+    create_trackbar("[EXP] Comp (x10)", "Controls", 40, 20)
+    
+    # Enum-based controls
+    create_trackbar("[EXP] Metering", "Controls", 3, 0)
+    create_trackbar("[EXP] Mode", "Controls", 3, 0)
+
+    # --- [AWB] COLOR BALANCE ---
+    create_trackbar("[AWB] Enable", "Controls", 1, 1)
+    create_trackbar("[AWB] Preset", "Controls", 5, 0)
+
+    # --- [IMG] IMAGE QUALITY ---
+    # Neutral mid-point 100
+    create_trackbar("[IMG] Brightness", "Controls", 200, 100)
+    create_trackbar("[IMG] Contrast", "Controls", 200, 100)
+    create_trackbar("[IMG] Saturation", "Controls", 200, 100)
+    
+    # Sharpness: 0-100 → 0.0 to 2.0, default 0.5 (25)
+    create_trackbar("[IMG] Sharpness", "Controls", 100, 25)
+    
+    # NR: 0=Off, 1=Fast, 2=HighQuality
+    create_trackbar("[IMG] Noise Red", "Controls", 2, 1)
+end
+
+pipeline apply_tuning_and_display
+    # --- Read Current GUI State ---
+    ae_en = trackbar_value("[EXP] AE Enable", "Controls")
+    exp_ms = trackbar_value("[EXP] Time (ms)", "Controls")
+    gain_raw = trackbar_value("[EXP] Gain (x10)", "Controls")
+    comp_raw = trackbar_value("[EXP] Comp (x10)", "Controls")
+    meter_val = trackbar_value("[EXP] Metering", "Controls")
+    mode_val = trackbar_value("[EXP] Mode", "Controls")
+    
+    awb_en = trackbar_value("[AWB] Enable", "Controls")
+    awb_preset = trackbar_value("[AWB] Preset", "Controls")
+    
+    br_raw = trackbar_value("[IMG] Brightness", "Controls")
+    cn_raw = trackbar_value("[IMG] Contrast", "Controls")
+    st_raw = trackbar_value("[IMG] Saturation", "Controls")
+    sh_raw = trackbar_value("[IMG] Sharpness", "Controls")
+    nr_mode = trackbar_value("[IMG] Noise Red", "Controls")
+    
+    # --- 1. Apply Exposure Logic ---
+    if ae_en != 0
+        ae_en = 1
+    end
+    libcam_prop(0, "AeEnable", ae_en)
+    
+    if ae_en == 0
+        # Manual Mode clamping
+        if exp_ms < 1
+            exp_ms = 1
+        end
+        if exp_ms > 200
+            exp_ms = 200
+        end
+        exp_us = exp_ms * 1000
+        libcam_prop(0, "ExposureTime", exp_us)
+        
+        if gain_raw < 10
+            gain_raw = 10
+        end
+        if gain_raw > 160
+            gain_raw = 160
+        end
+        gain_val = gain_raw / 10.0
+        libcam_prop(0, "AnalogueGain", gain_val)
+    else
+        # AE mode
+        exp_us = "Auto"
+        gain_val = "Auto"
+    end
+    
+    # Exposure compensation clamping
+    if comp_raw < 0
+        comp_raw = 0
+    end
+    if comp_raw > 40
+        comp_raw = 40
+    end
+    comp_val = (comp_raw - 20) / 10.0
+    libcam_prop(0, "ExposureValue", comp_val)
+    
+    # Enum clamping & label resolution
+    # Metering: 0=Centre, 1=Spot, 2=Matrix, 3=Custom
+    if meter_val < 0
+        meter_val = 0
+    end
+    if meter_val > 3
+        meter_val = 3
+    end
+    libcam_prop(0, "AeMeteringMode", meter_val)
+    
+    meter_lbl = "Unknown"
+    if meter_val == 0
+        meter_lbl = "Centre"
+    end
+    if meter_val == 1
+        meter_lbl = "Spot"
+    end
+    if meter_val == 2
+        meter_lbl = "Matrix"
+    end
+    if meter_val == 3
+        meter_lbl = "Custom"
+    end
+    
+    # Mode: 0=Normal, 1=Short, 2=Long, 3=Custom
+    if mode_val < 0
+        mode_val = 0
+    end
+    if mode_val > 3
+        mode_val = 3
+    end
+    libcam_prop(0, "AeExposureMode", mode_val)
+    
+    mode_lbl = "Unknown"
+    if mode_val == 0
+        mode_lbl = "Normal"
+    end
+    if mode_val == 1
+        mode_lbl = "Short"
+    end
+    if mode_val == 2
+        mode_lbl = "Long"
+    end
+    if mode_val == 3
+        mode_lbl = "Custom"
+    end
+    
+    # --- 2. Apply Color Balance ---
+    libcam_prop(0, "AwbEnable", awb_en)
+    if awb_en == 1
+        libcam_prop(0, "AwbMode", awb_preset)
+    end
+    
+    # --- 3. Apply Image Quality ---
+    # Brightness: -1.0..+1.0
+    br_val = (br_raw - 100) / 100.0
+    if br_val < -1.0
+        br_val = -1.0
+    end
+    if br_val > 1.0
+        br_val = 1.0
+    end
+    libcam_prop(0, "Brightness", br_val)
+    
+    # Contrast: 0.0..2.0
+    cn_val = cn_raw / 100.0
+    if cn_val < 0.0
+        cn_val = 0.0
+    end
+    if cn_val > 2.0
+        cn_val = 2.0
+    end
+    libcam_prop(0, "Contrast", cn_val)
+    
+    # Saturation: 0.0..2.0
+    st_val = st_raw / 100.0
+    if st_val < 0.0
+        st_val = 0.0
+    end
+    if st_val > 2.0
+        st_val = 2.0
+    end
+    libcam_prop(0, "Saturation", st_val)
+    
+    # Sharpness: 0..2.0
+    sh_val = sh_raw / 50.0
+    if sh_val < 0.0
+        sh_val = 0.0
+    end
+    if sh_val > 2.0
+        sh_val = 2.0
+    end
+    libcam_prop(0, "Sharpness", sh_val)
+    
+    # Noise reduction clamping
+    if nr_mode < 0
+        nr_mode = 0
+    end
+    if nr_mode > 2
+        nr_mode = 2
+    end
+    libcam_prop(0, "NoiseReductionMode", nr_mode)
+
+    # --- 4. Process Display Frame ---
+    use(global "display_frame")
+    cvt_color("bayerrg2bgr")
+    fps(true, 20, 20)
+    
+    # Render overlay
+    put_text("--- Hardware Tuning Status (IMX219) ---", 10, 25, "simplex", 0.6, "cyan", 2)
+    
+    # Exposure Column 1
+    put_text("AE: " + ae_en, 10, 50, "simplex", 0.5, "white", 1)
+    put_text("Exp: " + exp_us + " us", 10, 70, "simplex", 0.5, "white", 1)
+    put_text("Gain: " + gain_val + " x", 10, 90, "simplex", 0.5, "white", 1)
+    put_text("Comp: " + comp_val + " EV", 10, 110, "simplex", 0.5, "white", 1)
+    
+    # Exposure Column 2 (Modes)
+    put_text("Metering: " + meter_lbl, 160, 50, "simplex", 0.5, "yellow", 1)
+    put_text("ExpMode: " + mode_lbl, 160, 70, "simplex", 0.5, "yellow", 1)
+    
+    # Image Block
+    put_text("Bright: " + br_val, 10, 140, "simplex", 0.5, "green", 1)
+    put_text("Contr: " + cn_val, 10, 160, "simplex", 0.5, "green", 1)
+    put_text("Satur: " + st_val, 10, 180, "simplex", 0.5, "green", 1)
+    put_text("Sharp: " + sh_val, 10, 200, "simplex", 0.5, "green", 1)
+    
+    imshow("Live Feed")
+end
+
+pipeline main
+    # 1. Capture Raw Frame
+    video_cap(0, "libcamera", "SRGGB8") -> global "display_frame"
+    
+    # 2. Update Hardware Controls
+    exec_seq apply_tuning_and_display
+    
+    # 3. Global Exit Handler
+    key = wait_key(1)
+    if key == 113 # 'q'
+        break
+    end
+    if key == 27 # ESC
+        break
+    end
+end
+
+pipeline shutdown
+    print("Calibration session finished. Cleaning up...")
+    video_close()
+    destroy_all_windows()
+end
+
+# Entry Point
+exec_seq setup
+exec_loop main
+exec_seq shutdown

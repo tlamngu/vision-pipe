@@ -269,7 +269,7 @@ public:
      * @param args Arguments for the item
      * @return Shared pointer to PipelineItem, or nullptr if not applicable
      */
-    virtual std::shared_ptr<PipelineItem> createPipelineItem(const std::vector<RuntimeValue>& args) const {
+    virtual std::shared_ptr<PipelineItem> createPipelineItem(const std::vector<RuntimeValue>& /*args*/) const {
         return nullptr;
     }
     

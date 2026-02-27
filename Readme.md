@@ -1,3 +1,15 @@
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tlamngu/vision-pipe)
+
+⚠️ Security Warning
+
+The ONLY official repository for vision-pipe is:
+https://github.com/tlamngu/vision-pipe
+
+The repository https://github.com/Basit3751/vision-pipe is an UNOFFICIAL copy
+and its releases have been identified as MALWARE. Do NOT download or run
+binaries from that repository.
+
 # VisionPipe
 
 VisionPipe is a powerful, domain-specific language (DSL) and high-performance image processing framework designed for building complex computer vision pipelines. Built on modern C++17 and powered by OpenCV, VisionPipe enables developers to create, manage, and execute sophisticated image processing workflows with minimal boilerplate code.
@@ -52,6 +64,8 @@ VisionPipe is designed for developers, researchers, and vision engineers who nee
 - Ensure proper cache initialization and cleanup in your pipelines
 - Refer to the cache management examples in `examples/test_cache.vsp`
 - Report specific conditions where this occurs to help improve future releases
+
+**Libcamera Dependencies Issue**: Due to fault of implement camera capture mechanism while adding support of Libcamera, after merged `feature/libcamera-integration`, currently all build must enable `-DLIBCAMERA_BACKEND=ON` in order to target the camera service and have Vision pipe works. This is simple issue and planned to be fix in next version.
 
 ### For Production Users
 
@@ -247,6 +261,8 @@ VisionPipe provides extensive customization options. Here are the main build fea
 | **Iceoryx2 IPC** | `VISIONPIPE_WITH_ICEORYX2` | OFF | Inter-process communication |
 | **SIMD Optimization** | `VISIONPIPE_ENABLE_SIMD` | ON | CPU SIMD vectorization (AVX2/SSE) |
 | **Link-Time Optimization** | `VISIONPIPE_ENABLE_LTO` | ON | Aggressive compiler optimization |
+| **LIBCAMERA backend** | `LIBCAMERA_BACKEND` | OFF | Adding libcamera as an additional backend of Vision Pipe |
+
 
 ### Feature Flags Example
 

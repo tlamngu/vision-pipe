@@ -376,6 +376,10 @@
                         <span>gui</span>
                         <span class="nav-item-count">16</span>
                     </a>
+                    <a class="nav-item" href="#ip_stream" onclick="filterByCategory('ip_stream')">
+                        <span>ip_stream</span>
+                        <span class="nav-item-count">5</span>
+                    </a>
                     <a class="nav-item" href="#math" onclick="filterByCategory('math')">
                         <span>math</span>
                         <span class="nav-item-count">28</span>
@@ -405,11 +409,11 @@
             <div class="sidebar-footer">
                 <div class="sidebar-stats">
                     <div class="stat-item">
-                        <div class="stat-value">429</div>
+                        <div class="stat-value">434</div>
                         <div class="stat-label">Functions</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-value">18</div>
+                        <div class="stat-value">19</div>
                         <div class="stat-label">Categories</div>
                     </div>
                 </div>
@@ -435,6 +439,7 @@
                     <button class="filter-chip" onclick="filterByCategory('feature')" data-category="feature">feature</button>
                     <button class="filter-chip" onclick="filterByCategory('filter')" data-category="filter">filter</button>
                     <button class="filter-chip" onclick="filterByCategory('gui')" data-category="gui">gui</button>
+                    <button class="filter-chip" onclick="filterByCategory('ip_stream')" data-category="ip_stream">ip_stream</button>
                     <button class="filter-chip" onclick="filterByCategory('math')" data-category="math">math</button>
                     <button class="filter-chip" onclick="filterByCategory('morphology')" data-category="morphology">morphology</button>
                     <button class="filter-chip" onclick="filterByCategory('stereo')" data-category="stereo">stereo</button>
@@ -8926,6 +8931,133 @@
                             </div>
                         </div>
                     </section>
+                    <section class="category-section" id="ip_stream" data-category="ip_stream">
+                        <div class="category-header">
+                            <div class="category-icon">&#128736;</div>
+                            <h2 class="category-title">ip_stream</h2>
+                            <span class="category-count">5 items</span>
+                        </div>
+                        <div class="items-grid">
+                            <div class="item-card" data-name="ip_stream" data-category="ip_stream">
+                                <div class="item-header">
+                                    <span class="item-name">ip_stream</span>
+                                </div>
+                                <p class="item-desc">Stream frames over HTTP (MJPEG) to remote clients. Access the stream from any web browser, VLC, or MJPEG viewer at http://&lt;ip&gt;:&lt;port&gt;/stream</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">port</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">TCP port to stream on <em style="color:var(--text-muted)">(default: RuntimeValue(int: 8080))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">bind_address</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">IP address to bind to. Use '0.0.0.0' for all interfaces (LAN access) <em style="color:var(--text-muted)">(default: RuntimeValue(string: "0.0.0.0"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">quality</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">JPEG encoding quality (1-100) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 80))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">ip_stream(8080) | ip_stream(9000, &quot;0.0.0.0&quot;, 90)</div>
+                                <div class="item-tags">
+                                    <span class="tag">stream</span>
+                                    <span class="tag">http</span>
+                                    <span class="tag">mjpeg</span>
+                                    <span class="tag">network</span>
+                                    <span class="tag">ip</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">remote</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="ip_stream_info" data-category="ip_stream">
+                                <div class="item-header">
+                                    <span class="item-name">ip_stream_info</span>
+                                </div>
+                                <p class="item-desc">Get information about active IP streams</p>
+                                <div class="item-example">ip_stream_info()</div>
+                                <div class="item-tags">
+                                    <span class="tag">stream</span>
+                                    <span class="tag">info</span>
+                                    <span class="tag">status</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="ip_stream_quality" data-category="ip_stream">
+                                <div class="item-header">
+                                    <span class="item-name">ip_stream_quality</span>
+                                </div>
+                                <p class="item-desc">Set the JPEG encoding quality for an IP stream</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">port</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Port of the stream to configure</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">quality</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">JPEG quality 1-100</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">ip_stream_quality(8080, 90)</div>
+                                <div class="item-tags">
+                                    <span class="tag">stream</span>
+                                    <span class="tag">quality</span>
+                                    <span class="tag">config</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="ip_stream_stop" data-category="ip_stream">
+                                <div class="item-header">
+                                    <span class="item-name">ip_stream_stop</span>
+                                </div>
+                                <p class="item-desc">Stop an IP stream server</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">port</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Port of the stream to stop</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">ip_stream_stop(8080)</div>
+                                <div class="item-tags">
+                                    <span class="tag">stream</span>
+                                    <span class="tag">stop</span>
+                                    <span class="tag">close</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="ip_stream_url" data-category="ip_stream">
+                                <div class="item-header">
+                                    <span class="item-name">ip_stream_url</span>
+                                </div>
+                                <p class="item-desc">Get the URL for an IP stream</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">port</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Port of the stream <em style="color:var(--text-muted)">(default: RuntimeValue(int: 8080))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">$url = ip_stream_url(8080)</div>
+                                <div class="item-tags">
+                                    <span class="tag">stream</span>
+                                    <span class="tag">url</span>
+                                    <span class="tag">address</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                     <section class="category-section" id="math" data-category="math">
                         <div class="category-header">
                             <div class="category-icon">&#128736;</div>
@@ -16373,6 +16505,51 @@
             example: "update_window_title(\"Output\", \"Threshold: {threshold} - FPS: {fps}\")",
             params: " window Window name format Title format with {var} placeholders",
             tags: " gui window title"
+        },
+        {
+            id: "ip_stream",
+            name: "ip_stream",
+            category: "ip_stream",
+            description: "Stream frames over HTTP (MJPEG) to remote clients. Access the stream from any web browser, VLC, or MJPEG viewer at http://<ip>:<port>/stream",
+            example: "ip_stream(8080) | ip_stream(9000, \"0.0.0.0\", 90)",
+            params: " port TCP port to stream on bind_address IP address to bind to. Use '0.0.0.0' for all interfaces (LAN access) quality JPEG encoding quality (1-100)",
+            tags: " stream http mjpeg network ip camera remote"
+        },
+        {
+            id: "ip_stream_info",
+            name: "ip_stream_info",
+            category: "ip_stream",
+            description: "Get information about active IP streams",
+            example: "ip_stream_info()",
+            params: "",
+            tags: " stream info status"
+        },
+        {
+            id: "ip_stream_quality",
+            name: "ip_stream_quality",
+            category: "ip_stream",
+            description: "Set the JPEG encoding quality for an IP stream",
+            example: "ip_stream_quality(8080, 90)",
+            params: " port Port of the stream to configure quality JPEG quality 1-100",
+            tags: " stream quality config"
+        },
+        {
+            id: "ip_stream_stop",
+            name: "ip_stream_stop",
+            category: "ip_stream",
+            description: "Stop an IP stream server",
+            example: "ip_stream_stop(8080)",
+            params: " port Port of the stream to stop",
+            tags: " stream stop close"
+        },
+        {
+            id: "ip_stream_url",
+            name: "ip_stream_url",
+            category: "ip_stream",
+            description: "Get the URL for an IP stream",
+            example: "$url = ip_stream_url(8080)",
+            params: " port Port of the stream",
+            tags: " stream url address"
         },
         {
             id: "abs_scalar",

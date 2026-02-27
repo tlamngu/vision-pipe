@@ -1,0 +1,1017 @@
+#include "utils/camera_device_manager.h"
+#include "utils/Logger.h"
+#include <opencv2/videoio/registry.hpp>
+#include <algorithm>
+#include <iostream>
+#include <sys/mman.h>
+#include <thread>
+
+namespace visionpipe {
+
+// Component ID for logging
+static const std::string LOG_COMPONENT = "CameraDeviceManager";
+
+CameraDeviceManager& CameraDeviceManager::instance() {
+    static CameraDeviceManager instance;
+    return instance;
+}
+
+CameraDeviceManager::CameraDeviceManager() {
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+    _libcameraManager = std::make_unique<libcamera::CameraManager>();
+#endif
+}
+
+CameraDeviceManager::~CameraDeviceManager() {
+    releaseAll();
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+    if (_libcameraManagerStarted && _libcameraManager) {
+        _libcameraManager->stop();
+    }
+#endif
+}
+
+CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
+    std::string lower = backendStr;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    
+    if (lower == "dshow") {  return CameraBackend::OPENCV_DSHOW; }
+    if (lower == "v4l2") {  return CameraBackend::OPENCV_V4L2; }
+    if (lower == "ffmpeg") {  return CameraBackend::OPENCV_FFMPEG; }
+    if (lower == "gstreamer") {  return CameraBackend::OPENCV_GSTREAMER; }
+    if (lower == "libcamera") {  return CameraBackend::LIBCAMERA; }
+    
+    return CameraBackend::OPENCV_AUTO;
+}
+
+CameraBackend CameraDeviceManager::fromOpenCVBackend(int cvBackend) {
+    switch (cvBackend) {
+        case cv::CAP_DSHOW: return CameraBackend::OPENCV_DSHOW;
+        case cv::CAP_V4L2: return CameraBackend::OPENCV_V4L2;
+        case cv::CAP_FFMPEG: return CameraBackend::OPENCV_FFMPEG;
+        case cv::CAP_GSTREAMER: return CameraBackend::OPENCV_GSTREAMER;
+        default: return CameraBackend::OPENCV_AUTO;
+    }
+}
+
+bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBackend backend, cv::Mat& frame, const std::string& requestedFormat) {
+    std::unique_lock<std::recursive_mutex> lock(_mutex);
+    
+    auto it = _sessions.find(sourceId);
+    bool needsOpen = false;
+    
+    if (it == _sessions.end()) {
+        needsOpen = true;
+    } else {
+        // Check if camera is actually initialized and opened
+        if (it->second.backend == CameraBackend::LIBCAMERA) {
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+            if (!it->second.libcameraDevice) needsOpen = true;
+#endif
+        } else {
+            if (!it->second.opencvCapture || !it->second.opencvCapture->isOpened()) {
+                needsOpen = true;
+            }
+        }
+    }
+
+    if (needsOpen) {
+        if (!openCamera(sourceId, backend, requestedFormat)) {
+            return false;
+        }
+        // Small settle delay for hardware link setup
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        it = _sessions.find(sourceId);
+    }
+    
+    CameraSession& session = it->second;
+    
+    // Check if backend matches
+    if (session.backend != backend && backend != CameraBackend::OPENCV_AUTO) {
+        SystemLogger::warning(LOG_COMPONENT, "Requested backend differs from opened camera, using existing: " + sourceId);
+    }
+    
+    // Read frame based on backend
+    if (session.backend == CameraBackend::LIBCAMERA) {
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        // Handle deferred startup
+        if (!session.libcameraStarted && session.libcameraDevice) {
+            if (session.libcameraDevice->start() < 0) {
+                SystemLogger::error(LOG_COMPONENT, "Failed to deferred-start libcamera: " + sourceId);
+                return false;
+            }
+            // Queue initial requests
+            for (auto& request : session.requests) {
+                session.libcameraDevice->queueRequest(request.get());
+            }
+            session.libcameraStarted = true;
+            SystemLogger::info(LOG_COMPONENT, "Deferred-started libcamera for source: " + sourceId);
+            // Small settle delay after first start to avoid link contention
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+
+        // Switch to session-specific lock for waiting
+        std::unique_lock<std::mutex> sessionLock(*session.sessionMutex);
+        lock.unlock(); // Release global lock
+        return readLibCameraFrame(session, frame, sessionLock);
+#else
+        SystemLogger::error(LOG_COMPONENT, "libcamera backend requested but not compiled in");
+        return false;
+#endif
+    } else {
+        return readOpenCVFrame(session, frame);
+    }
+}
+
+bool CameraDeviceManager::prepareCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return openCamera(sourceId, backend, requestedFormat, false); // startImmediate = false
+}
+
+std::shared_ptr<cv::VideoCapture> CameraDeviceManager::getOpenCVCapture(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end() && it->second.backend != CameraBackend::LIBCAMERA) {
+        return it->second.opencvCapture;
+    }
+    return nullptr;
+}
+
+void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end()) {
+        if (it->second.opencvCapture) {
+            it->second.opencvCapture->release();
+        }
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->stop();
+        }
+
+        // Clean up request mapping
+        for (auto itReq = _requestToSource.begin(); itReq != _requestToSource.end(); ) {
+            if (itReq->second == sourceId) {
+                itReq = _requestToSource.erase(itReq);
+            } else {
+                ++itReq;
+            }
+        }
+
+        // Clean up mapped buffers
+        for (auto const& [buffer, mb] : it->second.mappedBuffers) {
+            if (mb.data != MAP_FAILED) {
+                munmap(mb.data, mb.length);
+            }
+        }
+        it->second.mappedBuffers.clear();
+
+        it->second.requests.clear();
+        it->second.allocator.reset();
+        it->second.config.reset();
+        
+        if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->release();
+        }
+#endif
+        _sessions.erase(it);
+        SystemLogger::info(LOG_COMPONENT, "Released camera: " + sourceId);
+    }
+}
+
+void CameraDeviceManager::releaseAll() {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    for (auto& pair : _sessions) {
+        if (pair.second.opencvCapture) {
+            pair.second.opencvCapture->release();
+        }
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        if (pair.second.libcameraDevice) {
+            pair.second.libcameraDevice->stop();
+            
+            // Clean up mapped buffers
+            for (auto const& [buffer, mb] : pair.second.mappedBuffers) {
+                if (mb.data != MAP_FAILED) {
+                    munmap(mb.data, mb.length);
+                }
+            }
+            pair.second.mappedBuffers.clear();
+
+            pair.second.requests.clear();
+            pair.second.allocator.reset();
+            pair.second.config.reset();
+            pair.second.libcameraDevice->release();
+        }
+#endif
+    }
+    _sessions.clear();
+    _requestToSource.clear();
+    SystemLogger::info(LOG_COMPONENT, "Released all cameras");
+}
+
+bool CameraDeviceManager::isOpen(const std::string& sourceId) const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    return _sessions.find(sourceId) != _sessions.end();
+}
+
+CameraBackend CameraDeviceManager::getBackend(const std::string& sourceId) const {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end()) {
+        return it->second.backend;
+    }
+    return CameraBackend::OPENCV_AUTO;
+}
+
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+void CameraDeviceManager::setLibCameraConfig(const std::string& sourceId, const LibCameraConfig& config) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    // Ensure session exists and is set to libcamera
+    CameraSession& session = _sessions[sourceId];
+    session.backend = CameraBackend::LIBCAMERA;
+    session.targetConfig = config;
+}
+
+bool CameraDeviceManager::setLibCameraControl(const std::string& sourceId, const std::string& controlName, float value) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    // Create session if it doesn't exist (to allow pre-set controls)
+    CameraSession& session = _sessions[sourceId];
+    session.backend = CameraBackend::LIBCAMERA;
+    
+    // Cache the control
+    session.activeControls[controlName] = value;
+
+    // If camera is already open, we can try to validate it immediately,
+    // but caching it is enough as it will be applied to the next request.
+    if (session.libcameraDevice) {
+        const auto& controls = session.libcameraDevice->controls();
+        const libcamera::ControlId* targetId = nullptr;
+        const libcamera::ControlInfo* info = nullptr;
+
+        for (const auto& [id, controlInfo] : controls) {
+            if (id->name() == controlName) {
+                targetId = id;
+                info = &controlInfo;
+                break;
+            }
+        }
+
+        if (!targetId) {
+            std::cout << "[ERROR] Control not supported by hardware: " << controlName << std::endl;
+            return false;
+        } else if (info) {
+            std::cout << "[DEBUG] Control " << controlName << " supported. Range: " << 
+                               info->min().toString() << " to " << info->max().toString() << std::endl;
+        }
+    } else {
+        std::cout << "[DEBUG] Camera not open yet, caching control: " << controlName << std::endl;
+    }
+    
+    return true;
+}
+#endif
+
+bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend backend, const std::string& requestedFormat, bool startImmediate) {
+    CameraSession session;
+    session.backend = backend;
+    
+    // Preserve existing config if session already exists
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end()) {
+        session.targetConfig = it->second.targetConfig;
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        session.activeControls = it->second.activeControls;
+        
+        // Properly release old hardware resources if they were active
+        if (it->second.libcameraDevice) {
+            it->second.libcameraDevice->stop();
+            it->second.requests.clear();
+            it->second.allocator.reset();
+            it->second.config.reset();
+            it->second.libcameraDevice->release();
+            SystemLogger::info(LOG_COMPONENT, "Closing existing libcamera session for reassignment: " + sourceId);
+        }
+#endif
+        if (it->second.opencvCapture) {
+            it->second.opencvCapture->release();
+            SystemLogger::info(LOG_COMPONENT, "Closing existing OpenCV session for reassignment: " + sourceId);
+        }
+    }
+    
+    // Move session into map to ensure stable storage
+    _sessions[sourceId] = std::move(session);
+    CameraSession& finalSession = _sessions[sourceId];
+
+    if (backend == CameraBackend::LIBCAMERA) {
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        // Set format in config if requested
+        if (!requestedFormat.empty()) {
+            finalSession.targetConfig.pixelFormat = requestedFormat;
+        } 
+        
+        if (!openLibCamera(sourceId, finalSession, startImmediate)) {
+            _sessions.erase(sourceId);
+            return false;
+        }
+#else
+        SystemLogger::error(LOG_COMPONENT, "libcamera backend not available");
+        _sessions.erase(sourceId);
+        return false;
+#endif
+    } else {
+        // OpenCV backend initialization...
+        // Note: For OpenCV, we could still use the local session if we wanted, 
+        // but let's be consistent.
+        
+        int cvBackend = cv::CAP_ANY;
+        switch (backend) {
+            case CameraBackend::OPENCV_DSHOW: cvBackend = cv::CAP_DSHOW; break;
+            case CameraBackend::OPENCV_V4L2: cvBackend = cv::CAP_V4L2; break;
+            case CameraBackend::OPENCV_FFMPEG: cvBackend = cv::CAP_FFMPEG; break;
+            case CameraBackend::OPENCV_GSTREAMER: 
+                cvBackend = cv::CAP_GSTREAMER; 
+                if (!cv::videoio_registry::hasBackend(cv::CAP_GSTREAMER)) {
+                    SystemLogger::warning(LOG_COMPONENT, "GStreamer backend requested but not supported by this OpenCV build.");
+                }
+                break;
+            default: cvBackend = cv::CAP_ANY; break;
+        }
+        
+        finalSession.opencvCapture = std::make_shared<cv::VideoCapture>();
+        
+        // Try to parse sourceId as integer for camera index
+        int index = -1;
+        bool isIndex = false;
+
+        try {
+            index = std::stoi(sourceId);
+            isIndex = true;
+        } catch (...) {
+            if (sourceId.find("/dev/video") == 0 && sourceId.length() > 10) {
+                try {
+                    std::string num = sourceId.substr(10);
+                    index = std::stoi(num);
+                    isIndex = true;
+                } catch (...) {}
+            }
+        }
+
+        if (isIndex) {
+            finalSession.opencvCapture->open(index, cvBackend);
+        } else {
+            finalSession.opencvCapture->open(sourceId, cvBackend);
+        }
+        
+        if (!requestedFormat.empty() && requestedFormat.length() >= 4) {
+            std::string fmtUpper = requestedFormat;
+            std::transform(fmtUpper.begin(), fmtUpper.end(), fmtUpper.begin(), ::toupper);
+            
+            int fourcc = cv::VideoWriter::fourcc(
+                fmtUpper[0], fmtUpper[1], fmtUpper[2], fmtUpper[3]
+            );
+            finalSession.opencvCapture->set(cv::CAP_PROP_FOURCC, fourcc);
+            SystemLogger::info(LOG_COMPONENT, "Requested FourCC: " + fmtUpper);
+        }
+        
+        if (!finalSession.opencvCapture->isOpened()) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to open camera with OpenCV: " + sourceId);
+            _sessions.erase(sourceId);
+            return false;
+        }
+        
+        SystemLogger::info(LOG_COMPONENT, "Opened camera with OpenCV backend: " + sourceId);
+    }
+    
+    return true;
+}
+
+bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame) {
+    if (!session.opencvCapture || !session.opencvCapture->isOpened()) {
+        std::cerr << "[ERROR] readOpenCVFrame: Camera not open" << std::endl;
+        return false;
+    }
+    bool success = session.opencvCapture->read(frame);
+    if (!success) {
+        std::cerr << "[ERROR] readOpenCVFrame: Failed to read frame (returned false)" << std::endl;
+    } else if (frame.empty()) {
+        std::cerr << "[ERROR] readOpenCVFrame: Success but frame empty" << std::endl;
+    }
+    return success;
+}
+
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+
+libcamera::CameraManager* CameraDeviceManager::getLibCameraManager() {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    if (!_libcameraManagerStarted && _libcameraManager) {
+        int ret = _libcameraManager->start();
+        if (ret < 0) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to start libcamera manager");
+            return nullptr;
+        }
+        _libcameraManagerStarted = true;
+    }
+    return _libcameraManager.get();
+}
+
+std::shared_ptr<libcamera::Camera> CameraDeviceManager::getLibCamera(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it != _sessions.end() && it->second.backend == CameraBackend::LIBCAMERA) {
+        return it->second.libcameraDevice;
+    }
+    return nullptr;
+}
+
+std::string CameraDeviceManager::getBayerPattern(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end() || !it->second.config) return "";
+    
+    libcamera::PixelFormat fmt = it->second.config->at(0).pixelFormat;
+    
+    if (fmt == libcamera::formats::SBGGR8 || fmt == libcamera::formats::SBGGR10_CSI2P || fmt == libcamera::formats::SBGGR12_CSI2P || fmt == libcamera::formats::SBGGR16) return "BGGR";
+    if (fmt == libcamera::formats::SGBRG8 || fmt == libcamera::formats::SGBRG10_CSI2P || fmt == libcamera::formats::SGBRG12_CSI2P || fmt == libcamera::formats::SGBRG16) return "GBRG";
+    if (fmt == libcamera::formats::SGRBG8 || fmt == libcamera::formats::SGRBG10_CSI2P || fmt == libcamera::formats::SGRBG12_CSI2P || fmt == libcamera::formats::SGRBG16) return "GRBG";
+    if (fmt == libcamera::formats::SRGGB8 || fmt == libcamera::formats::SRGGB10_CSI2P || fmt == libcamera::formats::SRGGB12_CSI2P || fmt == libcamera::formats::SRGGB16) return "RGGB";
+    
+    return "";
+}
+
+void CameraDeviceManager::listLibCameraFormats(const std::string& sourceId) {
+    auto* manager = getLibCameraManager();
+    if (!manager) return;
+    
+    auto cameras = manager->cameras();
+    std::shared_ptr<libcamera::Camera> camera;
+    try {
+        int index = std::stoi(sourceId);
+        if (index >= 0 && index < static_cast<int>(cameras.size())) camera = cameras[index];
+    } catch (...) {
+        camera = manager->get(sourceId);
+    }
+    
+    if (!camera) {
+        SystemLogger::error(LOG_COMPONENT, "listLibCameraFormats: Camera not found: " + sourceId);
+        return;
+    }
+    
+    bool needsRelease = false;
+    if (camera->acquire() == 0) needsRelease = true;
+    
+    std::cout << "\n=== Supported Formats for Camera [" << sourceId << "] ===" << std::endl;
+    
+    std::vector<libcamera::StreamRole> roles = {
+        libcamera::StreamRole::VideoRecording,
+        libcamera::StreamRole::Viewfinder,
+        libcamera::StreamRole::StillCapture,
+        libcamera::StreamRole::Raw
+    };
+    
+    for (auto role : roles) {
+        std::string roleName = "Unknown";
+        if (role == libcamera::StreamRole::VideoRecording) roleName = "VideoRecording";
+        else if (role == libcamera::StreamRole::Viewfinder) roleName = "Viewfinder";
+        else if (role == libcamera::StreamRole::StillCapture) roleName = "StillCapture";
+        else if (role == libcamera::StreamRole::Raw) roleName = "Raw";
+        
+        std::unique_ptr<libcamera::CameraConfiguration> config = camera->generateConfiguration({role});
+        if (!config) continue;
+        
+        std::cout << "Role: " << roleName << std::endl;
+        const libcamera::StreamConfiguration& streamCfg = config->at(0);
+        const libcamera::StreamFormats& formats = streamCfg.formats();
+        
+        for (const auto& fmt : formats.pixelformats()) {
+            std::cout << "  - Format: " << fmt.toString() << std::endl;
+            std::cout << "    Resolutions: ";
+            auto sizes = formats.sizes(fmt);
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                std::cout << sizes[i].toString() << (i < sizes.size() - 1 ? ", " : "");
+            }
+            std::cout << std::endl;
+        }
+    }
+    std::cout << "===========================================\n" << std::endl;
+    
+    if (needsRelease) camera->release();
+}
+
+void CameraDeviceManager::debugLibCameraConfig(const std::string& sourceId) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end()) {
+        SystemLogger::error(LOG_COMPONENT, "debugLibCameraConfig: Session not found: " + sourceId);
+        return;
+    }
+    
+    CameraSession& session = it->second;
+    if (!session.libcameraDevice || !session.config) {
+        SystemLogger::error(LOG_COMPONENT, "debugLibCameraConfig: Camera not configured: " + sourceId);
+        return;
+    }
+    
+    std::cout << "\n=== Debug Configuration for Camera [" << sourceId << "] ===" << std::endl;
+    std::cout << "Camera ID: " << session.libcameraDevice->id() << std::endl;
+    std::cout << "Started: " << (session.libcameraStarted ? "Yes" : "No") << std::endl;
+    
+    if (session.config->size() > 0) {
+        const libcamera::StreamConfiguration& cfg = session.config->at(0);
+        std::cout << "Stream 0:" << std::endl;
+        std::cout << "  Pixel Format: " << cfg.pixelFormat.toString() << std::endl;
+        std::cout << "  Size: " << cfg.size.toString() << std::endl;
+        std::cout << "  Stride: " << cfg.stride << std::endl;
+        std::cout << "  Frame Size: " << cfg.frameSize << std::endl;
+        std::cout << "  Buffer Count: " << cfg.bufferCount << std::endl;
+    }
+    std::cout << "===============================================\n" << std::endl;
+}
+
+bool CameraDeviceManager::openLibCamera(const std::string& sourceId, CameraSession& session, bool startImmediate) {
+    auto* manager = getLibCameraManager();
+    if (!manager) {
+        return false;
+    }
+    
+    auto cameras = manager->cameras();
+    if (cameras.empty()) {
+        SystemLogger::error(LOG_COMPONENT, "No libcamera devices found");
+        return false;
+    }
+    
+    // Find camera by index or ID
+    std::shared_ptr<libcamera::Camera> camera;
+    try {
+        int index = std::stoi(sourceId);
+        if (index >= 0 && index < static_cast<int>(cameras.size())) {
+            camera = cameras[index];
+        }
+    } catch (...) {
+        // Try by ID string
+        camera = manager->get(sourceId);
+    }
+    
+    if (!camera) {
+        SystemLogger::error(LOG_COMPONENT, "libcamera device not found: " + sourceId);
+        return false;
+    }
+    
+    if (camera->acquire() < 0) {
+        SystemLogger::error(LOG_COMPONENT, "Failed to acquire libcamera device: " + sourceId);
+        return false;
+    }
+    
+    session.libcameraDevice = camera;
+    
+    // Map string role to StreamRole
+    libcamera::StreamRole role = libcamera::StreamRole::VideoRecording;
+    if (session.targetConfig.streamRole == "StillCapture") 
+        role = libcamera::StreamRole::StillCapture;
+    else if (session.targetConfig.streamRole == "Viewfinder") 
+        role = libcamera::StreamRole::Viewfinder;
+    else if (session.targetConfig.streamRole == "Raw")
+        role = libcamera::StreamRole::Raw;
+
+    if (!session.config) {
+        session.config = camera->generateConfiguration({role});
+    }
+    
+    if (!session.config) {
+        SystemLogger::error(LOG_COMPONENT, "Failed to generate libcamera configuration");
+        camera->release();
+        return false;
+    }
+
+    // Extended pixel format mapping covering YUV, RGB, Bayer, MJPEG, Greyscale
+    // Extended pixel format mapping covering YUV, RGB, Bayer, MJPEG
+    static const std::map<std::string, libcamera::PixelFormat> lcFormats = {
+        // Packed YUV 4:2:2
+        { "YUYV",  libcamera::formats::YUYV },
+        { "YUY2",  libcamera::formats::YUYV },
+        { "UYVY",  libcamera::formats::UYVY },
+        { "YVYU",  libcamera::formats::YVYU },
+        { "VYUY",  libcamera::formats::VYUY },
+
+        // Planar / semi-planar YUV 4:2:0
+        { "NV12",  libcamera::formats::NV12 },
+        { "NV21",  libcamera::formats::NV21 },
+        { "YUV420", libcamera::formats::YUV420 },
+
+        // RGB / BGR (8-bit)
+        { "RGB888", libcamera::formats::RGB888 },
+        { "BGR888", libcamera::formats::BGR888 },
+        { "RGB24",  libcamera::formats::RGB888 },
+        { "BGR24",  libcamera::formats::BGR888 },
+
+        // Compressed
+        { "MJPEG", libcamera::formats::MJPEG },
+        { "MJPG",  libcamera::formats::MJPEG },
+        { "JPEG",  libcamera::formats::MJPEG },
+
+        // 8-bit Bayer
+        { "SBGGR8", libcamera::formats::SBGGR8 },
+        { "SGBRG8", libcamera::formats::SGBRG8 },
+        { "SGRBG8", libcamera::formats::SGRBG8 },
+        { "SRGGB8", libcamera::formats::SRGGB8 },
+
+        // 10-bit Bayer packed (CSI2P; IMX219, IMX477, etc.)
+        { "SBGGR10", libcamera::formats::SBGGR10_CSI2P },
+        { "SGBRG10", libcamera::formats::SGBRG10_CSI2P },
+        { "SGRBG10", libcamera::formats::SGRBG10_CSI2P },
+        { "SRGGB10", libcamera::formats::SRGGB10_CSI2P },
+
+        // 12-bit Bayer packed
+        { "SBGGR12", libcamera::formats::SBGGR12_CSI2P },
+        { "SGBRG12", libcamera::formats::SGBRG12_CSI2P },
+        { "SGRBG12", libcamera::formats::SGRBG12_CSI2P },
+        { "SRGGB12", libcamera::formats::SRGGB12_CSI2P },
+
+        // 16-bit unpacked Bayer
+        { "SBGGR16", libcamera::formats::SBGGR16 },
+        { "SGBRG16", libcamera::formats::SGBRG16 },
+        { "SGRBG16", libcamera::formats::SGRBG16 },
+        { "SRGGB16", libcamera::formats::SRGGB16 },
+    };
+    
+    //TODO: Don't override the config if it already set.
+
+    // Apply configuration
+    libcamera::StreamConfiguration& streamCfg = session.config->at(0);
+    
+    // Look up pixel format (case-insensitive)
+    std::string fmtKey = session.targetConfig.pixelFormat;
+    std::transform(fmtKey.begin(), fmtKey.end(), fmtKey.begin(), ::toupper);
+    
+    auto it = lcFormats.find(fmtKey);
+    if (it != lcFormats.end()) {
+        streamCfg.pixelFormat = it->second;
+        SystemLogger::info(LOG_COMPONENT, "Requested pixel format: " + fmtKey);
+    } else {
+        streamCfg.pixelFormat = libcamera::formats::BGR888; // Safe default
+        SystemLogger::warning(LOG_COMPONENT, "Unknown format '" + fmtKey + "', defaulting to BGR888");
+    }
+    
+    streamCfg.size = {
+        static_cast<unsigned int>(session.targetConfig.width), 
+        static_cast<unsigned int>(session.targetConfig.height)
+    };
+    streamCfg.bufferCount = static_cast<unsigned int>(session.targetConfig.bufferCount);
+    
+    SystemLogger::info(LOG_COMPONENT, 
+        "Requested config: " + std::to_string(streamCfg.size.width) + "x" + 
+        std::to_string(streamCfg.size.height) + " " + 
+        streamCfg.pixelFormat.toString());
+    
+    // Validate configuration
+    libcamera::CameraConfiguration::Status validation = session.config->validate();
+    if (validation == libcamera::CameraConfiguration::Invalid) {
+        SystemLogger::error(LOG_COMPONENT, "Invalid libcamera configuration");
+        camera->release();
+        return false;
+    } else if (validation == libcamera::CameraConfiguration::Adjusted) {
+        auto& finalCfg = session.config->at(0);
+        SystemLogger::warning(LOG_COMPONENT, 
+            "libcamera configuration adjusted to: " + 
+            std::to_string(finalCfg.size.width) + "x" + 
+            std::to_string(finalCfg.size.height) + " " + 
+            finalCfg.pixelFormat.toString());
+    } else {
+        SystemLogger::info(LOG_COMPONENT, "libcamera configuration validated successfully");
+    }
+    
+    if (camera->configure(session.config.get()) < 0) {
+        SystemLogger::error(LOG_COMPONENT, "Failed to configure libcamera");
+        camera->release();
+        return false;
+    }
+    
+    // Allocate buffers
+    session.allocator = std::make_unique<libcamera::FrameBufferAllocator>(camera);
+    libcamera::Stream* stream = session.config->at(0).stream();
+    
+    if (session.allocator->allocate(stream) < 0) {
+        SystemLogger::error(LOG_COMPONENT, "Failed to allocate libcamera buffers");
+        camera->release();
+        return false;
+    }
+    
+    // Create requests
+    const std::vector<std::unique_ptr<libcamera::FrameBuffer>>& buffers = session.allocator->buffers(stream);
+    for (const auto& buffer : buffers) {
+        auto request = camera->createRequest();
+        if (!request) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to create libcamera request");
+            camera->release();
+            return false;
+        }
+        request->addBuffer(stream, buffer.get());
+        
+        // Apply initial controls to these requests
+        applyLibCameraControls(session, request.get());
+        
+        // Optimized mapping for callback
+        _requestToSource[request.get()] = sourceId;
+        
+        session.requests.push_back(std::move(request));
+    }
+
+    // Map buffers for fast access
+    session.mappedBuffers.clear();
+    for (const auto& request : session.requests) {
+        for (auto const& [stream, buffer] : request->buffers()) {
+            if (session.mappedBuffers.count(buffer)) continue;
+            
+            const auto& planes = buffer->planes();
+            if (planes.empty()) continue;
+            const libcamera::FrameBuffer::Plane& plane = planes[0];
+            void* data = mmap(NULL, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+            if (data != MAP_FAILED) {
+                session.mappedBuffers[buffer] = {data, plane.length};
+            } else {
+                SystemLogger::error(LOG_COMPONENT, "Failed to mmap frame buffer during setup");
+                camera->release();
+                return false;
+            }
+        }
+    }
+    
+    // Connect signal for completed requests
+    camera->requestCompleted.disconnect(this);
+    camera->requestCompleted.connect(this, &CameraDeviceManager::libcameraRequestComplete);
+    
+    if (startImmediate) {
+        // Start camera
+        if (camera->start() < 0) {
+            SystemLogger::error(LOG_COMPONENT, "Failed to start libcamera");
+            camera->release();
+            return false;
+        }
+        
+        // Queue initial requests
+        for (auto& request : session.requests) {
+            camera->queueRequest(request.get());
+        }
+        session.libcameraStarted = true;
+        SystemLogger::info(LOG_COMPONENT, "Successfully opened and started camera with libcamera backend: " + sourceId);
+    } else {
+        session.libcameraStarted = false;
+        SystemLogger::info(LOG_COMPONENT, "Successfully configured camera with libcamera backend (deferred start): " + sourceId);
+    }
+    
+    return true;
+}
+
+
+bool CameraDeviceManager::readLibCameraFrame(CameraSession& session, cv::Mat& frame, std::unique_lock<std::mutex>& lock) {
+    // Wait for frame with timeout
+    if (session.frameCond->wait_for(lock, std::chrono::milliseconds(500), [&]{ return session.frameReady; })) {
+        frame = session.latestFrame; // Mat assignment is fast (ref counting)
+        session.frameReady = false;
+        return true;
+    }
+    return false;
+}
+
+// Helper function to unpack MIPI CSI-2 RAW10 to 16-bit
+cv::Mat CameraDeviceManager::unpackRAW10CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+    cv::Mat unpacked(height, width, CV_16UC1);
+    
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* srcRow = packed + y * stride;
+        uint16_t* dstRow = unpacked.ptr<uint16_t>(y);
+        
+        for (int x = 0; x < width; x += 4) {
+            // RAW10 CSI2P: 4 pixels in 5 bytes
+            // [P0[9:2]] [P1[9:2]] [P2[9:2]] [P3[9:2]] [P3[1:0]P2[1:0]P1[1:0]P0[1:0]]
+            uint8_t b0 = srcRow[0];
+            uint8_t b1 = srcRow[1];
+            uint8_t b2 = srcRow[2];
+            uint8_t b3 = srcRow[3];
+            uint8_t b4 = srcRow[4];
+            
+            dstRow[x + 0] = (static_cast<uint16_t>(b0) << 2) | ((b4 >> 0) & 0x03);
+            dstRow[x + 1] = (static_cast<uint16_t>(b1) << 2) | ((b4 >> 2) & 0x03);
+            dstRow[x + 2] = (static_cast<uint16_t>(b2) << 2) | ((b4 >> 4) & 0x03);
+            dstRow[x + 3] = (static_cast<uint16_t>(b3) << 2) | ((b4 >> 6) & 0x03);
+            
+            srcRow += 5;
+        }
+    }
+    
+    return unpacked;
+}
+
+// Helper function to unpack MIPI CSI-2 RAW12 to 16-bit
+cv::Mat CameraDeviceManager::unpackRAW12CSI2P(const uint8_t* packed, int width, int height, size_t stride) {
+    cv::Mat unpacked(height, width, CV_16UC1);
+    
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* srcRow = packed + y * stride;
+        uint16_t* dstRow = unpacked.ptr<uint16_t>(y);
+        
+        for (int x = 0; x < width; x += 2) {
+            // RAW12 CSI2P: 2 pixels in 3 bytes
+            // [P0[11:4]] [P1[11:4]] [P1[3:0]P0[3:0]]
+            uint8_t b0 = srcRow[0];
+            uint8_t b1 = srcRow[1];
+            uint8_t b2 = srcRow[2];
+            
+            dstRow[x + 0] = (static_cast<uint16_t>(b0) << 4) | (b2 & 0x0F);
+            dstRow[x + 1] = (static_cast<uint16_t>(b1) << 4) | ((b2 >> 4) & 0x0F);
+            
+            srcRow += 3;
+        }
+    }
+    
+    return unpacked;
+}
+
+void CameraDeviceManager::libcameraRequestComplete(libcamera::Request* request) {
+    if (request->status() == libcamera::Request::RequestCancelled) {
+        return;
+    }
+    
+    std::string sourceId;
+    {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        auto it = _requestToSource.find(request);
+        if (it != _requestToSource.end()) {
+            sourceId = it->second;
+        }
+    }
+    
+    if (sourceId.empty()) {
+        SystemLogger::warning(LOG_COMPONENT, "Received complete for unknown request");
+        return;
+    }
+    
+    // Protect session lookup
+    std::unique_lock<std::recursive_mutex> mainLock(_mutex);
+    auto it = _sessions.find(sourceId);
+    if (it == _sessions.end()) return;
+    
+    CameraSession& session = it->second;
+    mainLock.unlock(); // Release global lock early
+    
+    // Use session-specific lock for data processing
+    std::lock_guard<std::mutex> sessionLock(*session.sessionMutex);
+    
+    // Get the buffer and convert to cv::Mat
+    const libcamera::Request::BufferMap& buffers = request->buffers();
+    for (auto const& [stream, buffer] : buffers) {
+        if (session.mappedBuffers.count(buffer) == 0) continue;
+        
+        void* data = session.mappedBuffers[buffer].data;
+        const libcamera::StreamConfiguration& streamCfg = stream->configuration();
+        libcamera::PixelFormat fmt = streamCfg.pixelFormat;
+        
+        int width = streamCfg.size.width;
+        int height = streamCfg.size.height;
+        size_t stride = streamCfg.stride;
+        
+        cv::Mat frameMat;
+        bool needsUnpacking = false;
+        
+        // --- Determine format and process ---
+        
+        if (fmt == libcamera::formats::YUYV ||
+            fmt == libcamera::formats::UYVY ||
+            fmt == libcamera::formats::YVYU ||
+            fmt == libcamera::formats::VYUY) {
+            frameMat = cv::Mat(height, width, CV_8UC2, data, stride);
+        }
+        else if (fmt == libcamera::formats::NV12 || fmt == libcamera::formats::NV21) {
+            int totalHeight = height * 3 / 2;
+            frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::YUV420) {
+            int totalHeight = height * 3 / 2;
+            frameMat = cv::Mat(totalHeight, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::RGB888) {
+            cv::Mat rgb(height, width, CV_8UC3, data, stride);
+            cv::cvtColor(rgb, frameMat, cv::COLOR_RGB2BGR);
+            needsUnpacking = true; // Avoid cloning again since cvtColor created a new mat
+        }
+        else if (fmt == libcamera::formats::BGR888) {
+            frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+        }
+        else if (fmt == libcamera::formats::MJPEG) {
+            // For MJPEG, we might need the actual bytesused from metadata
+            size_t bytesUsed = buffer->metadata().planes()[0].bytesused;
+            frameMat = cv::Mat(1, bytesUsed, CV_8UC1, data, bytesUsed);
+        }
+        else if (fmt == libcamera::formats::SBGGR8 ||
+                    fmt == libcamera::formats::SGBRG8 ||
+                    fmt == libcamera::formats::SGRBG8 ||
+                    fmt == libcamera::formats::SRGGB8) {
+            frameMat = cv::Mat(height, width, CV_8UC1, data, stride);
+        }
+        else if (fmt == libcamera::formats::SBGGR10_CSI2P ||
+                    fmt == libcamera::formats::SGBRG10_CSI2P ||
+                    fmt == libcamera::formats::SGRBG10_CSI2P ||
+                    fmt == libcamera::formats::SRGGB10_CSI2P) {
+            frameMat = unpackRAW10CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+            needsUnpacking = true;
+        }
+        else if (fmt == libcamera::formats::SBGGR12_CSI2P ||
+                    fmt == libcamera::formats::SGBRG12_CSI2P ||
+                    fmt == libcamera::formats::SGRBG12_CSI2P ||
+                    fmt == libcamera::formats::SRGGB12_CSI2P) {
+            frameMat = unpackRAW12CSI2P(static_cast<const uint8_t*>(data), width, height, stride);
+            needsUnpacking = true;
+        }
+        else if (fmt == libcamera::formats::SBGGR16 ||
+                    fmt == libcamera::formats::SGBRG16 ||
+                    fmt == libcamera::formats::SGRBG16 ||
+                    fmt == libcamera::formats::SRGGB16) {
+            frameMat = cv::Mat(height, width, CV_16UC1, data, stride);
+        }
+        else {
+            frameMat = cv::Mat(height, width, CV_8UC3, data, stride);
+        }
+        
+        if (needsUnpacking) {
+            session.latestFrame = frameMat;
+        } else {
+            session.latestFrame = frameMat.clone();
+        }
+        
+        // Diagnostic: check for blank frames in the first few requests
+        if (session.framesCaptured < 5 && !session.latestFrame.empty()) {
+            // Check a few points or sum 
+            double minVal, maxVal;
+            cv::minMaxLoc(session.latestFrame, &minVal, &maxVal);
+            if (maxVal == 0) {
+                session.allZeros = true;
+                SystemLogger::warning(LOG_COMPONENT, "Detected zero-filled frame from source: " + sourceId);
+            } else {
+                session.allZeros = false;
+            }
+        }
+        
+        session.framesCaptured++;
+        session.frameReady = true;
+    }
+    
+    session.frameCond->notify_all();
+    
+    // Requeue
+    request->reuse(libcamera::Request::ReuseBuffers);
+    applyLibCameraControls(session, request);
+    
+    if (session.libcameraDevice) {
+        session.libcameraDevice->queueRequest(request);
+    }
+}
+
+void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcamera::Request* request) {
+    if (session.activeControls.empty() || !session.libcameraDevice) {
+        return;
+    }
+
+    libcamera::ControlList& ctrls = request->controls();
+    const auto& hardwareControls = session.libcameraDevice->controls();
+
+    for (const auto& [name, val] : session.activeControls) {
+        // Find the ControlId for this name
+        libcamera::ControlId* targetId = nullptr;
+        for (const auto& [id, info] : hardwareControls) {
+            if (id->name() == name) {
+                targetId = const_cast<libcamera::ControlId*>(id);
+                break;
+            }
+        }
+
+        if (!targetId) {
+            std::cout << "[ERROR] applyLibCameraControls: Unknown control in cache: " << name << std::endl;
+            continue;
+        }
+        
+        // std::cout << "[DEBUG] Applying " << name << " = " << val << std::endl;
+
+        switch(targetId->type()) {
+            case libcamera::ControlTypeBool:
+                ctrls.set(targetId->id(), static_cast<bool>(val));
+                break;
+            case libcamera::ControlTypeByte:
+                ctrls.set(targetId->id(), static_cast<uint8_t>(val));
+                break;
+            case libcamera::ControlTypeInteger32:
+                ctrls.set(targetId->id(), static_cast<int32_t>(val));
+                break;
+            case libcamera::ControlTypeInteger64:
+                ctrls.set(targetId->id(), static_cast<int64_t>(val));
+                break;
+            case libcamera::ControlTypeFloat:
+                ctrls.set(targetId->id(), val);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+#endif // VISIONPIPE_LIBCAMERA_ENABLED
+
+} // namespace visionpipe
