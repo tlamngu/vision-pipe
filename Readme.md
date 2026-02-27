@@ -65,6 +65,8 @@ VisionPipe is designed for developers, researchers, and vision engineers who nee
 - Refer to the cache management examples in `examples/test_cache.vsp`
 - Report specific conditions where this occurs to help improve future releases
 
+**Libcamera Dependencies Issue**: Due to fault of implement camera capture mechanism while adding support of Libcamera, after merged `feature/libcamera-integration`, currently all build must enable `-DLIBCAMERA_BACKEND=ON` in order to target the camera service and have Vision pipe works. This is simple issue and planned to be fix in next version.
+
 ### For Production Users
 
 If you require production-ready software, please wait for v2.x or look for releases explicitly marked as "stable preview". Current v1.x releases are suitable for:
@@ -259,6 +261,8 @@ VisionPipe provides extensive customization options. Here are the main build fea
 | **Iceoryx2 IPC** | `VISIONPIPE_WITH_ICEORYX2` | OFF | Inter-process communication |
 | **SIMD Optimization** | `VISIONPIPE_ENABLE_SIMD` | ON | CPU SIMD vectorization (AVX2/SSE) |
 | **Link-Time Optimization** | `VISIONPIPE_ENABLE_LTO` | ON | Aggressive compiler optimization |
+| **LIBCAMERA backend** | `LIBCAMERA_BACKEND` | OFF | Adding libcamera as an additional backend of Vision Pipe |
+
 
 ### Feature Flags Example
 
