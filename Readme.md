@@ -1,8 +1,7 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tlamngu/vision-pipe)
 
-!! IMPORTANT !!
-## Warning: The only official repository for vision-pipe is this one (https://github.com/tlamngu/vision-pipe). Any binaries or releases from other repos (including “vision-pipe” clones) are unofficial and may be unsafe.
+| Warning: The only official repository for vision-pipe is this one (https://github.com/tlamngu/vision-pipe). Any binaries or releases from other repos (including “vision-pipe” clones) are unofficial and may be unsafe.
 
 
 # VisionPipe
