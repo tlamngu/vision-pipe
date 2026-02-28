@@ -3,8 +3,11 @@
 #include <opencv2/videoio/registry.hpp>
 #include <algorithm>
 #include <iostream>
-#include <sys/mman.h>
 #include <thread>
+
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+#include <sys/mman.h>
+#endif
 
 namespace visionpipe {
 
@@ -40,6 +43,7 @@ CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
     if (lower == "ffmpeg") {  return CameraBackend::OPENCV_FFMPEG; }
     if (lower == "gstreamer") {  return CameraBackend::OPENCV_GSTREAMER; }
     if (lower == "libcamera") {  return CameraBackend::LIBCAMERA; }
+    if (lower == "v4l2_native") {  return CameraBackend::V4L2_NATIVE; }
     
     return CameraBackend::OPENCV_AUTO;
 }
@@ -67,6 +71,10 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
         if (it->second.backend == CameraBackend::LIBCAMERA) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
             if (!it->second.libcameraDevice) needsOpen = true;
+#endif
+        } else if (it->second.backend == CameraBackend::V4L2_NATIVE) {
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+            if (!V4L2DeviceManager::instance().isOpen(sourceId)) needsOpen = true;
 #endif
         } else {
             if (!it->second.opencvCapture || !it->second.opencvCapture->isOpened()) {
@@ -116,6 +124,13 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
         return readLibCameraFrame(session, frame, sessionLock);
 #else
         SystemLogger::error(LOG_COMPONENT, "libcamera backend requested but not compiled in");
+        return false;
+#endif
+    } else if (session.backend == CameraBackend::V4L2_NATIVE) {
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        return V4L2DeviceManager::instance().acquireFrame(sourceId, frame);
+#else
+        SystemLogger::error(LOG_COMPONENT, "V4L2 native backend requested but not compiled in");
         return false;
 #endif
     } else {
@@ -174,6 +189,11 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
             it->second.libcameraDevice->release();
         }
 #endif
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        if (it->second.backend == CameraBackend::V4L2_NATIVE) {
+            V4L2DeviceManager::instance().releaseDevice(sourceId);
+        }
+#endif
         _sessions.erase(it);
         SystemLogger::info(LOG_COMPONENT, "Released camera: " + sourceId);
     }
@@ -205,7 +225,12 @@ void CameraDeviceManager::releaseAll() {
 #endif
     }
     _sessions.clear();
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
     _requestToSource.clear();
+#endif
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    V4L2DeviceManager::instance().releaseAll();
+#endif
     SystemLogger::info(LOG_COMPONENT, "Released all cameras");
 }
 
@@ -278,8 +303,8 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
     // Preserve existing config if session already exists
     auto it = _sessions.find(sourceId);
     if (it != _sessions.end()) {
-        session.targetConfig = it->second.targetConfig;
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
+        session.targetConfig = it->second.targetConfig;
         session.activeControls = it->second.activeControls;
         
         // Properly release old hardware resources if they were active
@@ -315,6 +340,24 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         }
 #else
         SystemLogger::error(LOG_COMPONENT, "libcamera backend not available");
+        _sessions.erase(sourceId);
+        return false;
+#endif
+    } else if (backend == CameraBackend::V4L2_NATIVE) {
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        // V4L2 native backend — delegate to V4L2DeviceManager
+        // The V4L2NativeConfig should have been set via setV4L2NativeConfig before this call
+        V4L2NativeConfig v4l2Config;
+        // Check if we have a stored config (set via v4l2_setup item)
+        // For now use defaults; the v4l2_setup item calls prepareDevice directly
+        if (!V4L2DeviceManager::instance().isOpen(sourceId)) {
+            if (!V4L2DeviceManager::instance().prepareDevice(sourceId, v4l2Config)) {
+                _sessions.erase(sourceId);
+                return false;
+            }
+        }
+#else
+        SystemLogger::error(LOG_COMPONENT, "V4L2 native backend not available");
         _sessions.erase(sourceId);
         return false;
 #endif
@@ -1013,5 +1056,36 @@ void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcame
 }
 
 #endif // VISIONPIPE_LIBCAMERA_ENABLED
+
+// ============================================================================
+// V4L2 Native delegation methods
+// ============================================================================
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+
+void CameraDeviceManager::setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config) {
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    CameraSession& session = _sessions[sourceId];
+    session.backend = CameraBackend::V4L2_NATIVE;
+    // Prepare the device immediately with the given config
+    V4L2DeviceManager::instance().prepareDevice(sourceId, config);
+}
+
+bool CameraDeviceManager::setV4L2Control(const std::string& sourceId, const std::string& controlName, int value) {
+    return V4L2DeviceManager::instance().setControl(sourceId, controlName, value);
+}
+
+std::string CameraDeviceManager::getV4L2BayerPattern(const std::string& sourceId) {
+    return V4L2DeviceManager::instance().getBayerPattern(sourceId);
+}
+
+void CameraDeviceManager::listV4L2Controls(const std::string& sourceId) {
+    V4L2DeviceManager::instance().listControls(sourceId);
+}
+
+void CameraDeviceManager::listV4L2Formats(const std::string& sourceId) {
+    V4L2DeviceManager::instance().listFormats(sourceId);
+}
+
+#endif // VISIONPIPE_V4L2_NATIVE_ENABLED
 
 } // namespace visionpipe

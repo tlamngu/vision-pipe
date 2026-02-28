@@ -42,6 +42,11 @@
 #include "interpreter/items/libcamera_items.h"
 #endif
 
+// Optional: V4L2 native items (when V4L2_NATIVE_BACKEND is enabled)
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+#include "interpreter/items/v4l2_items.h"
+#endif
+
 namespace visionpipe {
 
 /**

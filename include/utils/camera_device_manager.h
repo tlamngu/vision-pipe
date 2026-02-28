@@ -12,6 +12,10 @@
 #include <libcamera/libcamera.h>
 #endif
 
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+#include "utils/v4l2_device_manager.h"
+#endif
+
 namespace visionpipe {
 
 /**
@@ -23,7 +27,8 @@ enum class CameraBackend {
     OPENCV_V4L2,
     OPENCV_FFMPEG,
     OPENCV_GSTREAMER,
-    LIBCAMERA
+    LIBCAMERA,
+    V4L2_NATIVE
 };
 
 /**
@@ -155,6 +160,33 @@ public:
     void debugLibCameraConfig(const std::string& sourceId);
 #endif
 
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    /**
+     * @brief Set V4L2 native configuration for a source.
+     */
+    void setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config);
+
+    /**
+     * @brief Set a V4L2 native control by name.
+     */
+    bool setV4L2Control(const std::string& sourceId, const std::string& controlName, int value);
+
+    /**
+     * @brief Get the Bayer pattern for a V4L2 native source.
+     */
+    std::string getV4L2BayerPattern(const std::string& sourceId);
+
+    /**
+     * @brief List all V4L2 controls for a source.
+     */
+    void listV4L2Controls(const std::string& sourceId);
+
+    /**
+     * @brief List all V4L2 formats for a source.
+     */
+    void listV4L2Formats(const std::string& sourceId);
+#endif
+
 
 
 private:
@@ -163,9 +195,7 @@ private:
 
     struct CameraSession {
         CameraSession() 
-            : backend(CameraBackend::OPENCV_AUTO),
-              sessionMutex(std::make_unique<std::mutex>()),
-              frameCond(std::make_unique<std::condition_variable>()) {}
+            : backend(CameraBackend::OPENCV_AUTO) {}
 
         CameraBackend backend;
         std::shared_ptr<cv::VideoCapture> opencvCapture;
@@ -177,8 +207,8 @@ private:
         cv::Mat latestFrame;
         bool frameReady = false;
         bool libcameraStarted = false;
-        std::unique_ptr<std::mutex> sessionMutex;
-        std::unique_ptr<std::condition_variable> frameCond;
+        std::unique_ptr<std::mutex> sessionMutex = std::make_unique<std::mutex>();
+        std::unique_ptr<std::condition_variable> frameCond = std::make_unique<std::condition_variable>();
         LibCameraConfig targetConfig;
         std::map<std::string, float> activeControls;
         struct MappedBuffer {

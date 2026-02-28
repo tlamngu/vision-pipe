@@ -35,6 +35,11 @@ void registerAllItems(ItemRegistry& registry) {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
     registerLibCameraItems(registry);
 #endif
+
+    // Optional: Register V4L2 native items when feature is enabled
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    registerV4L2Items(registry);
+#endif
 }
 
 } // namespace visionpipe

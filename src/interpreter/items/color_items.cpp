@@ -21,6 +21,7 @@ void registerColorItems(ItemRegistry& registry) {
     registry.add<LutItem>();
     registry.add<InRangeItem>();
     registry.add<WeightedGrayItem>();
+    registry.add<DebayerItem>();
 }
 
 // ============================================================================
@@ -647,6 +648,118 @@ ExecutionResult WeightedGrayItem::execute(const std::vector<RuntimeValue>& args,
     result.convertTo(result, CV_8U);
     
     return ExecutionResult::ok(result);
+}
+
+// ============================================================================
+// DebayerItem
+// ============================================================================
+
+DebayerItem::DebayerItem() {
+    _functionName = "debayer";
+    _description = "Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data";
+    _category = "color";
+    _params = {
+        ParamDef::optional("pattern", BaseType::STRING, "Bayer tile pattern: RGGB, BGGR, GBRG, GRBG", "RGGB"),
+        ParamDef::optional("algorithm", BaseType::STRING, "Demosaic algorithm: bilinear, vng, ea", "bilinear"),
+        ParamDef::optional("output", BaseType::STRING, "Output format: bgr or rgb", "bgr"),
+        ParamDef::optional("bit_shift", BaseType::INT, "Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)", 0)
+    };
+    _example = "debayer(\"RGGB\", \"ea\", \"bgr\", 2)";
+    _returnType = "mat";
+    _tags = {"bayer", "debayer", "demosaic", "color", "raw"};
+}
+
+ExecutionResult DebayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
+
+    std::string pattern = args.size() > 0 ? args[0].asString() : "RGGB";
+    std::string algorithm = args.size() > 1 ? args[1].asString() : "bilinear";
+    std::string output = args.size() > 2 ? args[2].asString() : "bgr";
+    int bitShift = args.size() > 3 ? static_cast<int>(args[3].asNumber()) : 0;
+
+    // Normalize to uppercase
+    std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::toupper);
+    std::transform(algorithm.begin(), algorithm.end(), algorithm.begin(), ::tolower);
+    std::transform(output.begin(), output.end(), output.begin(), ::tolower);
+
+    cv::Mat input = ctx.currentMat;
+
+    // Apply bit shift if needed (for 10/12-bit data in 16-bit container)
+    if (bitShift > 0 && input.depth() == CV_16U) {
+        input = input.clone();
+        input = input / (1 << bitShift);
+        // Convert to 8-bit for debayering
+        input.convertTo(input, CV_8U);
+    } else if (input.depth() == CV_16U) {
+        // If 16-bit but no shift, scale to 8-bit for debayering
+        input = input.clone();
+        double minVal, maxVal;
+        cv::minMaxLoc(input, &minVal, &maxVal);
+        if (maxVal > 0) {
+            input.convertTo(input, CV_8U, 255.0 / maxVal);
+        }
+    }
+
+    if (input.channels() != 1) {
+        return ExecutionResult::fail("debayer: input must be single-channel (got " + std::to_string(input.channels()) + " channels)");
+    }
+
+    // Build conversion code from pattern + algorithm + output
+    // Pattern mapping (OpenCV convention):
+    //   RGGB -> BayerRG (OpenCV names Bayer by 2nd row 2nd col)
+    //   BGGR -> BayerBG
+    //   GBRG -> BayerGB
+    //   GRBG -> BayerGR
+    int code = -1;
+
+    if (output == "bgr") {
+        if (algorithm == "bilinear") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2BGR;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2BGR;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2BGR;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2BGR;
+        } else if (algorithm == "vng") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2BGR_VNG;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2BGR_VNG;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2BGR_VNG;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2BGR_VNG;
+        } else if (algorithm == "ea") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2BGR_EA;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2BGR_EA;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2BGR_EA;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2BGR_EA;
+        }
+    } else if (output == "rgb") {
+        if (algorithm == "bilinear") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2RGB;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2RGB;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2RGB;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2RGB;
+        } else if (algorithm == "vng") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2RGB_VNG;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2RGB_VNG;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2RGB_VNG;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2RGB_VNG;
+        } else if (algorithm == "ea") {
+            if (pattern == "RGGB") code = cv::COLOR_BayerRG2RGB_EA;
+            else if (pattern == "BGGR") code = cv::COLOR_BayerBG2RGB_EA;
+            else if (pattern == "GBRG") code = cv::COLOR_BayerGB2RGB_EA;
+            else if (pattern == "GRBG") code = cv::COLOR_BayerGR2RGB_EA;
+        }
+    }
+
+    if (code < 0) {
+        return ExecutionResult::fail("debayer: invalid combination of pattern=\"" + pattern +
+                                     "\" algorithm=\"" + algorithm + "\" output=\"" + output + "\"");
+    }
+
+    try {
+        cv::Mat result;
+        cv::cvtColor(input, result, code);
+        return ExecutionResult::ok(result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail("debayer: OpenCV error: " + std::string(e.what()));
+    }
 }
 
 } // namespace visionpipe

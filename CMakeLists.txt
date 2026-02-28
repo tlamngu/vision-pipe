@@ -22,6 +22,7 @@ option(VISIONPIPE_WITH_DNN "Enable DeepLearning/DNN features (requires OpenCV DN
 option(VISIONPIPE_WITH_ONNXRUNTIME "Enable ONNX Runtime backend for DNN (alternative to OpenCV DNN)" ON)
 option(VISIONPIPE_IP_CAM "Enable HTTP-based IP streaming (MJPEG) for remote frame access" OFF)
 option(LIBCAMERA_BACKEND "Enable native libcamera backend for Linux camera support" OFF)
+option(V4L2_NATIVE_BACKEND "Enable native V4L2 backend (Linux only)" OFF)
 
 # Performance options
 option(VISIONPIPE_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -193,6 +194,24 @@ if(LIBCAMERA_BACKEND)
     endif()
 endif()
 
+# V4L2 Native Backend (Linux only)
+if(V4L2_NATIVE_BACKEND)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(WARNING "V4L2 native backend is only supported on Linux, disabling V4L2_NATIVE_BACKEND")
+        set(V4L2_NATIVE_BACKEND OFF)
+    else()
+        include(CheckIncludeFile)
+        check_include_file(linux/videodev2.h HAVE_VIDEODEV2_H)
+        if(HAVE_VIDEODEV2_H)
+            add_definitions(-DVISIONPIPE_V4L2_NATIVE_ENABLED)
+            message(STATUS "V4L2 native backend enabled")
+        else()
+            message(WARNING "linux/videodev2.h not found, disabling V4L2_NATIVE_BACKEND")
+            set(V4L2_NATIVE_BACKEND OFF)
+        endif()
+    endif()
+endif()
+
 # Threading support
 find_package(Threads REQUIRED)
 
@@ -260,6 +279,17 @@ if(LIBCAMERA_BACKEND)
         src/interpreter/items/libcamera_items.cpp
     )
     message(STATUS "libcamera items enabled")
+endif()
+
+# V4L2 Native sources (optional feature)
+if(V4L2_NATIVE_BACKEND)
+    list(APPEND VISIONPIPE_CORE_SOURCES
+        src/utils/v4l2_device_manager.cpp
+    )
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/interpreter/items/v4l2_items.cpp
+    )
+    message(STATUS "V4L2 native items enabled")
 endif()
 
 set(VISIONPIPE_CLI_SOURCES
@@ -598,5 +628,6 @@ message(STATUS "  IP Stream:      ${VISIONPIPE_IP_CAM}")
 message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
+message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
 message(STATUS "========================================")
 message(STATUS "")
