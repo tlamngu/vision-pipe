@@ -113,6 +113,16 @@ public:
      */
     bool isOpen(const std::string& devicePath) const;
 
+    /**
+     * @brief Enable or disable verbose debug output (mirrors --verbose flag).
+     */
+    void setVerbose(bool verbose);
+
+    /**
+     * @brief Returns whether verbose debug output is enabled.
+     */
+    bool isVerbose() const;
+
 private:
     V4L2DeviceManager() = default;
     ~V4L2DeviceManager();
@@ -141,6 +151,7 @@ private:
 
     mutable std::recursive_mutex _mutex;
     std::map<std::string, V4L2Session> _sessions;
+    bool _verbose = false;
 };
 
 } // namespace visionpipe

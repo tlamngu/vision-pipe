@@ -53,7 +53,8 @@ V4L2SetupItem::V4L2SetupItem() {
     _tags = {"v4l2", "camera", "setup", "configuration"};
 }
 
-ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext&) {
+ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
 
     int width = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 640;
@@ -61,6 +62,14 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
     std::string pixelFormat = args.size() > 3 ? args[3].asString() : "YUYV";
     int fps = args.size() > 4 ? static_cast<int>(args[4].asNumber()) : 30;
     int bufferCount = args.size() > 5 ? static_cast<int>(args[5].asNumber()) : 4;
+
+    if (ctx.verbose) {
+        std::cout << "[DEBUG] V4L2Items: v4l2_setup source=" << sourceId
+                  << " " << width << "x" << height
+                  << " fmt=" << pixelFormat
+                  << " fps=" << fps
+                  << " buffers=" << bufferCount << std::endl;
+    }
 
     V4L2NativeConfig config;
     config.width = width;
@@ -98,9 +107,15 @@ V4L2PropItem::V4L2PropItem() {
 }
 
 ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     std::string controlName = args[1].asString();
     int value = static_cast<int>(args[2].asNumber());
+
+    if (ctx.verbose) {
+        std::cout << "[DEBUG] V4L2Items: v4l2_prop source=" << sourceId
+                  << " control='" << controlName << "' value=" << value << std::endl;
+    }
 
     if (!CameraDeviceManager::instance().setV4L2Control(sourceId, controlName, value)) {
         return ExecutionResult::fail("Failed to set V4L2 control " + controlName + " on " + sourceId);
@@ -126,11 +141,18 @@ V4L2GetPropItem::V4L2GetPropItem() {
     _tags = {"v4l2", "camera", "control", "get"};
 }
 
-ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext&) {
+ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     std::string controlName = args[1].asString();
 
+    if (ctx.verbose) {
+        std::cout << "[DEBUG] V4L2Items: v4l2_get_prop source=" << sourceId
+                  << " control='" << controlName << "'" << std::endl;
+    }
+
     int value = V4L2DeviceManager::instance().getControl(sourceId, controlName);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_prop result=" << value << std::endl;
     return ExecutionResult::ok(static_cast<double>(value));
 }
 
@@ -151,7 +173,9 @@ V4L2ListControlsItem::V4L2ListControlsItem() {
 }
 
 ExecutionResult V4L2ListControlsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_controls source=" << sourceId << std::endl;
     CameraDeviceManager::instance().listV4L2Controls(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -173,7 +197,9 @@ V4L2ListFormatsItem::V4L2ListFormatsItem() {
 }
 
 ExecutionResult V4L2ListFormatsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_formats source=" << sourceId << std::endl;
     CameraDeviceManager::instance().listV4L2Formats(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -194,9 +220,12 @@ V4L2GetBayerItem::V4L2GetBayerItem() {
     _tags = {"v4l2", "bayer", "format"};
 }
 
-ExecutionResult V4L2GetBayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext&) {
+ExecutionResult V4L2GetBayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_bayer source=" << sourceId << std::endl;
     std::string pattern = CameraDeviceManager::instance().getV4L2BayerPattern(sourceId);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_bayer result='" << pattern << "'" << std::endl;
     return ExecutionResult::ok(pattern);
 }
 
@@ -215,6 +244,8 @@ V4L2EnumDevicesItem::V4L2EnumDevicesItem() {
 }
 
 ExecutionResult V4L2EnumDevicesItem::execute(const std::vector<RuntimeValue>&, ExecutionContext& ctx) {
+    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
+    if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_enum_devices scanning /dev/video0../dev/video31" << std::endl;
     std::cout << "\n=== V4L2 Device Enumeration ===" << std::endl;
 
     int found = 0;

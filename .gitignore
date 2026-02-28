@@ -3,3 +3,4 @@
 examples/DNN/models/*
 /build-test
 /.idea
+v4l12_native_plan.md

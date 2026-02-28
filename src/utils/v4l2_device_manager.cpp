@@ -121,9 +121,17 @@ std::string V4L2DeviceManager::fourccToString(uint32_t fourcc) const {
 bool V4L2DeviceManager::prepareDevice(const std::string& devicePath, const V4L2NativeConfig& config) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
 
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: prepareDevice(" << devicePath << ")"
+                  << " w=" << config.width << " h=" << config.height
+                  << " fmt=" << config.pixelFormat << " fps=" << config.fps
+                  << " buffers=" << config.bufferCount << std::endl;
+    }
+
     // Release existing session if any
     auto it = _sessions.find(devicePath);
     if (it != _sessions.end()) {
+        if (_verbose) std::cout << "[DEBUG] V4L2: releasing existing session for " << devicePath << std::endl;
         releaseDevice(devicePath);
     }
 
@@ -135,6 +143,7 @@ bool V4L2DeviceManager::prepareDevice(const std::string& devicePath, const V4L2N
     }
 
     _sessions[devicePath] = std::move(session);
+    if (_verbose) std::cout << "[DEBUG] V4L2: prepareDevice succeeded for " << devicePath << std::endl;
     SystemLogger::info(LOG_COMPONENT, "Prepared device: " + devicePath);
     return true;
 }
@@ -144,11 +153,13 @@ bool V4L2DeviceManager::prepareDevice(const std::string& devicePath, const V4L2N
 // ============================================================================
 bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& session) {
     // 1. Open device
+    if (_verbose) std::cout << "[DEBUG] V4L2: openDevice(" << devicePath << ")" << std::endl;
     session.fd = ::open(devicePath.c_str(), O_RDWR | O_NONBLOCK);
     if (session.fd < 0) {
         SystemLogger::error(LOG_COMPONENT, "Cannot open device " + devicePath + ": " + std::string(strerror(errno)));
         return false;
     }
+    if (_verbose) std::cout << "[DEBUG] V4L2: opened fd=" << session.fd << " for " << devicePath << std::endl;
 
     // 2. VIDIOC_QUERYCAP
     struct v4l2_capability cap{};
@@ -173,6 +184,12 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
 
     SystemLogger::info(LOG_COMPONENT, "Device: " + std::string(reinterpret_cast<char*>(cap.card)) +
                        " driver: " + std::string(reinterpret_cast<char*>(cap.driver)));
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: QUERYCAP driver=" << cap.driver
+                  << " card=" << cap.card
+                  << " bus=" << cap.bus_info
+                  << " caps=0x" << std::hex << cap.capabilities << std::dec << std::endl;
+    }
 
     // 3. VIDIOC_S_FMT
     uint32_t pixfmt = lookupPixelFormat(session.config.pixelFormat);
@@ -208,6 +225,14 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
                        " " + std::to_string(session.negotiatedWidth) + "x" + std::to_string(session.negotiatedHeight) +
                        " bytesperline=" + std::to_string(session.negotiatedBytesPerLine) +
                        " sizeimage=" + std::to_string(session.negotiatedSizeImage));
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: S_FMT requested=" << session.config.pixelFormat
+                  << " " << session.config.width << "x" << session.config.height
+                  << " -> negotiated=" << fourccToString(session.negotiatedPixFmt)
+                  << " " << session.negotiatedWidth << "x" << session.negotiatedHeight
+                  << " bytesperline=" << session.negotiatedBytesPerLine
+                  << " sizeimage=" << session.negotiatedSizeImage << std::endl;
+    }
 
     // 4. Set framerate via VIDIOC_S_PARM
     struct v4l2_streamparm parm{};
@@ -216,6 +241,11 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
     parm.parm.capture.timeperframe.denominator = static_cast<uint32_t>(session.config.fps);
     if (xioctl(session.fd, VIDIOC_S_PARM, &parm) < 0) {
         SystemLogger::warning(LOG_COMPONENT, "VIDIOC_S_PARM (set fps) failed, continuing: " + std::string(strerror(errno)));
+    }
+    if (_verbose) {
+        auto& tpf = parm.parm.capture.timeperframe;
+        std::cout << "[DEBUG] V4L2: S_PARM requested fps=" << session.config.fps
+                  << " actual=" << tpf.denominator << "/" << tpf.numerator << std::endl;
     }
 
     // 5. VIDIOC_REQBUFS
@@ -237,6 +267,7 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
         session.fd = -1;
         return false;
     }
+    if (_verbose) std::cout << "[DEBUG] V4L2: REQBUFS requested=" << session.config.bufferCount << " granted=" << reqbufs.count << std::endl;
 
     // 6. VIDIOC_QUERYBUF + mmap each buffer, then VIDIOC_QBUF
     session.buffers.resize(reqbufs.count);
@@ -264,6 +295,11 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
             session.fd = -1;
             return false;
         }
+        if (_verbose) {
+            std::cout << "[DEBUG] V4L2: buffer[" << i << "] mmap offset=" << buf.m.offset
+                      << " length=" << buf.length
+                      << " addr=" << session.buffers[i].start << std::endl;
+        }
 
         // Enqueue buffer
         if (xioctl(session.fd, VIDIOC_QBUF, &buf) < 0) {
@@ -272,6 +308,7 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
             session.fd = -1;
             return false;
         }
+        if (_verbose) std::cout << "[DEBUG] V4L2: buffer[" << i << "] QBUF enqueued" << std::endl;
     }
 
     // 7. VIDIOC_STREAMON
@@ -283,6 +320,7 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
         return false;
     }
 
+    if (_verbose) std::cout << "[DEBUG] V4L2: STREAMON ok, streaming started on " << devicePath << std::endl;
     session.streaming = true;
     return true;
 }
@@ -351,6 +389,7 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
         SystemLogger::error(LOG_COMPONENT, "poll timeout or error on " + devicePath);
         return false;
     }
+    if (_verbose) std::cout << "[DEBUG] V4L2: poll ready on " << devicePath << std::endl;
 
     // 2. VIDIOC_DQBUF
     struct v4l2_buffer buf{};
@@ -365,6 +404,12 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     int w = session.negotiatedWidth;
     int h = session.negotiatedHeight;
     uint32_t pf = session.negotiatedPixFmt;
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: DQBUF index=" << buf.index
+                  << " bytesused=" << buf.bytesused
+                  << " fmt=" << fourccToString(pf)
+                  << " size=" << w << "x" << h << std::endl;
+    }
 
     // 3. Convert raw buffer to cv::Mat
     bool ok = true;
@@ -418,6 +463,7 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     if (xioctl(session.fd, VIDIOC_QBUF, &buf) < 0) {
         SystemLogger::warning(LOG_COMPONENT, "VIDIOC_QBUF re-enqueue failed: " + std::string(strerror(errno)));
     }
+    if (_verbose) std::cout << "[DEBUG] V4L2: QBUF re-enqueued index=" << buf.index << " ok=" << ok << std::endl;
 
     return ok;
 }
@@ -433,19 +479,24 @@ void V4L2DeviceManager::releaseDevice(const std::string& devicePath) {
     V4L2Session& session = it->second;
 
     if (session.streaming) {
+        if (_verbose) std::cout << "[DEBUG] V4L2: STREAMOFF " << devicePath << std::endl;
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         xioctl(session.fd, VIDIOC_STREAMOFF, &type);
         session.streaming = false;
     }
 
+    int bufIdx = 0;
     for (auto& mb : session.buffers) {
         if (mb.start && mb.start != MAP_FAILED) {
+            if (_verbose) std::cout << "[DEBUG] V4L2: munmap buffer[" << bufIdx << "] addr=" << mb.start << " len=" << mb.length << std::endl;
             munmap(mb.start, mb.length);
         }
+        ++bufIdx;
     }
     session.buffers.clear();
 
     if (session.fd >= 0) {
+        if (_verbose) std::cout << "[DEBUG] V4L2: closing fd=" << session.fd << " for " << devicePath << std::endl;
         ::close(session.fd);
         session.fd = -1;
     }
@@ -479,14 +530,23 @@ bool V4L2DeviceManager::isOpen(const std::string& devicePath) const {
 }
 
 // ============================================================================
+// setVerbose / isVerbose
+// ============================================================================
+void V4L2DeviceManager::setVerbose(bool verbose) { _verbose = verbose; }
+bool V4L2DeviceManager::isVerbose() const { return _verbose; }
+
+// ============================================================================
 // resolveControlId — map a control name or numeric string to V4L2 CID
 // ============================================================================
 uint32_t V4L2DeviceManager::resolveControlId(int fd, const std::string& nameOrId) const {
     // Try numeric parse first
     try {
         unsigned long val = std::stoul(nameOrId);
+        if (_verbose) std::cout << "[DEBUG] V4L2: resolveControlId numeric '" << nameOrId << "' -> 0x" << std::hex << val << std::dec << std::endl;
         return static_cast<uint32_t>(val);
     } catch (...) {}
+
+    if (_verbose) std::cout << "[DEBUG] V4L2: resolveControlId scanning controls for '" << nameOrId << "'" << std::endl;
 
     // Iterate User-class controls
     std::string lowerName = nameOrId;
@@ -499,7 +559,10 @@ uint32_t V4L2DeviceManager::resolveControlId(int fd, const std::string& nameOrId
             std::string ctrlName(reinterpret_cast<char*>(qctrl.name));
             std::string ctrlLower = ctrlName;
             std::transform(ctrlLower.begin(), ctrlLower.end(), ctrlLower.begin(), ::tolower);
-            if (ctrlLower == lowerName) return qctrl.id;
+            if (ctrlLower == lowerName) {
+                if (_verbose) std::cout << "[DEBUG] V4L2: resolveControlId found '" << ctrlName << "' -> 0x" << std::hex << qctrl.id << std::dec << " (User class)" << std::endl;
+                return qctrl.id;
+            }
         }
         qctrl.id++;
     }
@@ -511,11 +574,15 @@ uint32_t V4L2DeviceManager::resolveControlId(int fd, const std::string& nameOrId
             std::string ctrlName(reinterpret_cast<char*>(qctrl.name));
             std::string ctrlLower = ctrlName;
             std::transform(ctrlLower.begin(), ctrlLower.end(), ctrlLower.begin(), ::tolower);
-            if (ctrlLower == lowerName) return qctrl.id;
+            if (ctrlLower == lowerName) {
+                if (_verbose) std::cout << "[DEBUG] V4L2: resolveControlId found '" << ctrlName << "' -> 0x" << std::hex << qctrl.id << std::dec << " (Camera class)" << std::endl;
+                return qctrl.id;
+            }
         }
         qctrl.id++;
     }
 
+    if (_verbose) std::cout << "[DEBUG] V4L2: resolveControlId '" << nameOrId << "' not found" << std::endl;
     return 0; // Not found
 }
 
@@ -535,11 +602,17 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath, const std::str
         SystemLogger::error(LOG_COMPONENT, "Control not found: " + controlNameOrId);
         return false;
     }
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: setControl '" << controlNameOrId
+                  << "' -> CID=0x" << std::hex << cid << std::dec
+                  << " value=" << value << std::endl;
+    }
 
     struct v4l2_control ctrl{};
     ctrl.id = cid;
     ctrl.value = value;
     if (xioctl(it->second.fd, VIDIOC_S_CTRL, &ctrl) < 0) {
+        if (_verbose) std::cout << "[DEBUG] V4L2: VIDIOC_S_CTRL failed, trying ext controls" << std::endl;
         // Fallback to extended controls for camera-class
         struct v4l2_ext_control extCtrl{};
         extCtrl.id = cid;
@@ -554,6 +627,9 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath, const std::str
             SystemLogger::error(LOG_COMPONENT, "Failed to set control " + controlNameOrId + ": " + std::string(strerror(errno)));
             return false;
         }
+        if (_verbose) std::cout << "[DEBUG] V4L2: setControl via VIDIOC_S_EXT_CTRLS ok" << std::endl;
+    } else if (_verbose) {
+        std::cout << "[DEBUG] V4L2: setControl via VIDIOC_S_CTRL ok" << std::endl;
     }
     return true;
 }
@@ -580,6 +656,11 @@ int V4L2DeviceManager::getControl(const std::string& devicePath, const std::stri
     if (xioctl(it->second.fd, VIDIOC_G_CTRL, &ctrl) < 0) {
         SystemLogger::error(LOG_COMPONENT, "Failed to get control " + controlNameOrId + ": " + std::string(strerror(errno)));
         return -1;
+    }
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: getControl '" << controlNameOrId
+                  << "' -> CID=0x" << std::hex << cid << std::dec
+                  << " value=" << ctrl.value << std::endl;
     }
     return ctrl.value;
 }
@@ -693,6 +774,7 @@ std::string V4L2DeviceManager::getBayerPattern(const std::string& devicePath) {
     if (it == _sessions.end()) return "";
 
     uint32_t pf = it->second.negotiatedPixFmt;
+    if (_verbose) std::cout << "[DEBUG] V4L2: getBayerPattern pixfmt=" << fourccToString(pf) << std::endl;
 
     // BGGR variants
     if (pf == V4L2_PIX_FMT_SBGGR8 || pf == V4L2_PIX_FMT_SBGGR10P ||
@@ -715,6 +797,7 @@ std::string V4L2DeviceManager::getBayerPattern(const std::string& devicePath) {
         return "RGGB";
     }
 
+    if (_verbose) std::cout << "[DEBUG] V4L2: getBayerPattern: no Bayer pattern for fmt=" << fourccToString(pf) << std::endl;
     return "";
 }
 
