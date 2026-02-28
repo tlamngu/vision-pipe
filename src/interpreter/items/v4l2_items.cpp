@@ -79,7 +79,11 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
     config.bufferCount = bufferCount;
 
     // Open and configure through CameraDeviceManager delegation
-    CameraDeviceManager::instance().setV4L2NativeConfig(sourceId, config);
+    if (!CameraDeviceManager::instance().setV4L2NativeConfig(sourceId, config)) {
+        return ExecutionResult::fail("v4l2_setup: failed to open/configure " + sourceId +
+                                    " (" + std::to_string(width) + "x" + std::to_string(height) +
+                                    " " + pixelFormat + " @" + std::to_string(fps) + "fps)");
+    }
 
     SystemLogger::info("V4L2Items", "v4l2_setup: Configured " + sourceId + " " +
                        std::to_string(width) + "x" + std::to_string(height) +

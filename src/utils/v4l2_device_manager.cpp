@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <algorithm>
 
 namespace visionpipe {
@@ -164,19 +165,27 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
     // 2. VIDIOC_QUERYCAP
     struct v4l2_capability cap{};
     if (xioctl(session.fd, VIDIOC_QUERYCAP, &cap) < 0) {
-        SystemLogger::error(LOG_COMPONENT, "VIDIOC_QUERYCAP failed: " + std::string(strerror(errno)));
+        std::string err = "VIDIOC_QUERYCAP failed: " + std::string(strerror(errno));
+        SystemLogger::error(LOG_COMPONENT, err);
+        if (_verbose) std::cout << "[DEBUG] V4L2: ERROR " << err << std::endl;
         ::close(session.fd);
         session.fd = -1;
         return false;
     }
     if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
-        SystemLogger::error(LOG_COMPONENT, devicePath + " is not a video capture device");
+        std::string err = devicePath + " is not a video capture device (caps=0x" +
+                          [&]{ std::ostringstream s; s << std::hex << cap.capabilities; return s.str(); }() + ")";
+        SystemLogger::error(LOG_COMPONENT, err);
+        if (_verbose) std::cout << "[DEBUG] V4L2: ERROR " << err << std::endl;
         ::close(session.fd);
         session.fd = -1;
         return false;
     }
     if (!(cap.capabilities & V4L2_CAP_STREAMING)) {
-        SystemLogger::error(LOG_COMPONENT, devicePath + " does not support streaming I/O");
+        std::string err = devicePath + " does not support streaming I/O (caps=0x" +
+                          [&]{ std::ostringstream s; s << std::hex << cap.capabilities; return s.str(); }() + ")";
+        SystemLogger::error(LOG_COMPONENT, err);
+        if (_verbose) std::cout << "[DEBUG] V4L2: ERROR " << err << std::endl;
         ::close(session.fd);
         session.fd = -1;
         return false;
@@ -194,7 +203,9 @@ bool V4L2DeviceManager::openDevice(const std::string& devicePath, V4L2Session& s
     // 3. VIDIOC_S_FMT
     uint32_t pixfmt = lookupPixelFormat(session.config.pixelFormat);
     if (pixfmt == 0) {
-        SystemLogger::error(LOG_COMPONENT, "Unknown pixel format: " + session.config.pixelFormat);
+        std::string err = "Unknown pixel format: " + session.config.pixelFormat;
+        SystemLogger::error(LOG_COMPONENT, err);
+        if (_verbose) std::cout << "[DEBUG] V4L2: ERROR " << err << std::endl;
         ::close(session.fd);
         session.fd = -1;
         return false;

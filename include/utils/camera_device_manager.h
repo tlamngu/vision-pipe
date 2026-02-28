@@ -162,9 +162,10 @@ public:
 
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
     /**
-     * @brief Set V4L2 native configuration for a source.
+     * @brief Set V4L2 native configuration for a source and open/reconfigure the device.
+     * Returns true if the device was successfully opened with the given config.
      */
-    void setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config);
+    bool setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config);
 
     /**
      * @brief Set a V4L2 native control by name.
@@ -220,6 +221,9 @@ private:
         // Diagnostics
         int framesCaptured = 0;
         bool allZeros = false;
+#endif
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        V4L2NativeConfig v4l2Config;  // Config set by v4l2_setup; used by openCamera on first open
 #endif
     };
 

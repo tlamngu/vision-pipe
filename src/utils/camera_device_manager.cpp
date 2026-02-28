@@ -317,6 +317,9 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
             SystemLogger::info(LOG_COMPONENT, "Closing existing libcamera session for reassignment: " + sourceId);
         }
 #endif
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        session.v4l2Config = it->second.v4l2Config;  // preserve user-configured V4L2 settings
+#endif
         if (it->second.opencvCapture) {
             it->second.opencvCapture->release();
             SystemLogger::info(LOG_COMPONENT, "Closing existing OpenCV session for reassignment: " + sourceId);
@@ -345,13 +348,13 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
 #endif
     } else if (backend == CameraBackend::V4L2_NATIVE) {
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-        // V4L2 native backend — delegate to V4L2DeviceManager
-        // The V4L2NativeConfig should have been set via setV4L2NativeConfig before this call
-        V4L2NativeConfig v4l2Config;
-        // Check if we have a stored config (set via v4l2_setup item)
-        // For now use defaults; the v4l2_setup item calls prepareDevice directly
+        // V4L2 native backend — delegate to V4L2DeviceManager.
+        // Use the config stored from a prior v4l2_setup call; fall back to defaults only if
+        // no config was ever stored (bare video_cap with v4l2_native and no v4l2_setup).
         if (!V4L2DeviceManager::instance().isOpen(sourceId)) {
+            const V4L2NativeConfig& v4l2Config = finalSession.v4l2Config;
             if (!V4L2DeviceManager::instance().prepareDevice(sourceId, v4l2Config)) {
+                SystemLogger::error(LOG_COMPONENT, "V4L2 prepareDevice failed for: " + sourceId);
                 _sessions.erase(sourceId);
                 return false;
             }
@@ -1062,12 +1065,17 @@ void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcame
 // ============================================================================
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
 
-void CameraDeviceManager::setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config) {
+bool CameraDeviceManager::setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     CameraSession& session = _sessions[sourceId];
     session.backend = CameraBackend::V4L2_NATIVE;
+    session.v4l2Config = config;  // store so openCamera can use it if device needs re-opening
     // Prepare the device immediately with the given config
-    V4L2DeviceManager::instance().prepareDevice(sourceId, config);
+    if (!V4L2DeviceManager::instance().prepareDevice(sourceId, config)) {
+        SystemLogger::error(LOG_COMPONENT, "v4l2_setup: prepareDevice failed for " + sourceId);
+        return false;
+    }
+    return true;
 }
 
 bool CameraDeviceManager::setV4L2Control(const std::string& sourceId, const std::string& controlName, int value) {
