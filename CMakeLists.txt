@@ -617,9 +617,10 @@ endif()
 # ============================================================================
 # Shared Library Target - libvisionpipe (client library)
 # ============================================================================
-option(VISIONPIPE_BUILD_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
+option(VISIONPIPE_WITH_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
+option(LIB_VISIONPIPE_EXAMPLE "Build libvisionpipe example program" OFF)
 
-if(VISIONPIPE_BUILD_LIBVISIONPIPE)
+if(VISIONPIPE_WITH_LIBVISIONPIPE)
     set(LIBVISIONPIPE_SOURCES
         src/libvisionpipe/frame_transport.cpp
         src/libvisionpipe/libvisionpipe.cpp
@@ -663,6 +664,27 @@ if(VISIONPIPE_BUILD_LIBVISIONPIPE)
     )
 
     message(STATUS "libvisionpipe shared library: ENABLED")
+
+    # Optional: build example program
+    if(LIB_VISIONPIPE_EXAMPLE)
+        add_executable(libvisionpipe_example examples/example_libvisionpipe.cpp)
+        target_include_directories(libvisionpipe_example PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${OpenCV_INCLUDE_DIRS}
+        )
+        target_link_libraries(libvisionpipe_example PRIVATE
+            visionpipe_client
+            ${OpenCV_LIBS}
+            Threads::Threads
+        )
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(libvisionpipe_example PRIVATE rt)
+        endif()
+        set_target_properties(libvisionpipe_example PROPERTIES
+            OUTPUT_NAME "libvisionpipe_example"
+        )
+        message(STATUS "libvisionpipe example: ENABLED")
+    endif()
 endif()
 
 # ============================================================================
@@ -724,6 +746,7 @@ message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
 message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
-message(STATUS "  libvisionpipe:  ${VISIONPIPE_BUILD_LIBVISIONPIPE}")
+message(STATUS "  libvisionpipe:  ${VISIONPIPE_WITH_LIBVISIONPIPE}")
+message(STATUS "  libvp example: ${LIB_VISIONPIPE_EXAMPLE}")
 message(STATUS "========================================")
 message(STATUS "")

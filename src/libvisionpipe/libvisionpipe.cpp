@@ -9,6 +9,8 @@
 #include <sstream>
 #include <random>
 #include <algorithm>
+#include <fstream>
+#include <cstdio>
 
 // ============================================================================
 // Platform includes
@@ -48,6 +50,10 @@ Session::Session(const std::string& sessionId, pid_t pid, const VisionPipeConfig
 
 Session::~Session() {
     stop(2000);
+    // Clean up temp script file if created via runString()
+    if (!_tempScriptPath.empty()) {
+        std::remove(_tempScriptPath.c_str());
+    }
 }
 
 Session::Session(Session&& other) noexcept
@@ -62,7 +68,8 @@ Session::Session(Session&& other) noexcept
     , _state(other._state.load())
     , _exitCode(other._exitCode)
     , _sinks(std::move(other._sinks))
-    , _stopRequested(other._stopRequested.load()) {
+    , _stopRequested(other._stopRequested.load())
+    , _tempScriptPath(std::move(other._tempScriptPath)) {
 #if defined(_WIN32)
     other._hProcess = NULL;
     other._hThread = NULL;
@@ -89,6 +96,7 @@ Session& Session::operator=(Session&& other) noexcept {
         _exitCode = other._exitCode;
         _sinks = std::move(other._sinks);
         _stopRequested.store(other._stopRequested.load());
+        _tempScriptPath = std::move(other._tempScriptPath);
     }
     return *this;
 }
@@ -518,6 +526,75 @@ std::unique_ptr<Session> VisionPipe::run(const std::string& scriptPath) {
 }
 
 #endif
+
+// --- runString() ---
+
+std::unique_ptr<Session> VisionPipe::runString(const std::string& script,
+                                                const std::string& name) {
+    // Write script content to a temporary file
+    std::string tempPath;
+
+#if defined(_WIN32)
+    // Windows: use GetTempPath + GetTempFileName
+    char tempDir[MAX_PATH];
+    DWORD len = GetTempPathA(MAX_PATH, tempDir);
+    if (len == 0 || len > MAX_PATH) {
+        std::cerr << "[VisionPipe] Failed to get temp directory\n";
+        return nullptr;
+    }
+    char tempFile[MAX_PATH];
+    if (GetTempFileNameA(tempDir, "vsp", 0, tempFile) == 0) {
+        std::cerr << "[VisionPipe] Failed to create temp file\n";
+        return nullptr;
+    }
+    // Rename to .vsp extension
+    tempPath = std::string(tempFile) + ".vsp";
+    MoveFileA(tempFile, tempPath.c_str());
+#else
+    // POSIX: use /tmp with mkstemp
+    std::string tmpl = "/tmp/visionpipe_" + name + "_XXXXXX";
+    std::vector<char> tmplBuf(tmpl.begin(), tmpl.end());
+    tmplBuf.push_back('\0');
+
+    int fd = mkstemp(tmplBuf.data());
+    if (fd < 0) {
+        std::cerr << "[VisionPipe] Failed to create temp file: " << strerror(errno) << std::endl;
+        return nullptr;
+    }
+    close(fd);
+
+    // Rename with .vsp extension
+    std::string basePath(tmplBuf.data());
+    tempPath = basePath + ".vsp";
+    if (rename(basePath.c_str(), tempPath.c_str()) != 0) {
+        // rename failed, use original path
+        tempPath = basePath;
+    }
+#endif
+
+    // Write script content
+    {
+        std::ofstream ofs(tempPath, std::ios::out | std::ios::trunc);
+        if (!ofs) {
+            std::cerr << "[VisionPipe] Failed to write temp script: " << tempPath << std::endl;
+            std::remove(tempPath.c_str());
+            return nullptr;
+        }
+        ofs << script;
+    }
+
+    // Run the temp file
+    auto session = run(tempPath);
+    if (session) {
+        // Store temp path so Session destructor cleans it up
+        session->_tempScriptPath = tempPath;
+    } else {
+        // Launch failed, clean up now
+        std::remove(tempPath.c_str());
+    }
+
+    return session;
+}
 
 // --- execute() ---
 

@@ -137,6 +137,29 @@ int main(int argc, char* argv[]) {
     */
 
     // ========================================================================
+    // Alternative: Run a script from a string (instead of a file)
+    // ========================================================================
+    /*
+    auto session2 = camera.runString(R"(
+        video_cap(0)
+        resize(640, 480)
+        frame_sink("output")
+    )", "inline_demo");
+
+    if (session2) {
+        cv::Mat frame;
+        while (g_running.load() && session2->isRunning()) {
+            if (session2->grabFrame("output", frame)) {
+                cv::imshow("runString demo", frame);
+                if (cv::waitKey(1) == 27) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        session2->stop();
+    }
+    */
+
+    // ========================================================================
     // 5. Cleanup
     // ========================================================================
     session->stop();

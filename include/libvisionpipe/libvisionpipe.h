@@ -228,6 +228,7 @@ private:
 
     std::map<std::string, SinkConnection> _sinks;
     std::atomic<bool> _stopRequested{false};
+    std::string _tempScriptPath;  ///< Temp file from runString(), deleted on destruction
 
     void connectSink(const std::string& sinkName);
     int dispatchSink(const std::string& sinkName, SinkConnection& sink);
@@ -289,6 +290,27 @@ public:
      * @return Unique pointer to the session. nullptr on launch failure.
      */
     std::unique_ptr<Session> run(const std::string& scriptPath);
+
+    /**
+     * @brief Execute a VisionPipe script from a string
+     * @param script The .vsp script content as a string
+     * @param name Optional name for the temporary script (used in logs)
+     * @return Unique pointer to the session. nullptr on launch failure.
+     *
+     * Internally writes the script to a temporary file and calls run().
+     * The temp file is cleaned up when the session is destroyed.
+     *
+     * @code
+     *   visionpipe::VisionPipe vp;
+     *   auto session = vp.runString(R"(
+     *       video_cap(0)
+     *       resize(640, 480)
+     *       frame_sink("output")
+     *   )");
+     * @endcode
+     */
+    std::unique_ptr<Session> runString(const std::string& script,
+                                       const std::string& name = "inline");
 
     /**
      * @brief Execute a visionpipe command (like "execute") synchronously
