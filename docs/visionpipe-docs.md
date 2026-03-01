@@ -8,13 +8,15 @@ Auto-generated documentation for VisionPipe interpreter items.
 
 - [advanced](#advanced) (30 items)
 - [arithmetic](#arithmetic) (28 items)
-- [color](#color) (15 items)
+- [camera](#camera) (2 items)
+- [color](#color) (17 items)
 - [conditional](#conditional) (24 items)
 - [control](#control) (38 items)
 - [display](#display) (27 items)
 - [dnn](#dnn) (19 items)
 - [draw](#draw) (19 items)
 - [edge](#edge) (23 items)
+- [fastcv](#fastcv) (20 items)
 - [feature](#feature) (20 items)
 - [filter](#filter) (14 items)
 - [gui](#gui) (16 items)
@@ -24,7 +26,7 @@ Auto-generated documentation for VisionPipe interpreter items.
 - [stereo](#stereo) (22 items)
 - [tensor](#tensor) (49 items)
 - [transform](#transform) (21 items)
-- [video_io](#video_io) (22 items)
+- [video_io](#video_io) (36 items)
 
 ---
 
@@ -1248,6 +1250,57 @@ transform("color_transform")
 
 ---
 
+## camera
+
+### `auto_exposure()`
+
+Software auto-exposure: analyses frame brightness over N samples and returns a computed exposure value within [min_exp, max_exp]
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `min_exp` | float | Yes | Minimum exposure value (device units) |
+| `max_exp` | float | Yes | Maximum exposure value (device units) |
+| `samples` | int | No | Number of brightness samples to accumulate before recalculating (default: `RuntimeValue(int: 10)`) |
+| `target` | float | No | Target mean brightness (0-255) (default: `RuntimeValue(float: 128)`) |
+| `speed` | float | No | Convergence speed / gain (0.0-1.0, higher = faster) (default: `RuntimeValue(float: 0.3)`) |
+| `roi_x` | float | No | ROI x-offset as fraction of width (0.0-1.0) (default: `RuntimeValue(float: 0)`) |
+| `roi_y` | float | No | ROI y-offset as fraction of height (0.0-1.0) (default: `RuntimeValue(float: 0)`) |
+| `roi_w` | float | No | ROI width as fraction of width (0.0-1.0, 0 = full) (default: `RuntimeValue(float: 1)`) |
+| `roi_h` | float | No | ROI height as fraction of height (0.0-1.0, 0 = full) (default: `RuntimeValue(float: 1)`) |
+
+**Example:**
+
+```vsp
+exp = auto_exposure(50, 10000, 10, 128, 0.3)
+v4l2_prop("/dev/video0", "Exposure (Absolute)", exp)
+```
+
+**Tags:** `auto`, `exposure`, `brightness`, `camera`, `control`
+
+---
+
+### `auto_exposure_reset()`
+
+Resets accumulated auto-exposure state
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | string | No | Source identifier to reset (omit to reset all) (default: `RuntimeValue(string: "")`) |
+
+**Example:**
+
+```vsp
+auto_exposure_reset() | auto_exposure_reset("/dev/video0")
+```
+
+**Tags:** `auto`, `exposure`, `reset`, `camera`
+
+---
+
 ## color
 
 ### `apply_colormap()`
@@ -1385,15 +1438,38 @@ Converts color space of the current frame
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `code` | string | Yes | Conversion code: bgr2gray, gray2bgr, bgr2rgb, rgb2bgr, bgr2hsv, hsv2bgr, bgr2hls, hls2bgr, bgr2lab, lab2bgr, bgr2luv, luv2bgr, bgr2xyz, xyz2bgr, bgr2ycrcb, ycrcb2bgr, bgr2yuv, yuv2bgr |
+| `code` | string | Yes | Conversion code: bgr2gray, bgr2hsv, bgr2lab, yuv2bgr, uyvy2bgr, nv122bgr, bayerbg2bgr, etc. |
 
 **Example:**
 
 ```vsp
-cvt_color("bgr2gray") | cvt_color("bgr2hsv")
+cvt_color("bgr2gray") | cvt_color("uyvy2bgr")
 ```
 
-**Tags:** `color`, `convert`, `space`
+**Tags:** `color`, `convert`, `space`, `transform`
+
+---
+
+### `debayer()`
+
+Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `pattern` | string | No | Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or "auto" to detect from the active camera (default: `RuntimeValue(string: "RGGB")`) |
+| `algorithm` | string | No | Demosaic algorithm: bilinear, vng, ea (default: `RuntimeValue(string: "bilinear")`) |
+| `output` | string | No | Output format: bgr or rgb (default: `RuntimeValue(string: "bgr")`) |
+| `bit_shift` | int | No | Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container) (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+debayer() | debayer("auto") | debayer("RGGB", "ea", "bgr", 2)
+```
+
+**Tags:** `bayer`, `debayer`, `demosaic`, `color`, `raw`
 
 ---
 
@@ -1448,6 +1524,29 @@ gamma(0.5)  // Brighten | gamma(2.0)  // Darken
 ```
 
 **Tags:** `gamma`, `correction`, `adjust`
+
+---
+
+### `gpu_debayer()`
+
+GPU-accelerated Bayer demosaicing using OpenCL. Falls back to CPU when OpenCL is unavailable. Supports bilinear, VNG, and EA algorithms.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `pattern` | string | No | Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or "auto" (default: `RuntimeValue(string: "RGGB")`) |
+| `algorithm` | string | No | Demosaic algorithm: bilinear, vng, ea (default: `RuntimeValue(string: "ea")`) |
+| `output` | string | No | Output format: bgr or rgb (default: `RuntimeValue(string: "bgr")`) |
+| `bit_shift` | int | No | Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container) (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+gpu_debayer("auto", "ea") | gpu_debayer("RGGB", "vng", "bgr", 2)
+```
+
+**Tags:** `gpu`, `opencl`, `debayer`, `demosaic`, `bayer`, `color`, `acceleration`
 
 ---
 
@@ -4757,6 +4856,425 @@ point_polygon_test(100, 100, "contours", true)
 
 ---
 
+## fastcv
+
+### `fcv_bilateral_filter()`
+
+Bilateral filter accelerated by FastCV (kernel d: 5, 7, or 9; 8U grayscale input)
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `d` | int | No | Kernel diameter (5, 7, or 9) (default: `RuntimeValue(int: 5)`) |
+| `sigma_color` | float | No | Color sigma (typical: 50) (default: `RuntimeValue(float: 50)`) |
+| `sigma_space` | float | No | Space sigma (typical: 1) (default: `RuntimeValue(float: 1)`) |
+
+**Example:**
+
+```vsp
+fcv_bilateral_filter(5, 50.0, 1.0)
+```
+
+**Tags:** `fastcv`, `bilateral`, `filter`, `edge-preserving`
+
+---
+
+### `fcv_bilateral_recursive()`
+
+Recursive bilateral filter accelerated by FastCV (fast edge-preserving; 8U grayscale)
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `sigma_color` | float | No | Color sigma in [0,1] (typical: 0.03) (default: `RuntimeValue(float: 0.03)`) |
+| `sigma_space` | float | No | Space sigma in [0,1] (typical: 0.1) (default: `RuntimeValue(float: 0.1)`) |
+
+**Example:**
+
+```vsp
+fcv_bilateral_recursive(0.03, 0.1)
+```
+
+**Tags:** `fastcv`, `bilateral`, `recursive`, `filter`, `edge-preserving`
+
+---
+
+### `fcv_calc_hist()`
+
+Grayscale histogram accelerated by FastCV; returns a 256-wide histogram bar chart
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `height` | int | No | Height of the histogram visualization in pixels (default: `RuntimeValue(int: 128)`) |
+
+**Example:**
+
+```vsp
+fcv_calc_hist(128)
+```
+
+**Tags:** `fastcv`, `histogram`, `statistics`
+
+---
+
+### `fcv_fast10()`
+
+FAST10 corner detection accelerated by FastCV; draws detected corners on output
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `barrier` | int | No | Intensity barrier threshold (default: `RuntimeValue(int: 10)`) |
+| `border` | int | No | Border width to skip around edges (default: `RuntimeValue(int: 4)`) |
+| `nms` | bool | No | Enable non-maximum suppression (default: `RuntimeValue(bool: true)`) |
+
+**Example:**
+
+```vsp
+fcv_fast10(10, 4, true)
+```
+
+**Tags:** `fastcv`, `corner`, `feature`, `detect`, `fast10`
+
+---
+
+### `fcv_fft()`
+
+Fast Fourier Transform accelerated by FastCV (input: 8U grayscale); returns log-magnitude spectrum
+
+**Example:**
+
+```vsp
+fcv_fft()
+```
+
+**Tags:** `fastcv`, `fft`, `frequency`, `transform`
+
+---
+
+### `fcv_filter2d()`
+
+2D convolution filter accelerated by FastCV (kernel sizes 3-11; 8U grayscale input)
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `kernel_size` | int | No | Kernel size (3, 5, 7, 9, or 11) (default: `RuntimeValue(int: 3)`) |
+| `ddepth` | string | No | Output depth: u8, s16, f32 (default: `RuntimeValue(string: "u8")`) |
+
+**Example:**
+
+```vsp
+fcv_filter2d(3, "u8")
+```
+
+**Tags:** `fastcv`, `filter`, `convolution`, `2d`
+
+---
+
+### `fcv_gaussian_blur()`
+
+Gaussian blur accelerated by FastCV (supports 3x3 and 5x5 kernels, types: 8U/16S/32S)
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `kernel_size` | int | No | Kernel size: 3 or 5 (default: `RuntimeValue(int: 5)`) |
+| `blur_border` | bool | No | Process image border pixels (default: `RuntimeValue(bool: true)`) |
+
+**Example:**
+
+```vsp
+fcv_gaussian_blur(5, true)
+```
+
+**Tags:** `fastcv`, `blur`, `gaussian`, `filter`
+
+---
+
+### `fcv_hough_lines()`
+
+Hough line detection accelerated by FastCV (input: grayscale or edge image); draws lines on output
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `threshold` | float | No | Normalized quality threshold [0,1] (default: `RuntimeValue(float: 0.25)`) |
+| `color` | string | No | Line draw color (green, red, blue, white) (default: `RuntimeValue(string: "green")`) |
+
+**Example:**
+
+```vsp
+fcv_hough_lines(0.25, "green")
+```
+
+**Tags:** `fastcv`, `hough`, `lines`, `detect`
+
+---
+
+### `fcv_ifft()`
+
+Inverse FFT accelerated by FastCV (input: 2-channel CV_32F output of fcv_fft raw)
+
+**Example:**
+
+```vsp
+fcv_ifft()
+```
+
+**Tags:** `fastcv`, `ifft`, `frequency`, `transform`
+
+---
+
+### `fcv_mean_shift()`
+
+Mean shift tracking accelerated by FastCV; ROI rect [x,y,w,h] stored as 1x4 CV_32F Mat in cache
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `track_cache` | string | Yes | Cache ID holding ROI rect (1x4 CV_32F [x,y,w,h]) |
+| `max_iter` | int | No | Maximum iterations (default: `RuntimeValue(int: 10)`) |
+| `epsilon` | float | No | Convergence epsilon in pixels (default: `RuntimeValue(float: 1)`) |
+
+**Example:**
+
+```vsp
+fcv_mean_shift("roi", 10, 1.0)
+```
+
+**Tags:** `fastcv`, `mean-shift`, `tracking`
+
+---
+
+### `fcv_moments()`
+
+Image moments accelerated by FastCV; prints m00, m10, m01, centroid to console
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `binary` | bool | No | Treat image as binary before computing moments (default: `RuntimeValue(bool: false)`) |
+
+**Example:**
+
+```vsp
+fcv_moments(false)
+```
+
+**Tags:** `fastcv`, `moments`, `statistics`
+
+---
+
+### `fcv_mser()`
+
+MSER region detector accelerated by FastCV; draws colored contours and bounding boxes on output
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `min_area` | int | No | Minimum region area in pixels (default: `RuntimeValue(int: 256)`) |
+| `max_area_ratio` | float | No | Maximum region area as fraction of image (default: `RuntimeValue(float: 0.25)`) |
+| `delta` | int | No | MSER delta parameter (default: `RuntimeValue(int: 2)`) |
+
+**Example:**
+
+```vsp
+fcv_mser(256, 0.25, 2)
+```
+
+**Tags:** `fastcv`, `mser`, `region`, `detect`, `feature`
+
+---
+
+### `fcv_normalize_local_box()`
+
+Local box contrast normalization accelerated by FastCV (8U grayscale input)
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `box_width` | int | No | Local box width (default: `RuntimeValue(int: 5)`) |
+| `box_height` | int | No | Local box height (default: `RuntimeValue(int: 5)`) |
+| `use_stddev` | bool | No | Normalize by std deviation (true) or mean (false) (default: `RuntimeValue(bool: true)`) |
+
+**Example:**
+
+```vsp
+fcv_normalize_local_box(5, 5, true)
+```
+
+**Tags:** `fastcv`, `normalize`, `local`, `contrast`
+
+---
+
+### `fcv_pyramid()`
+
+Image pyramid accelerated by FastCV; each level is stored in cache as <prefix>_0, <prefix>_1, ...
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `levels` | int | No | Number of pyramid levels (default: `RuntimeValue(int: 4)`) |
+| `scale_by2` | bool | No | Scale by 2 (true) or ORB factor 0.84 (false) (default: `RuntimeValue(bool: true)`) |
+| `cache_prefix` | string | No | Cache key prefix for pyramid levels (default: `RuntimeValue(string: "pyr")`) |
+
+**Example:**
+
+```vsp
+fcv_pyramid(4, true, "pyr")
+```
+
+**Tags:** `fastcv`, `pyramid`, `scale`, `multi-scale`
+
+---
+
+### `fcv_resize_down()`
+
+Optimized downscale resize accelerated by FastCV; specify either target size or scale factors
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `width` | int | No | Target width (0 = use scale) (default: `RuntimeValue(int: 0)`) |
+| `height` | int | No | Target height (0 = use scale) (default: `RuntimeValue(int: 0)`) |
+| `inv_scale_x` | float | No | Horizontal inverse scale (e.g., 0.5 = half width) (default: `RuntimeValue(float: 0.5)`) |
+| `inv_scale_y` | float | No | Vertical inverse scale (default: `RuntimeValue(float: 0.5)`) |
+
+**Example:**
+
+```vsp
+fcv_resize_down(640, 480, 0, 0)
+```
+
+**Tags:** `fastcv`, `resize`, `scale`, `downsample`
+
+---
+
+### `fcv_sobel()`
+
+Sobel edge detection accelerated by FastCV; stores dx and dy to cache as <id>_dx and <id>_dy; returns magnitude
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `kernel_size` | int | No | Kernel size (3, 5, or 7) (default: `RuntimeValue(int: 3)`) |
+| `cache_id` | string | No | Cache prefix for dx/dy gradient outputs (default: `RuntimeValue(string: "sobel")`) |
+
+**Example:**
+
+```vsp
+fcv_sobel(3, "sobel")
+```
+
+**Tags:** `fastcv`, `sobel`, `edge`, `gradient`
+
+---
+
+### `fcv_threshold_range()`
+
+Range threshold (FastCV): pixels in [low_thresh, high_thresh] become true_value, others become false_value
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `low_thresh` | int | Yes | Lower threshold (inclusive) |
+| `high_thresh` | int | Yes | Upper threshold (inclusive) |
+| `true_value` | int | No | Value assigned to in-range pixels (default: `RuntimeValue(int: 255)`) |
+| `false_value` | int | No | Value assigned to out-of-range pixels (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+fcv_threshold_range(100, 200, 255, 0)
+```
+
+**Tags:** `fastcv`, `threshold`, `range`, `binary`
+
+---
+
+### `fcv_track_lk()`
+
+Lucas-Kanade sparse optical flow accelerated by FastCV; tracks FAST10 corners between consecutive frames; re-detects corners when all are lost
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `max_corners` | int | No | Maximum number of corners to track (default: `RuntimeValue(int: 200)`) |
+| `win_size` | int | No | LK search window size (odd number, e.g. 7) (default: `RuntimeValue(int: 7)`) |
+| `levels` | int | No | Number of pyramid levels (default: `RuntimeValue(int: 3)`) |
+
+**Example:**
+
+```vsp
+fcv_track_lk(200, 7, 3)
+```
+
+**Tags:** `fastcv`, `optical-flow`, `tracking`, `lk`, `lucas-kanade`
+
+---
+
+### `fcv_warp_affine()`
+
+Affine warp accelerated by FastCV; 2x3 CV_32F matrix loaded from cache
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `matrix_cache` | string | Yes | Cache ID holding the 2x3 CV_32F affine matrix |
+| `width` | int | No | Output width  (0 = same as input) (default: `RuntimeValue(int: 0)`) |
+| `height` | int | No | Output height (0 = same as input) (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+fcv_warp_affine("A", 640, 480)
+```
+
+**Tags:** `fastcv`, `warp`, `affine`, `transform`
+
+---
+
+### `fcv_warp_perspective()`
+
+Perspective warp accelerated by FastCV; 3x3 CV_32F matrix loaded from cache
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `matrix_cache` | string | Yes | Cache ID holding the 3x3 CV_32F perspective matrix |
+| `width` | int | No | Output width  (0 = same as input) (default: `RuntimeValue(int: 0)`) |
+| `height` | int | No | Output height (0 = same as input) (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+fcv_warp_perspective("M", 640, 480)
+```
+
+**Tags:** `fastcv`, `warp`, `perspective`, `transform`
+
+---
+
 ## feature
 
 ### `agast()`
@@ -5566,7 +6084,7 @@ Checks if button was clicked and resets the state
 |------|------|----------|-------------|
 | `name` | string | Yes | Button name |
 | `window` | string | Yes | Window name |
-| `result_var` | string | Yes | Variable to store click state |
+| `var_name` | string | No | Return value into this variable (default: `RuntimeValue(string: "")`) |
 
 **Example:**
 
@@ -5656,7 +6174,7 @@ Gets checkbox state as boolean into a variable
 |------|------|----------|-------------|
 | `name` | string | Yes | Checkbox name |
 | `window` | string | Yes | Window name |
-| `var_name` | string | Yes | Variable to store result |
+| `var_name` | string | No | Return value into this variable (default: `RuntimeValue(string: "")`) |
 
 **Example:**
 
@@ -5828,7 +6346,7 @@ Gets trackbar value and stores in a variable
 |------|------|----------|-------------|
 | `name` | string | Yes | Trackbar name |
 | `window` | string | Yes | Window name |
-| `var_name` | string | Yes | Variable name to store value |
+| `var_name` | string | No | Return value into this variable (default: `RuntimeValue(string: "")`) |
 
 **Example:**
 
@@ -8973,6 +9491,147 @@ imencode(".jpg", 90)
 
 ---
 
+### `libcam_debug_config()`
+
+Print detailed debug information about a libcamera session configuration
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Camera source identifier |
+
+**Example:**
+
+```vsp
+libcam_debug_config(0)
+```
+
+**Tags:** `libcamera`, `debug`, `configuration`, `diagnostics`
+
+---
+
+### `libcam_get_bayer()`
+
+Get the Bayer pattern string for a camera
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Camera source identifier |
+
+**Example:**
+
+```vsp
+libcam_get_bayer(0)
+```
+
+**Tags:** `libcamera`, `bayer`, `format`
+
+---
+
+### `libcam_list()`
+
+List available libcamera devices
+
+**Example:**
+
+```vsp
+libcam_list()
+```
+
+**Tags:** `libcamera`, `camera`, `list`, `enumerate`
+
+---
+
+### `libcam_list_controls()`
+
+List all available controls for a libcamera device
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | No | Camera source identifier (index or ID) (default: `RuntimeValue(int: 0)`) |
+
+**Example:**
+
+```vsp
+libcam_list_controls(0)
+```
+
+**Tags:** `libcamera`, `camera`, `controls`, `list`
+
+---
+
+### `libcam_list_formats()`
+
+List all supported pixel formats and resolutions for a camera
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Camera source identifier |
+
+**Example:**
+
+```vsp
+libcam_list_formats(0)
+```
+
+**Tags:** `libcamera`, `formats`, `resolutions`, `diagnostics`
+
+---
+
+### `libcam_prop()`
+
+Set a libcamera control by name
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Camera source identifier (index or ID) |
+| `control` | string | Yes | Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness) |
+| `value` | any | Yes | Control value (number or boolean) |
+
+**Example:**
+
+```vsp
+libcam_prop(0, "AeEnable", 0)
+```
+
+**Tags:** `libcamera`, `camera`, `control`, `property`
+
+---
+
+### `libcam_setup()`
+
+Configure libcamera-specific settings for a camera
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Camera source (index or ID string) |
+| `width` | int | No | Frame width (default: `RuntimeValue(int: 640)`) |
+| `height` | int | No | Frame height (default: `RuntimeValue(int: 480)`) |
+| `pixel_format` | string | No | Pixel format: BGR888, YUYV, MJPEG (default: `RuntimeValue(string: "BGR888")`) |
+| `buffer_count` | int | No | Number of buffers (default: `RuntimeValue(int: 4)`) |
+| `stream_role` | string | No | Stream role: VideoRecording, StillCapture, Viewfinder (default: `RuntimeValue(string: "VideoRecording")`) |
+
+**Example:**
+
+```vsp
+libcam_setup(0, 1920, 1080, "SRGGB10", 4, "Viewfinder")
+```
+
+**Tags:** `libcamera`, `camera`, `setup`, `configuration`
+
+---
+
 ### `list_cameras()`
 
 Lists all available camera devices
@@ -9275,6 +9934,159 @@ set_video_prop("0", "exposure", -5)
 
 ---
 
+### `v4l2_enum_devices()`
+
+Enumerate /dev/video* devices and their capabilities
+
+**Example:**
+
+```vsp
+v4l2_enum_devices()
+```
+
+**Tags:** `v4l2`, `enumerate`, `devices`
+
+---
+
+### `v4l2_get_bayer()`
+
+Get the Bayer pattern string from the active V4L2 format
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path or index |
+
+**Example:**
+
+```vsp
+v4l2_get_bayer("/dev/video0")
+```
+
+**Tags:** `v4l2`, `bayer`, `format`
+
+---
+
+### `v4l2_get_prop()`
+
+Get current value of a V4L2 control.
+Works on both /dev/video* and /dev/v4l-subdev* paths.
+Auto-discovers linked sub-devices when control not found on primary device.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path or index |
+| `control_name` | string | Yes | Control name, case-insensitive (e.g. "exposure", "analogue_gain") |
+
+**Example:**
+
+```vsp
+exp = v4l2_get_prop("/dev/video0", "exposure")
+```
+
+**Tags:** `v4l2`, `camera`, `control`, `get`, `subdev`
+
+---
+
+### `v4l2_list_controls()`
+
+List all V4L2 controls (all classes) with ranges and current values.
+Automatically includes controls from linked sub-devices (sensors, ISPs) discovered via the media controller.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path or index |
+
+**Example:**
+
+```vsp
+v4l2_list_controls("/dev/video3") # also shows sensor controls
+```
+
+**Tags:** `v4l2`, `camera`, `controls`, `list`, `subdev`
+
+---
+
+### `v4l2_list_formats()`
+
+List all supported V4L2 formats and resolutions
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path or index |
+
+**Example:**
+
+```vsp
+v4l2_list_formats("/dev/video0")
+```
+
+**Tags:** `v4l2`, `formats`, `resolutions`, `enumerate`
+
+---
+
+### `v4l2_prop()`
+
+Set a V4L2 control by name.
+Works on both /dev/video* (VFE) and /dev/v4l-subdev* paths.
+When the control is not found on the video device, the manager automatically discovers and tries linked sub-devices via the media controller (BFS upstream traversal, sensor first).
+Pass an explicit subdev path as the 4th argument to bypass auto-discovery.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path ("/dev/video0", "/dev/v4l-subdev28") or index |
+| `control_name` | string | Yes | Control name, case-insensitive with space/underscore equivalence (e.g. "Exposure", "vertical_flip", "analogue_gain") |
+| `value` | float | Yes | Control value |
+| `subdev` | string | No | Explicit /dev/v4l-subdev* path to target directly, bypassing auto-discovery. Useful on ISP pipelines where the video node is an intermediate VFE. (default: `RuntimeValue(string: "")`) |
+
+**Example:**
+
+```vsp
+v4l2_prop("/dev/video0", "vertical_flip", 1)
+v4l2_prop("/dev/video3", "vertical_flip", 1, "/dev/v4l-subdev28")
+v4l2_prop("/dev/v4l-subdev28", "exposure", 800)
+```
+
+**Tags:** `v4l2`, `camera`, `control`, `property`, `subdev`
+
+---
+
+### `v4l2_setup()`
+
+Configure and open a V4L2 native device
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | any | Yes | Device path (e.g. "/dev/video0") or index |
+| `width` | int | No | Frame width (default: `RuntimeValue(int: 640)`) |
+| `height` | int | No | Frame height (default: `RuntimeValue(int: 480)`) |
+| `pixel_format` | string | No | Pixel format: YUYV, MJPG, NV12, SRGGB10, etc. (default: `RuntimeValue(string: "YUYV")`) |
+| `fps` | int | No | Framerate (default: `RuntimeValue(int: 30)`) |
+| `buffer_count` | int | No | Number of mmap buffers (default: `RuntimeValue(int: 4)`) |
+| `subdev` | string | No | Pin a specific /dev/v4l-subdev* path for control lookup on this device. Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). Leave empty for auto-discovery. (default: `RuntimeValue(string: "")`) |
+
+**Example:**
+
+```vsp
+v4l2_setup("/dev/video0", 1920, 1080, "SRGGB10", 30)
+v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 30, 4, "/dev/v4l-subdev28")
+```
+
+**Tags:** `v4l2`, `camera`, `setup`, `configuration`
+
+---
+
 ### `video_cap()`
 
 Captures video frames from a source (camera, file, or URL)
@@ -9284,7 +10096,8 @@ Captures video frames from a source (camera, file, or URL)
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `source` | any | Yes | Source: device index, file path, or URL |
-| `api` | string | No | API backend: auto, dshow, v4l2, ffmpeg (default: `RuntimeValue(string: "auto")`) |
+| `api` | string | No | API backend: auto, dshow, v4l2, ffmpeg, libcamera, v4l2_native, gstreamer (default: `RuntimeValue(string: "auto")`) |
+| `format` | string | No | Capture format: MJPG, UYVY, NV12, etc. (default: `RuntimeValue(string: "")`) |
 
 **Example:**
 

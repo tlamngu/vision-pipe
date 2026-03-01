@@ -1,5 +1,6 @@
 #include "interpreter/items/color_items.h"
 #include "interpreter/cache_manager.h"
+#include "utils/camera_device_manager.h"
 #include <iostream>
 
 namespace visionpipe {
@@ -659,12 +660,12 @@ DebayerItem::DebayerItem() {
     _description = "Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data";
     _category = "color";
     _params = {
-        ParamDef::optional("pattern", BaseType::STRING, "Bayer tile pattern: RGGB, BGGR, GBRG, GRBG", "RGGB"),
+        ParamDef::optional("pattern", BaseType::STRING, "Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or \"auto\" to detect from the active camera", "RGGB"),
         ParamDef::optional("algorithm", BaseType::STRING, "Demosaic algorithm: bilinear, vng, ea", "bilinear"),
         ParamDef::optional("output", BaseType::STRING, "Output format: bgr or rgb", "bgr"),
         ParamDef::optional("bit_shift", BaseType::INT, "Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)", 0)
     };
-    _example = "debayer(\"RGGB\", \"ea\", \"bgr\", 2)";
+    _example = "debayer() | debayer(\"auto\") | debayer(\"RGGB\", \"ea\", \"bgr\", 2)";
     _returnType = "mat";
     _tags = {"bayer", "debayer", "demosaic", "color", "raw"};
 }
@@ -681,6 +682,27 @@ ExecutionResult DebayerItem::execute(const std::vector<RuntimeValue>& args, Exec
     std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::toupper);
     std::transform(algorithm.begin(), algorithm.end(), algorithm.begin(), ::tolower);
     std::transform(output.begin(), output.end(), output.begin(), ::tolower);
+
+    // "auto" pattern: query the device that produced the current frame
+    if (pattern == "AUTO") {
+        if (ctx.lastSourceId.empty()) {
+            return ExecutionResult::fail("debayer(\"auto\"): no source ID in context — run video_cap before debayer");
+        }
+        // Try V4L2 native backend first, then libcamera
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+        pattern = CameraDeviceManager::instance().getV4L2BayerPattern(ctx.lastSourceId);
+#endif
+        if (pattern.empty()) {
+            pattern = CameraDeviceManager::instance().getBayerPattern(ctx.lastSourceId);
+        }
+        if (pattern.empty()) {
+            return ExecutionResult::fail("debayer(\"auto\"): could not detect Bayer pattern for source '" + ctx.lastSourceId + "'");
+        }
+        if (ctx.verbose) {
+            std::cout << "[DEBUG] debayer: auto-detected pattern=" << pattern
+                      << " for source=" << ctx.lastSourceId << std::endl;
+        }
+    }
 
     cv::Mat input = ctx.currentMat;
 

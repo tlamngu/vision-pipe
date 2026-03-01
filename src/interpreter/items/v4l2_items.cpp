@@ -46,9 +46,14 @@ V4L2SetupItem::V4L2SetupItem() {
         ParamDef::optional("height", BaseType::INT, "Frame height", 480),
         ParamDef::optional("pixel_format", BaseType::STRING, "Pixel format: YUYV, MJPG, NV12, SRGGB10, etc.", "YUYV"),
         ParamDef::optional("fps", BaseType::INT, "Framerate", 30),
-        ParamDef::optional("buffer_count", BaseType::INT, "Number of mmap buffers", 4)
+        ParamDef::optional("buffer_count", BaseType::INT, "Number of mmap buffers", 4),
+        ParamDef::optional("subdev", BaseType::STRING,
+            "Pin a specific /dev/v4l-subdev* path for control lookup on this device. "
+            "Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). "
+            "Leave empty for auto-discovery.", "")
     };
-    _example = "v4l2_setup(\"/dev/video0\", 1920, 1080, \"SRGGB10\", 30)";
+    _example = "v4l2_setup(\"/dev/video0\", 1920, 1080, \"SRGGB10\", 30)\n"
+               "v4l2_setup(\"/dev/video3\", 1640, 1232, \"SRGGB8\", 30, 4, \"/dev/v4l-subdev28\")";
     _returnType = "mat";
     _tags = {"v4l2", "camera", "setup", "configuration"};
 }
@@ -62,13 +67,16 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
     std::string pixelFormat = args.size() > 3 ? args[3].asString() : "YUYV";
     int fps = args.size() > 4 ? static_cast<int>(args[4].asNumber()) : 30;
     int bufferCount = args.size() > 5 ? static_cast<int>(args[5].asNumber()) : 4;
+    std::string subdev = args.size() > 6 ? args[6].asString() : "";
 
     if (ctx.verbose) {
         std::cout << "[DEBUG] V4L2Items: v4l2_setup source=" << sourceId
                   << " " << width << "x" << height
                   << " fmt=" << pixelFormat
                   << " fps=" << fps
-                  << " buffers=" << bufferCount << std::endl;
+                  << " buffers=" << bufferCount;
+        if (!subdev.empty()) std::cout << " subdev=" << subdev;
+        std::cout << std::endl;
     }
 
     V4L2NativeConfig config;
@@ -85,6 +93,11 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
                                     " " + pixelFormat + " @" + std::to_string(fps) + "fps)");
     }
 
+    // Pin preferred subdev if provided
+    if (!subdev.empty()) {
+        V4L2DeviceManager::instance().setPreferredSubDev(sourceId, subdev);
+    }
+
     SystemLogger::info("V4L2Items", "v4l2_setup: Configured " + sourceId + " " +
                        std::to_string(width) + "x" + std::to_string(height) +
                        " " + pixelFormat + " @" + std::to_string(fps) + "fps");
@@ -98,16 +111,29 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
 
 V4L2PropItem::V4L2PropItem() {
     _functionName = "v4l2_prop";
-    _description = "Set a V4L2 control by name";
+    _description = "Set a V4L2 control by name.\n"
+                   "Works on both /dev/video* (VFE) and /dev/v4l-subdev* paths.\n"
+                   "When the control is not found on the video device, the manager "
+                   "automatically discovers and tries linked sub-devices via the media controller "
+                   "(BFS upstream traversal, sensor first).\n"
+                   "Pass an explicit subdev path as the 4th argument to bypass auto-discovery.";
     _category = "video_io";
     _params = {
-        ParamDef::required("source", BaseType::ANY, "Device path or index"),
-        ParamDef::required("control_name", BaseType::STRING, "Control name (e.g. \"Brightness\", \"ExposureTime\")"),
-        ParamDef::required("value", BaseType::FLOAT, "Control value")
+        ParamDef::required("source", BaseType::ANY,
+            "Device path (\"/dev/video0\", \"/dev/v4l-subdev28\") or index"),
+        ParamDef::required("control_name", BaseType::STRING,
+            "Control name, case-insensitive with space/underscore equivalence "
+            "(e.g. \"Exposure\", \"vertical_flip\", \"analogue_gain\")"),
+        ParamDef::required("value", BaseType::FLOAT, "Control value"),
+        ParamDef::optional("subdev", BaseType::STRING,
+            "Explicit /dev/v4l-subdev* path to target directly, bypassing auto-discovery. "
+            "Useful on ISP pipelines where the video node is an intermediate VFE.", "")
     };
-    _example = "v4l2_prop(\"/dev/video0\", \"ExposureTime\", 5000)";
+    _example = "v4l2_prop(\"/dev/video0\", \"vertical_flip\", 1)\n"
+               "v4l2_prop(\"/dev/video3\", \"vertical_flip\", 1, \"/dev/v4l-subdev28\")\n"
+               "v4l2_prop(\"/dev/v4l-subdev28\", \"exposure\", 800)";
     _returnType = "mat";
-    _tags = {"v4l2", "camera", "control", "property"};
+    _tags = {"v4l2", "camera", "control", "property", "subdev"};
 }
 
 ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
@@ -115,13 +141,19 @@ ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, Exe
     std::string sourceId = resolveSource(args[0]);
     std::string controlName = args[1].asString();
     int value = static_cast<int>(args[2].asNumber());
+    std::string explicitSubdev = args.size() > 3 ? args[3].asString() : "";
 
     if (ctx.verbose) {
         std::cout << "[DEBUG] V4L2Items: v4l2_prop source=" << sourceId
-                  << " control='" << controlName << "' value=" << value << std::endl;
+                  << " control='" << controlName << "' value=" << value;
+        if (!explicitSubdev.empty()) std::cout << " subdev=" << explicitSubdev;
+        std::cout << std::endl;
     }
 
-    if (!CameraDeviceManager::instance().setV4L2Control(sourceId, controlName, value)) {
+    // If an explicit subdev is provided, target it directly
+    const std::string& target = explicitSubdev.empty() ? sourceId : explicitSubdev;
+
+    if (!CameraDeviceManager::instance().setV4L2Control(target, controlName, value)) {
         return ExecutionResult::fail("Failed to set V4L2 control " + controlName + " on " + sourceId);
     }
 
@@ -134,15 +166,18 @@ ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, Exe
 
 V4L2GetPropItem::V4L2GetPropItem() {
     _functionName = "v4l2_get_prop";
-    _description = "Get current value of a V4L2 control";
+    _description = "Get current value of a V4L2 control.\n"
+                   "Works on both /dev/video* and /dev/v4l-subdev* paths.\n"
+                   "Auto-discovers linked sub-devices when control not found on primary device.";
     _category = "video_io";
     _params = {
         ParamDef::required("source", BaseType::ANY, "Device path or index"),
-        ParamDef::required("control_name", BaseType::STRING, "Control name")
+        ParamDef::required("control_name", BaseType::STRING,
+            "Control name, case-insensitive (e.g. \"exposure\", \"analogue_gain\")")
     };
-    _example = "v4l2_get_prop(\"/dev/video0\", \"Brightness\")";
+    _example = "exp = v4l2_get_prop(\"/dev/video0\", \"exposure\")";
     _returnType = "int";
-    _tags = {"v4l2", "camera", "control", "get"};
+    _tags = {"v4l2", "camera", "control", "get", "subdev"};
 }
 
 ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
@@ -166,14 +201,16 @@ ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, 
 
 V4L2ListControlsItem::V4L2ListControlsItem() {
     _functionName = "v4l2_list_controls";
-    _description = "List all V4L2 controls with current values and ranges";
+    _description = "List all V4L2 controls (all classes) with ranges and current values.\n"
+                   "Automatically includes controls from linked sub-devices (sensors, ISPs) "
+                   "discovered via the media controller.";
     _category = "video_io";
     _params = {
         ParamDef::required("source", BaseType::ANY, "Device path or index")
     };
-    _example = "v4l2_list_controls(\"/dev/video0\")";
+    _example = "v4l2_list_controls(\"/dev/video3\") # also shows sensor controls";
     _returnType = "mat";
-    _tags = {"v4l2", "camera", "controls", "list"};
+    _tags = {"v4l2", "camera", "controls", "list", "subdev"};
 }
 
 ExecutionResult V4L2ListControlsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {

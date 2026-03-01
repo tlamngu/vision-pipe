@@ -86,7 +86,8 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
         }
         return ExecutionResult::fail(failMsg);
     }
-    
+
+    ctx.lastSourceId = sourceId;
     return ExecutionResult::ok(frame);
 }
 

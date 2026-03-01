@@ -123,13 +123,39 @@ public:
      */
     bool isVerbose() const;
 
+    /**
+     * @brief Pin a specific subdev path as the preferred control target for a
+     *        video device.  When set, setControl/getControl will try this subdev
+     *        first (before the media-controller BFS scan), saving discovery
+     *        overhead and ensuring the correct node is targeted on complex ISP
+     *        pipelines (e.g. Qualcomm MSM where the VFE is an intermediate node).
+     *
+     * @param videoDevPath  e.g. "/dev/video3"
+     * @param subDevPath    e.g. "/dev/v4l-subdev28"
+     */
+    void setPreferredSubDev(const std::string& videoDevPath,
+                            const std::string& subDevPath);
+
+    /**
+     * @brief Remove a previously pinned preferred subdev, reverting to full
+     *        auto-discovery via the media controller.
+     */
+    void clearPreferredSubDev(const std::string& videoDevPath);
+
 private:
     V4L2DeviceManager() = default;
     ~V4L2DeviceManager();
 
     struct MappedBuffer {
-        void* start = nullptr;
-        size_t length = 0;
+        struct Plane {
+            void* start = nullptr;
+            size_t length = 0;
+        };
+        // One entry per V4L2 data plane.
+        // Single-plane and single-plane-MPLANE formats: planes.size() == 1
+        // NV12/NV21 MPLANE: planes.size() == 2  (Y, UV)
+        // YUV420 MPLANE:    planes.size() == 3  (Y, U, V)
+        std::vector<Plane> planes;
     };
 
     struct V4L2Session {
@@ -142,6 +168,10 @@ private:
         uint32_t negotiatedSizeImage = 0;
         std::vector<MappedBuffer> buffers;
         bool streaming = false;
+        bool isMplane = false; // true when device uses V4L2_CAP_VIDEO_CAPTURE_MPLANE
+        // bytesperline for each data plane (from VIDIOC_S_FMT response)
+        // index 0 = plane 0, index 1 = plane 1, etc.
+        std::vector<uint32_t> planeBytesPerLine;
     };
 
     bool openDevice(const std::string& devicePath, V4L2Session& session);
@@ -149,8 +179,24 @@ private:
     uint32_t resolveControlId(int fd, const std::string& nameOrId) const;
     std::string fourccToString(uint32_t fourcc) const;
 
+    /**
+     * @brief Open an fd for the given device path using an existing session if available,
+     *        otherwise open temporarily.  Caller must close the fd when done ONLY if
+     *        *tempOpened is set to true.
+     */
+    int acquireFd(const std::string& devicePath, bool* tempOpened) const;
+
+    /**
+     * @brief Discover /dev/v4l-subdev* paths reachable upstream from a video
+     *        device via BFS through the V4L2 media controller (/dev/media*).
+     * @return Ordered list of sub-device paths, deepest upstream (sensor) first.
+     */
+    std::vector<std::string> findLinkedSubDevices(const std::string& videoDevPath) const;
+
     mutable std::recursive_mutex _mutex;
     std::map<std::string, V4L2Session> _sessions;
+    // Optional pinned subdev per video device path (set by setPreferredSubDev)
+    std::map<std::string, std::string> _preferredSubDevs;
     bool _verbose = false;
 };
 

@@ -144,6 +144,7 @@ struct ExecutionContext {
     CacheManager* cacheManager = nullptr;   // Access to cache
     Pipeline* currentPipeline = nullptr;    // Current pipeline being executed
     std::unordered_map<std::string, RuntimeValue> variables;  // Local variables
+    std::string lastSourceId;               // Source ID of the most recent video_cap call (used by debayer("auto"))
     
     bool verbose = false;                   // Enable verbose DNN/performance output
     bool shouldBreak = false;

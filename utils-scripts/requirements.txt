@@ -1,0 +1,3 @@
+# camera_tuner.py requirements
+# Uses only Python stdlib + numpy (no Flask needed)
+numpy>=1.21

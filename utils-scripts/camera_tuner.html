@@ -1,0 +1,1426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VisionPipe — Camera Colour Tuner</title>
+<style>
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --surface2: #22263a;
+    --border:   #2e3350;
+    --accent:   #4f8ef7;
+    --accent2:  #7b5ef8;
+    --text:     #d4d8f0;
+    --muted:    #7a80a0;
+    --green:    #34d399;
+    --yellow:   #fbbf24;
+    --red:      #f87171;
+    --radius:   8px;
+    --gap:      12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* === Header === */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 1rem; font-weight: 600; letter-spacing: 0.03em; }
+  header .subtitle { color: var(--muted); font-size: 0.8rem; }
+  #stream-status { margin-left: auto; font-size: 0.75rem; padding: 3px 10px;
+    border-radius: 12px; background: var(--surface2); }
+  #stream-status.ok  { background: #16402b; color: var(--green); }
+  #stream-status.err { background: #3f1010; color: var(--red); }
+
+  /* === Main layout === */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: 1fr auto;
+    gap: var(--gap);
+    padding: var(--gap);
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* === Canvas panel === */
+  #canvas-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  #panel-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+    font-size: 0.75rem; color: var(--muted); flex-shrink: 0;
+  }
+  #pixel-info {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #sampled-swatch {
+    width: 22px; height: 22px; border-radius: 4px;
+    border: 1px solid var(--border);
+    background: #333;
+  }
+  #sampled-text { font-family: monospace; font-size: 0.8rem; }
+  #canvas-container {
+    flex: 1; overflow: hidden; position: relative;
+    display: flex; align-items: center; justify-content: center; background: #000;
+  }
+  #stream-canvas {
+    max-width: 100%; max-height: 100%; width: auto; height: auto;
+    object-fit: contain;
+    cursor: crosshair;
+  }
+  /* Crosshair overlay */
+  #crosshair {
+    position: absolute; pointer-events: none;
+    width: 20px; height: 20px;
+    border: 1.5px solid rgba(255,255,255,0.7);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
+  }
+
+  /* === Right panel === */
+  #right-panel {
+    display: flex; flex-direction: column; gap: var(--gap); overflow-y: auto;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px;
+    flex-shrink: 0;
+  }
+  .card-title {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+
+  /* === Colour patches === */
+  .patch-row {
+    display: grid; grid-template-columns: 28px 1fr 28px 28px 40px 56px;
+    align-items: center; gap: 6px; padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .patch-row:last-child { border-bottom: none; }
+  .swatch {
+    width: 24px; height: 24px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.15); flex-shrink: 0;
+  }
+  .patch-label { font-size: 0.78rem; font-weight: 600; }
+  .patch-assign {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 4px; padding: 3px 6px;
+    font-size: 0.7rem; cursor: pointer; white-space: nowrap;
+  }
+  .patch-assign:hover { border-color: var(--accent); color: var(--accent); }
+  .patch-assign.assigned { border-color: var(--green); color: var(--green); }
+  .patch-clear {
+    background: none; border: none; color: var(--red); cursor: pointer;
+    font-size: 0.75rem; opacity: 0.5;
+  }
+  .patch-clear:hover { opacity: 1; }
+  .delta-badge {
+    font-size: 0.7rem; text-align: right; font-family: monospace;
+    font-weight: 700;
+  }
+  .delta-good   { color: var(--green); }
+  .delta-warn   { color: var(--yellow); }
+  .delta-bad    { color: var(--red); }
+  .delta-none   { color: var(--muted); }
+
+  /* === Buttons === */
+  .btn {
+    padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer;
+    font-size: 0.8rem; font-weight: 600; transition: opacity 0.15s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary  { background: var(--accent);  color: #fff; }
+  .btn-success  { background: #166534;        color: var(--green); border: 1px solid var(--green); }
+  .btn-danger   { background: #4a1010;        color: var(--red);   border: 1px solid var(--red); }
+  .btn-muted    { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+  .btn:hover:not(:disabled) { opacity: 0.85; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+  /* === Gains preview === */
+  #gains-preview {
+    display: none; background: var(--surface2); border-radius: 6px;
+    padding: 10px; margin-top: 8px; font-size: 0.75rem;
+  }
+  .gains-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  }
+  .gain-item { display: flex; justify-content: space-between; }
+  .gain-val  { font-family: monospace; color: var(--accent); }
+
+  /* === Status bar === */
+  #status-bar {
+    grid-column: 1 / -1;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 14px;
+    font-size: 0.78rem; display: flex; align-items: center; gap: 12px;
+    flex-shrink: 0;
+  }
+  #status-msg { color: var(--text); flex: 1; white-space: pre-wrap; font-family: monospace; }
+  #iteration-count { color: var(--muted); font-family: monospace; }
+
+  /* === Camera controls (bottom, spans both columns) === */
+  #controls-panel {
+    grid-column: 1 / -1;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px;
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+    flex-shrink: 0;
+  }
+  .ctrl-group { display: flex; align-items: center; gap: 8px; }
+  .ctrl-label { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+  .ctrl-range { width: 130px; accent-color: var(--accent); }
+  .ctrl-val   { font-size: 0.75rem; font-family: monospace;
+                background: var(--surface2); padding: 2px 7px;
+                border-radius: 4px; min-width: 44px; text-align: right; }
+
+  /* === Scrollbar === */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* === Spinner === */
+  .spinner {
+    display: inline-block; width: 12px; height: 12px; margin-left: 6px;
+    border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+    border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>VisionPipe · Camera Colour Tuner</h1>
+    <div class="subtitle">Choose camera → Start pipeline → click stream → assign patches → calibrate</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-left:auto;">
+    <select id="sel-camera" style="background:var(--surface2);border:1px solid var(--border);
+      color:var(--text);border-radius:6px;padding:4px 8px;font-size:0.78rem;">
+      <option value="">Loading cameras…</option>
+    </select>
+    <select id="sel-subdev" style="background:var(--surface2);border:1px solid var(--border);
+      color:var(--text);border-radius:6px;padding:4px 8px;font-size:0.78rem;" title="Sensor subdev for controls / formats">
+      <option value="">— no subdev —</option>
+    </select>
+    <select id="sel-format" style="background:var(--surface2);border:1px solid var(--border);
+      color:var(--text);border-radius:6px;padding:4px 8px;font-size:0.78rem;">
+      <option value="">— select camera first —</option>
+    </select>
+    <select id="sel-pattern" style="background:var(--surface2);border:1px solid var(--border);
+      color:var(--text);border-radius:6px;padding:4px 8px;font-size:0.78rem;">
+      <option value="RGGB">RGGB</option>
+      <option value="BGGR">BGGR</option>
+      <option value="GRBG">GRBG</option>
+      <option value="GBRG">GBRG</option>
+      <option value="auto">auto</option>
+    </select>
+    <label style="font-size:0.75rem;color:var(--muted);display:flex;align-items:center;gap:4px;">
+      <input type="checkbox" id="chk-flipv" checked> flip-V
+    </label>
+    <button class="btn btn-success" id="btn-start-pipeline">▶ Start Pipeline</button>
+    <button class="btn btn-danger"  id="btn-stop-pipeline" disabled>■ Stop</button>
+    <div id="stream-status">⏳ Stopped</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============================================================ -->
+  <!-- Left: Camera stream canvas                                   -->
+  <!-- ============================================================ -->
+  <div id="canvas-panel">
+    <div id="panel-bar">
+      <span id="fps-display">–– fps</span>
+      <span id="res-display"></span>
+      <div id="pixel-info">
+        <span style="color:var(--muted);font-size:0.72rem;">click to sample →</span>
+        <div id="sampled-swatch"></div>
+        <span id="sampled-text">–</span>
+      </div>
+    </div>
+    <div id="canvas-container">
+      <!-- MJPEG loaded via JS fetch and drawn to canvas -->
+      <canvas id="stream-canvas"></canvas>
+      <!-- Crosshair follows mouse over canvas -->
+      <div id="crosshair"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Right: Colour patches + calibration                         -->
+  <!-- ============================================================ -->
+  <div id="right-panel">
+
+    <!-- Colour patch targets -->
+    <div class="card" id="vsp-card" style="display:none;">
+      <div class="card-title">Generated VSP
+        <button class="btn btn-muted" id="btn-vsp-toggle"
+                style="font-size:0.65rem;padding:2px 7px;margin-left:8px;">show</button>
+        <button class="btn btn-muted" id="btn-vsp-save"
+                style="font-size:0.65rem;padding:2px 7px;margin-left:4px;" title="Save stream VSP along with its calibration">save</button>
+      </div>
+      <pre id="vsp-text" style="display:none;font-size:0.65rem;color:#7eb8f7;
+        max-height:120px;overflow-y:auto;line-height:1.5;"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Colour Patch Targets</div>
+      <div id="patch-list">
+        <!-- Built by JS -->
+      </div>
+    </div>
+
+    <!-- Calibration actions -->
+    <div class="card">
+      <div class="card-title">Calibration</div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-compute" disabled>Compute Gains</button>
+        <button class="btn btn-success" id="btn-apply"   disabled>Apply to Camera</button>
+        <button class="btn btn-muted"   id="btn-clear"  >Clear All</button>
+        <button class="btn btn-muted"   id="btn-auto-exp">Auto Brightness</button>
+        <button class="btn btn-muted"   id="btn-full-calib">Full Auto</button>
+      </div>
+      <div id="gains-preview">
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:6px;">
+          Computed pixel value controls (0–1023):
+        </div>
+        <div class="gains-grid" id="gains-grid"></div>
+        <div id="ccm-info" style="margin-top:8px; display:none;">
+          <div style="font-size:0.7rem;color:var(--muted);margin-bottom:3px;">CCM (RGB):</div>
+          <pre id="ccm-text" style="font-size:0.68rem;color:#7eb8f7;line-height:1.5;"></pre>
+        </div>
+      </div>
+      <div id="delta-table" style="margin-top:10px; display:none;">
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px;">
+          Colour error per patch (ΔE — lower is better):
+        </div>
+        <div id="delta-rows"></div>
+      </div>
+    </div>
+
+    <!-- Iteration log -->
+    <div class="card" id="log-card" style="display:none;">
+      <div class="card-title">Calibration Log</div>
+      <div id="log-content" style="font-size:0.72rem;color:var(--muted);
+           font-family:monospace;max-height:120px;overflow-y:auto;line-height:1.6;">
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Bottom: Camera hardware controls                            -->
+  <!-- ============================================================ -->
+  <!-- dynamic controls — built by JS after /api/controls -->
+  <div id="controls-panel">
+    <span style="color:var(--muted);font-size:0.78rem;">
+      Start the pipeline to load camera controls.
+    </span>
+  </div>
+
+  <div id="status-bar">
+    <span id="status-msg">Waiting for stream…</span>
+    <span id="iteration-count"></span>
+  </div>
+
+</main>
+
+<script>
+'use strict';
+
+// ============================================================
+// State
+// ============================================================
+const PATCHES = [
+  { id: "W",     label: "White",   rgb: [255, 255, 255] },
+  { id: "Y",     label: "Yellow",  rgb: [255, 255,   0] },
+  { id: "C",     label: "Cyan",    rgb: [  0, 255, 255] },
+  { id: "G",     label: "Green",   rgb: [  0, 255,   0] },
+  { id: "M",     label: "Magenta", rgb: [255,   0, 255] },
+  { id: "R",     label: "Red",     rgb: [255,   0,   0] },
+  { id: "BLUE",  label: "Blue",    rgb: [  0,   0, 255] },
+  { id: "BLACK", label: "Black",   rgb: [  0,   0,   0] },
+];
+
+// ============================================================
+// State
+// ============================================================
+let lastSampled  = null;
+let assignments  = {};
+let computedGains = null;
+let computedCcm   = null;   // 3×3 CCM from last Compute
+let streamOk       = false;
+let calibIteration = 0;
+let currentDevice  = '';
+let currentSubdev  = '';
+let currentConfig  = {};   // last start config sent to server
+let controlDefs    = [];   // [{key, name, min, max, step, current}]
+
+// ============================================================
+// DOM refs
+// ============================================================
+const streamCanvas = document.getElementById('stream-canvas');
+const streamCtx    = streamCanvas.getContext('2d', { willReadFrequently: true });
+const statusEl     = document.getElementById('stream-status');
+const sampledSwEl  = document.getElementById('sampled-swatch');
+const sampledTxEl  = document.getElementById('sampled-text');
+const statusMsg    = document.getElementById('status-msg');
+const itCount      = document.getElementById('iteration-count');
+const fpsDisplay   = document.getElementById('fps-display');
+const resDisplay   = document.getElementById('res-display');
+const crosshair    = document.getElementById('crosshair');
+
+// ============================================================
+// Camera / pipeline setup
+// ============================================================
+const deviceSubdevMap = {};   // device path → subdev path (from sysfs)
+let _cameraLoadTimer = null;
+let _camerasPopulated = false;  // true once the camera dropdown has real entries
+
+async function loadCameras() {
+  const sel   = document.getElementById('sel-camera');
+  const sdSel = document.getElementById('sel-subdev');
+
+  // ---- fetch (fast: server always returns from cache) ----
+  let data;
+  try {
+    const ac  = new AbortController();
+    const tid = setTimeout(() => ac.abort(), 5000);
+    const r   = await fetch('/api/cameras', { signal: ac.signal });
+    clearTimeout(tid);
+    data = await r.json();
+  } catch (e) {
+    setStatus('Cannot reach server: ' + (e.name === 'AbortError' ? 'timed out' : e.message));
+    if (!_camerasPopulated) sel.innerHTML = '<option value="">Retrying…</option>';
+    _cameraLoadTimer = setTimeout(loadCameras, 3000);
+    return;
+  }
+
+  const devs    = data.cameras        || data;
+  const subdevs = data.sensor_subdevs || [];
+  const ready   = data.discovery_ready !== false;  // undefined → old server → treat as ready
+
+  // ---- not ready yet: keep polling ----
+  if (!ready) {
+    setStatus('Scanning cameras…');
+    sel.innerHTML = '<option value="">Scanning…</option>';
+    _cameraLoadTimer = setTimeout(loadCameras, 2000);
+    return;
+  }
+
+  // ---- ready: populate camera picker (only once) ----
+  if (!_camerasPopulated) {
+    _camerasPopulated = true;
+    devs.forEach(d => { if (d.subdev) deviceSubdevMap[d.path] = d.subdev; });
+    sel.innerHTML = devs.length
+      ? devs.map(d => `<option value="${d.path}">${d.path} — ${d.name}</option>`).join('')
+      : '<option value="">No cameras found</option>';
+  }
+
+  // ---- populate / refresh subdev picker ----
+  const prevSubdev = sdSel.value;
+  sdSel.innerHTML  = '<option value="">— no subdev —</option>';
+  subdevs.forEach(sd => {
+    const opt       = document.createElement('option');
+    opt.value       = sd.path;
+    opt.textContent = `${sd.path}${sd.name ? ' — ' + sd.name : ''}`;
+    sdSel.appendChild(opt);
+  });
+  if (prevSubdev && [...sdSel.options].some(o => o.value === prevSubdev)) {
+    sdSel.value  = prevSubdev;
+    currentSubdev = prevSubdev;
+  } else if (subdevs.length === 1) {
+    sdSel.value  = subdevs[0].path;
+    currentSubdev = subdevs[0].path;
+  }
+
+  // ---- status ----
+  setStatus(`${devs.length} camera(s)${subdevs.length
+    ? ', ' + subdevs.length + ' subdev(s) found.'
+    : devs.length ? ' found. Subdev scan in progress…' : ' found.'}`);
+
+  // ---- trigger format load ----
+  if (devs.length) await onCameraChange();
+
+  // ---- keep polling until subdevs arrive ----
+  if (devs.length && subdevs.length === 0) {
+    _cameraLoadTimer = setTimeout(loadCameras, 4000);
+  }
+}
+
+async function onCameraChange() {
+  const dev = document.getElementById('sel-camera').value;
+  if (!dev) return;
+  currentDevice = dev;
+  // Use subdev from dropdown, then from map, then empty
+  const sdSel = document.getElementById('sel-subdev');
+  currentSubdev = sdSel.value || deviceSubdevMap[dev] || '';
+  const sel = document.getElementById('sel-format');
+  sel.innerHTML = '<option>Loading formats…</option>';
+  try {
+    let url = `/api/formats?device=${encodeURIComponent(dev)}`;
+    if (currentSubdev) url += `&subdev=${encodeURIComponent(currentSubdev)}`;
+    const r    = await fetch(url);
+    const data = await r.json();
+    if (data.formats && data.formats.length) {
+      sel.innerHTML = data.formats.map(f =>
+        `<option value="${f.format}|${f.width}|${f.height}|${f.fps}|${f.bayer||''}">
+           ${f.format} ${f.width}×${f.height} @${f.fps}fps
+         </option>`
+      ).join('');
+      // Auto-set bayer pattern if present
+      const firstBayer = data.formats[0] && data.formats[0].bayer;
+      if (firstBayer) {
+        const patSel = document.getElementById('sel-pattern');
+        if ([...patSel.options].some(o => o.value === firstBayer)) patSel.value = firstBayer;
+      }
+      setStatus(`${data.formats.length} format(s) for ${dev}${
+        data.used_subdev ? ' (via subdev ' + data.used_subdev + ')' : ''}`);
+    } else {
+      sel.innerHTML = '<option value="">No formats found</option>';
+      setStatus('No formats found for ' + dev + '. Try selecting the sensor subdev.');
+    }
+  } catch (e) {
+    sel.innerHTML = '<option>Error</option>';
+    setStatus('Error loading formats: ' + e.message);
+  }
+}
+
+async function startPipeline() {
+  const dev    = document.getElementById('sel-camera').value;
+  const fmtStr = document.getElementById('sel-format').value;
+  if (!dev || !fmtStr) { setStatus('Select a camera and format first.'); return; }
+
+  const [fmt, w, h, fps, bayer] = fmtStr.split('|');
+  // Use the user-selected pattern; do NOT auto-override it here so manual
+  // selection of BGGR/GRBG/etc. is preserved when Start is clicked.
+  const cfg = {
+    device:       dev,
+    subdev:       currentSubdev,
+    format:       fmt,
+    width:        parseInt(w),
+    height:       parseInt(h),
+    fps:          parseInt(fps),
+    pattern:      document.getElementById('sel-pattern').value,
+    flip_v:       document.getElementById('chk-flipv').checked,
+    stream_port:  8080,
+    quality:      90,
+    // initial sensor values (will be loaded from /api/controls after start)
+    exposure: 1200, analogue_gain: 80, digital_gain: 256,
+    red_pixel_value: 1023, green_pixel_value_r: 1023,
+    blue_pixel_value: 1023, green_pixel_value_b: 1023,
+  };
+  currentConfig = cfg;
+
+  const btn = document.getElementById('btn-start-pipeline');
+  btn.disabled = true;
+  btn.innerHTML = 'Starting…<span class="spinner"></span>';
+  setStatus(`Generating VSP and starting pipeline for ${dev} ${fmt} ${w}×${h}…`);
+
+  try {
+    const r    = await fetch('/api/start', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+    const data = await r.json();
+    if (data.ok) {
+      setStatus(`Pipeline started (${data.msg}). Waiting for stream…`);
+      document.getElementById('btn-stop-pipeline').disabled = false;
+      document.getElementById('vsp-card').style.display = '';
+      // Load the generated VSP text
+      fetch('/api/vsp').then(r=>r.json()).then(d=>{
+        document.getElementById('vsp-text').textContent = d.vsp;
+      });
+      // Poll /api/status a few times to surface early errors and unlock sampling
+      let polls = 0;
+      const pollStatus = setInterval(async () => {
+        const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);
+        if (!s) return;
+        if (s.running && !streamOk) {
+          // MJPEG iframe load event is unreliable; mark stream live as soon
+          // as the backend confirms the pipeline is running.
+          streamOk = true;
+          statusEl.textContent = '● Live';
+          statusEl.className   = 'ok';
+          setStatus('Stream live. Click the image to sample a colour.');
+        }
+        if (!s.running && polls > 1) {
+          clearInterval(pollStatus);
+          const logTxt = (s.log||[]).join('\n') || '(no output)';
+          setStatus(`Pipeline stopped unexpectedly.\n${logTxt}`);
+        }
+        if (++polls >= 10) clearInterval(pollStatus);
+      }, 1000);
+      // Point iframe directly at visionpipe ip_stream — no proxy, no lag
+      const streamPort = cfg.stream_port || 8080;
+      const streamUrl  = `http://${location.hostname}:${streamPort}/stream`;
+      startStream(streamUrl);
+      setStatus(`Stream → ${streamUrl}  (controls load in 2 s…)`);
+      // Load controls
+      setTimeout(() => loadControls(dev), 2000);
+    } else {
+      const logTxt = (data.status && data.status.log || []).join('\n');
+      setStatus('Failed to start: ' + data.msg + (logTxt ? '\n' + logTxt : ''));
+    }
+  } catch (e) {
+    setStatus('Start error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '▶ Start Pipeline';
+  }
+}
+
+async function stopPipeline() {
+  await fetch('/api/stop', { method:'POST',
+    headers:{'Content-Type':'application/json'}, body:'{}' });
+  streamOk = false;
+  _streamUrl = '';
+  if (_streamController) _streamController.abort();
+  streamCtx.clearRect(0, 0, streamCanvas.width, streamCanvas.height);
+  document.getElementById('stream-status').textContent = '⏹ Stopped';
+  document.getElementById('stream-status').className = '';
+  document.getElementById('btn-stop-pipeline').disabled = true;
+  document.getElementById('controls-panel').innerHTML =
+    '<span style="color:var(--muted);font-size:0.78rem;">Start the pipeline to load camera controls.</span>';
+  setStatus('Pipeline stopped.');
+}
+
+async function loadControls(dev) {
+  try {
+    let url = `/api/controls?device=${encodeURIComponent(dev)}`;
+    if (currentSubdev) url += `&subdev=${encodeURIComponent(currentSubdev)}`;
+    const r    = await fetch(url);
+    const data = await r.json();
+    controlDefs = data.controls;
+    buildControlsPanel(data.controls);
+    if (data.subdev_used) setStatus(`Controls loaded (main + subdev ${data.subdev_used}, ${data.controls.length} controls)`);
+  } catch (e) {
+    setStatus('Could not load controls: ' + e.message);
+  }
+}
+
+function buildControlsPanel(controls) {
+  const panel = document.getElementById('controls-panel');
+  panel.innerHTML = '';
+
+  // Only show writable/interesting controls
+  const skip = ['pixel_rate','link_frequency','test_pattern'];
+  const show = controls.filter(c => !skip.includes(c.key) && c.max !== c.min);
+
+  show.forEach(ctrl => {
+    const g   = document.createElement('div');
+    g.className = 'ctrl-group';
+    const lbl = document.createElement('span');
+    lbl.className = 'ctrl-label';
+    lbl.textContent = ctrl.name;
+
+    const range = document.createElement('input');
+    range.type  = 'range';
+    range.className = 'ctrl-range';
+    range.min   = ctrl.min;
+    range.max   = ctrl.max;
+    range.step  = ctrl.step || 1;
+    range.value = ctrl.current;
+    range.id    = `ctrl-${ctrl.key}`;
+
+    const val = document.createElement('span');
+    val.className = 'ctrl-val';
+    val.id        = `val-${ctrl.key}`;
+    val.textContent = ctrl.current;
+
+    range.addEventListener('input', () => { val.textContent = range.value; });
+    range.addEventListener('change', async () => {
+      // Live apply on release via visionpipe execute
+      const ok = await applyProp(ctrl.key, parseInt(range.value));
+      val.style.color = ok ? 'var(--green)' : 'var(--red)';
+      setTimeout(() => { val.style.color = ''; }, 1200);
+    });
+
+    g.append(lbl, range, val);
+    panel.appendChild(g);
+  });
+
+  // Also add green_pixel_value_b mirroring green_pixel_value_r
+  setStatus('Controls loaded. Drag sliders to apply live via visionpipe.');
+}
+
+async function applyProp(control, value) {
+  try {
+    const r = await fetch('/api/prop', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        device:  currentDevice,
+        subdev:  currentSubdev,
+        control, value
+      }),
+    });
+    const d = await r.json();
+    if (control === 'green_pixel_value_r') {
+      // Mirror Gb channel
+      await fetch('/api/prop', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          device: currentDevice, subdev: currentSubdev,
+          control: 'green_pixel_value_b', value
+        }),
+      });
+    }
+    return d.ok;
+  } catch { return false; }
+}
+
+// ============================================================
+// Build patch list UI
+// ============================================================
+function buildPatchList() {
+  const list = document.getElementById('patch-list');
+  list.innerHTML = '';
+  PATCHES.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'patch-row';
+    row.dataset.patch = p.id;
+
+    const targetSw = document.createElement('div');
+    targetSw.className = 'swatch';
+    targetSw.title = `Target: rgb(${p.rgb.join(',')})`;
+    targetSw.style.background = `rgb(${p.rgb.join(',')})`;
+
+    const lbl = document.createElement('div');
+    lbl.className = 'patch-label';
+    lbl.textContent = p.label;
+
+    const measuredSw = document.createElement('div');
+    measuredSw.className = 'swatch';
+    measuredSw.id = `swatch-${p.id}`;
+    measuredSw.style.background = '#222';
+    measuredSw.title = 'Measured colour';
+
+    const assignBtn = document.createElement('button');
+    assignBtn.className = 'patch-assign';
+    assignBtn.id = `assign-${p.id}`;
+    assignBtn.textContent = 'Set';
+    assignBtn.title = `Assign last sampled pixel to ${p.label}`;
+    assignBtn.onclick = () => assignPatch(p.id);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'patch-clear';
+    clearBtn.textContent = '✕';
+    clearBtn.onclick = () => clearPatch(p.id);
+
+    const delta = document.createElement('div');
+    delta.className = 'delta-badge delta-none';
+    delta.id = `delta-${p.id}`;
+    delta.textContent = '—';
+
+    row.append(targetSw, lbl, measuredSw, assignBtn, clearBtn, delta);
+    list.appendChild(row);
+  });
+}
+
+// ============================================================
+// Patch assign / clear
+// ============================================================
+function assignPatch(id) {
+  if (!lastSampled) { setStatus('Click on the stream first to sample a colour.'); return; }
+  assignments[id] = { rgb: [...lastSampled.rgb], pt: [...lastSampled.pt] };
+  updatePatchRow(id);
+  checkComputeReady();
+  setStatus(`Assigned ${lastSampled.rgb.map(v => v.toString().padStart(3,' ')).join(' ')} to ${id}`);
+}
+
+function clearPatch(id) {
+  delete assignments[id];
+  updatePatchRow(id);
+  checkComputeReady();
+}
+
+function updatePatchRow(id) {
+  const sw    = document.getElementById(`swatch-${id}`);
+  const btn   = document.getElementById(`assign-${id}`);
+  const dEl   = document.getElementById(`delta-${id}`);
+  const patch = PATCHES.find(p => p.id === id);
+
+  if (assignments[id]) {
+    const [r, g, b] = assignments[id].rgb;
+    sw.style.background = `rgb(${r},${g},${b})`;
+    sw.title = `Measured: rgb(${r},${g},${b})`;
+    btn.classList.add('assigned');
+    btn.textContent = 'Upd';
+
+    const de = deltaE(assignments[id].rgb, patch.rgb);
+    dEl.textContent = de.toFixed(1);
+    dEl.className = 'delta-badge ' + (de < 15 ? 'delta-good' : de < 35 ? 'delta-warn' : 'delta-bad');
+  } else {
+    sw.style.background = '#222';
+    sw.title = 'Not sampled';
+    btn.classList.remove('assigned');
+    btn.textContent = 'Set';
+    dEl.textContent = '—';
+    dEl.className = 'delta-badge delta-none';
+  }
+}
+
+function deltaE(a, b) {
+  const dr = a[0]-b[0], dg = a[1]-b[1], db = a[2]-b[2];
+  return Math.sqrt(dr*dr + dg*dg + db*db);
+}
+
+function checkComputeReady() {
+  const n = Object.keys(assignments).length;
+  document.getElementById('btn-compute').disabled = n === 0;
+}
+
+// ============================================================
+// Full Auto Calibration (Auto-Brightness + Iterative Resampling + Target Calibration)
+// ============================================================
+async function resampleAllPatches() {
+  if (!streamOk) return false;
+  const cw = streamCanvas.clientWidth;
+  const ch = streamCanvas.clientHeight;
+  if (!cw || !ch) return false;
+
+  const data = streamCtx.getImageData(0, 0, streamCanvas.width, streamCanvas.height).data;
+  
+  for (const patch of Object.keys(assignments)) {
+    const pt = assignments[patch].pt;
+    if (!pt) continue;
+    
+    // pt is in canvas coordinates (px, py)
+    const px = pt[0], py = pt[1];
+    const half = 1;
+    let rSum=0, gSum=0, bSum=0, count=0;
+    
+    for (let dy = -half; dy <= half; dy++) {
+      for (let dx = -half; dx <= half; dx++) {
+        const cx = px + dx;
+        const cy = py + dy;
+        if (cx >= 0 && cx < streamCanvas.width && cy >= 0 && cy < streamCanvas.height) {
+          const i = (cy * streamCanvas.width + cx) * 4;
+          rSum += data[i]; gSum += data[i+1]; bSum += data[i+2];
+          count++;
+        }
+      }
+    }
+    
+    if (count > 0) {
+      assignments[patch].rgb = [Math.round(rSum/count), Math.round(gSum/count), Math.round(bSum/count)];
+      updatePatchRow(patch);
+    }
+  }
+  return true;
+}
+
+document.getElementById('btn-full-calib').addEventListener('click', async () => {
+  if (!streamOk) { setStatus('Start stream first.'); return; }
+  
+  const ids = Object.keys(assignments);
+  if (ids.length < 2) {
+    setStatus('Assign at least two color patches first to run Full Auto.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-full-calib');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.innerHTML = 'Full Auto…<span class="spinner"></span>';
+
+  try {
+    const lumas = [120, 160, 80]; // target brightness levels per pass
+    
+    for (let pass = 0; pass < lumas.length; pass++) {
+        const targetLuma = lumas[pass];
+        
+        setStatus(`[Full Auto] Pass ${pass+1}/${lumas.length}: Finding target brightness: ${targetLuma}`);
+        await runAutoBrightness(targetLuma);
+        
+        if (!streamOk) throw new Error("Stream dropped during Auto-Brightness.");
+        
+        // Wait 1 extra second for image tuning to settle visually
+        await new Promise(r => setTimeout(r, 1000));
+        
+        setStatus(`[Full Auto] Pass ${pass+1}/${lumas.length}: Resampling assigned patches...`);
+        resampleAllPatches();
+        
+        setStatus(`[Full Auto] Pass ${pass+1}/${lumas.length}: Computing matrices and restarting stream...`);
+        const res  = await fetch('/api/calibrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                samples: Object.entries(assignments).map(([p,m]) => ({patch: p, measured: m.rgb})),
+                device: currentDevice,
+                subdev: currentSubdev,
+                apply: true,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        
+        computedGains = data.gains;
+        showGainsPreview(data);
+        
+        Object.entries(computedGains).forEach(([k,v]) => {
+            const sl = document.getElementById(`ctrl-${k}`);
+            if (sl) sl.value = v;
+            const vl = document.getElementById(`val-${k}`);
+            if (vl) vl.textContent = v;
+        });
+        
+        setStatus(`[Full Auto] Pass ${pass+1}/${lumas.length}: Camera restarting, waiting for reconnect...`);
+        // The `/api/calibrate` endpoint sets stream running to False while killing process, then True
+        // The frontend will automatically try to reconnect in 5-second polling intervals
+        // But we explicitly wait for streamOk to be True.
+        
+        let giveUp = false;
+        for (let wait = 0; wait < 15; wait++) {
+            await new Promise(r => setTimeout(r, 1000));
+            if (streamOk) break;
+            if (wait === 14) giveUp = true;
+        }
+        
+        if (giveUp) throw new Error("Camera stream failed to come back online after restart.");
+        
+        // Wait another second for new stream instance settings to apply fully
+        await new Promise(r => setTimeout(r, 2000));
+    }
+    
+    setStatus('Full Auto Sequence Completed successfully! Remember to export your VSP.');
+  } catch (err) {
+    setStatus('Full Auto aborted: ' + err.message);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = origText;
+});
+
+// ============================================================
+// Stream display  (MJPEG fetched and drawn to canvas)
+// ============================================================
+let _streamUrl = '';
+let _streamController = null;
+
+async function startStream(url) {
+  _streamUrl = url;
+  if (_streamController) _streamController.abort();
+  _streamController = new AbortController();
+
+  streamOk   = false;
+  fpsDisplay.textContent = '–– fps';
+  statusEl.textContent   = '⏳ Connecting…';
+  statusEl.className     = '';
+
+  try {
+    const response = await fetch(url + '?t=' + Date.now(), { signal: _streamController.signal });
+    if (!response.body) throw new Error('ReadableStream not supported.');
+
+    streamOk = true;
+    statusEl.textContent = '● Live';
+    statusEl.className   = 'ok';
+    setStatus('Stream connected. Click the image to sample a colour.');
+
+    const reader = response.body.getReader();
+    let buffer = new Uint8Array();
+    let frameCount = 0;
+    let lastTime = Date.now();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const newBuffer = new Uint8Array(buffer.length + value.length);
+      newBuffer.set(buffer);
+      newBuffer.set(value, buffer.length);
+      buffer = newBuffer;
+
+      let lastFrameData = null;
+
+      // Extract all complete frames; keep only the latest to ensure near-realtime (frame skipping)
+      while (true) {
+        let start = -1, end = -1;
+        for (let i = 0; i < buffer.length - 1; i++) {
+          if (buffer[i] === 0xff && buffer[i+1] === 0xd8) {
+            start = i; break;
+          }
+        }
+        if (start !== -1) {
+          for (let i = start + 2; i < buffer.length - 1; i++) {
+            if (buffer[i] === 0xff && buffer[i+1] === 0xd9) {
+              end = i + 2; break;
+            }
+          }
+        }
+
+        if (start !== -1 && end !== -1) {
+          lastFrameData = buffer.slice(start, end);
+          buffer = buffer.slice(end);
+        } else {
+          break;
+        }
+      }
+
+      if (lastFrameData) {
+        const blob = new Blob([lastFrameData], { type: 'image/jpeg' });
+        const imgBitmap = await createImageBitmap(blob);
+        
+        if (streamCanvas.width !== imgBitmap.width || streamCanvas.height !== imgBitmap.height) {
+          streamCanvas.width = imgBitmap.width;
+          streamCanvas.height = imgBitmap.height;
+        }
+        streamCtx.drawImage(imgBitmap, 0, 0);
+        imgBitmap.close();
+
+        frameCount++;
+        const now = Date.now();
+        if (now - lastTime >= 1000) {
+          fpsDisplay.textContent = Math.round((frameCount * 1000) / (now - lastTime)) + ' fps';
+          frameCount = 0;
+          lastTime = now;
+        }
+      } else if (buffer.length > 5000000) {
+        // Drop buffer if it gets too large without finding a frame (corruption)
+        buffer = new Uint8Array();
+      }
+    }
+    // Stream ended cleanly (done = true)
+    streamOk = false;
+    statusEl.textContent = '⏹ Stopped';
+    statusEl.className   = '';
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    if (streamOk) setStatus('Stream ended or error: ' + err.message);
+    else setStatus('Failed to connect stream: ' + err.message);
+    streamOk = false;
+    statusEl.textContent = '⏹ Error';
+    statusEl.className   = 'err';
+  }
+}
+
+// ============================================================
+// Canvas click → query position directly on drawn FRAME
+// ============================================================
+streamCanvas.addEventListener('click', e => {
+  if (!streamOk) return;
+  const cw = streamCanvas.clientWidth;
+  const ch = streamCanvas.clientHeight;
+  if (!cw || !ch) return;
+
+  const rect = streamCanvas.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickY = e.clientY - rect.top;
+
+  const px = Math.round((clickX / cw) * streamCanvas.width);
+  const py = Math.round((clickY / ch) * streamCanvas.height);
+  
+  const half = 1;  // 3×3 region
+  const x0   = Math.max(0, px - half);
+  const y0   = Math.max(0, py - half);
+  const w    = Math.min(3, streamCanvas.width  - x0);
+  const h    = Math.min(3, streamCanvas.height - y0);
+  if (w < 1 || h < 1) return;
+  
+  const data = streamCtx.getImageData(x0, y0, w, h).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i+1]; b += data[i+2]; n++; }
+  if (!n) return;
+  r = Math.round(r/n); g = Math.round(g/n); b = Math.round(b/n);
+
+  lastSampled = { rgb: [r, g, b], pt: [px, py] };
+  sampledSwEl.style.background = `rgb(${r},${g},${b})`;
+  sampledTxEl.textContent = `rgb(${r},${g},${b})`;
+  setStatus(`Sampled rgb(${r}, ${g}, ${b}) at (${px}, ${py}). Click a patch “Set” button to assign.`);
+});
+
+// Crosshair on canvas
+streamCanvas.addEventListener('mousemove', e => {
+  const containerRect = document.getElementById('canvas-container').getBoundingClientRect();
+  crosshair.style.left = (e.clientX - containerRect.left) + 'px';
+  crosshair.style.top  = (e.clientY - containerRect.top)  + 'px';
+  crosshair.style.display = 'block';
+});
+streamCanvas.addEventListener('mouseleave', () => {
+  crosshair.style.display = 'none';
+});
+
+// ============================================================
+// Calibration: compute + apply via visionpipe execute
+// ============================================================
+document.getElementById('btn-compute').addEventListener('click', async () => {
+  const samples = Object.entries(assignments).map(([patch, data]) =>
+    ({ patch, measured: data.rgb })
+  );
+  setStatus('Computing calibration gains…');
+  try {
+    const res  = await fetch('/api/calibrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // apply:false = compute only, don't auto-apply yet
+      body: JSON.stringify({ samples, device: currentDevice,
+                             subdev: currentSubdev, apply: false }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setStatus('Server error: ' + data.error); return; }
+    computedGains = data.gains;
+    showGainsPreview(data);
+    document.getElementById('btn-apply').disabled = false;
+    setStatus('Gains computed. Review below then click "Apply to Camera".');
+  } catch (err) {
+    setStatus('Network error: ' + err.message);
+  }
+});
+
+function showGainsPreview(data) {
+  const preview = document.getElementById('gains-preview');
+  const grid    = document.getElementById('gains-grid');
+  preview.style.display = 'block';
+  const LABELS = {
+    red_pixel_value:     'Red pix val',
+    green_pixel_value_r: 'Gr pix val',
+    blue_pixel_value:    'Blue pix val',
+    green_pixel_value_b: 'Gb pix val',
+  };
+  grid.innerHTML = '';
+  Object.entries(data.gains).forEach(([k, v]) => {
+    const div = document.createElement('div');
+    div.className = 'gain-item';
+    div.innerHTML = `<span>${LABELS[k] || k}</span><span class="gain-val">${v}</span>`;
+    grid.appendChild(div);
+  });
+  // WB norm
+  const n = data.wb_norm || data.wb_gains_norm;
+  if (n) {
+    const div = document.createElement('div');
+    div.style.cssText = 'grid-column:1/-1;margin-top:6px;color:var(--muted);font-size:0.68rem;';
+    div.textContent = `WB norm — R:${n.r} G:${n.g} B:${n.b}`;
+    grid.appendChild(div);
+  }
+  // CCM
+  const ccmInfo = document.getElementById('ccm-info');
+  const ccmText = document.getElementById('ccm-text');
+  if (data.ccm && data.ccm.length === 3) {
+    computedCcm = data.ccm;
+    const rows = data.ccm.map(row =>
+      '[ ' + row.map(v => (v >= 0 ? ' ' : '') + v.toFixed(4)).join(',  ') + ' ]'
+    ).join('\n');
+    ccmText.textContent = rows;
+    ccmInfo.style.display = 'block';
+  } else {
+    ccmInfo.style.display = 'none';
+  }
+  // Delta-E per patch
+  const errs = data.errors_before || data.patch_errors;
+  if (errs && errs.length) {
+    const dtable = document.getElementById('delta-table');
+    const drows  = document.getElementById('delta-rows');
+    dtable.style.display = 'block';
+    drows.innerHTML = errs.map(e => {
+      const cls = e.delta_e < 15 ? 'delta-good' : e.delta_e < 35 ? 'delta-warn' : 'delta-bad';
+      const measured = e.measured || [];
+      const target   = e.target   || [];
+      return `<div style="display:flex;justify-content:space-between;
+                font-size:0.72rem;padding:2px 0;border-bottom:1px solid var(--border);">
+        <span>${e.patch}</span>
+        <span style="color:var(--muted)">
+          rgb(${measured.join(',')}) → rgb(${target.join(',')})
+        </span>
+        <span class="delta-badge ${cls}" style="min-width:44px;text-align:right;">
+          ΔE ${e.delta_e}
+        </span>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ============================================================
+// Calibration: apply to camera via visionpipe execute
+// ============================================================
+document.getElementById('btn-apply').addEventListener('click', async () => {
+  if (!computedGains) return;
+  calibIteration++;
+  const btn = document.getElementById('btn-apply');
+  btn.disabled = true;
+  btn.innerHTML = 'Applying…<span class="spinner"></span>';
+  setStatus(`Applying calibration (iter ${calibIteration}) — restarting VSP with gains + CCM…`);
+  try {
+    const res  = await fetch('/api/calibrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        samples: Object.entries(assignments).map(([p,m])=>({patch:p,measured:m.rgb})),
+        device:  currentDevice,
+        subdev:  currentSubdev,
+        apply:   true,    // backend restarts VSP with new gains+CCM
+      }),
+    });
+    const data = await res.json();
+    // Sync sliders to new WB gain values
+    Object.entries(computedGains).forEach(([k,v]) => {
+      const sl = document.getElementById(`ctrl-${k}`);
+      const vl = document.getElementById(`val-${k}`);
+      if (sl) sl.value = v;
+      if (vl) vl.textContent = v;
+    });
+    logCalibration(calibIteration, data.gains, data.apply_errors);
+    showGainsPreview({ gains: data.gains, wb_norm: data.wb_norm,
+                       ccm: data.ccm,
+                       errors_before: data.patch_errors });
+    // Refresh the generated VSP preview after restart
+    setTimeout(() => {
+      fetch('/api/vsp').then(r=>r.json()).then(d=>{
+        document.getElementById('vsp-text').textContent = d.vsp;
+      });
+    }, 800);
+    const errTxt = data.apply_errors && data.apply_errors.length
+      ? '\nWarnings: ' + data.apply_errors.join('; ')
+      : '';
+    setStatus(`Applied (iter ${calibIteration}). VSP restarted with WB gains + CCM.${errTxt}\nWait ~2s for stream to reconnect, then re-sample.`);
+    itCount.textContent = `Iter ${calibIteration}`;
+    // Mark stream as not-ok until the 5 s poll confirms it's back up
+    streamOk = false;
+    statusEl.textContent = '⏳ Restarting…';
+    statusEl.className = '';
+  } catch (err) {
+    setStatus('Apply failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Apply to Camera';
+  }
+});
+
+// ============================================================
+// Clear all assignments
+// ============================================================
+document.getElementById('btn-clear').addEventListener('click', () => {
+  assignments = {};
+  computedGains = null;
+  computedCcm = null;
+  PATCHES.forEach(p => updatePatchRow(p.id));
+  document.getElementById('btn-compute').disabled = true;
+  document.getElementById('btn-apply').disabled = true;
+  document.getElementById('gains-preview').style.display = 'none';
+  document.getElementById('delta-table').style.display = 'none';
+  document.getElementById('ccm-info').style.display = 'none';
+  setStatus('Cleared all assignments.');
+});
+
+// ============================================================
+// Auto Exposure / Brightness (Multi-Sample Median)
+// ============================================================
+async function runAutoBrightness(targetLuma = 120) {
+  if (!streamOk) { setStatus('Start stream first.'); return false; }
+  
+  const tolerance = 5;
+  const maxIters = 8;
+  
+  for (let it = 0; it < maxIters; it++) {
+      if (!streamOk) break;
+      
+      const cw = streamCanvas.width;
+      const ch = streamCanvas.height;
+      if (!cw || !ch) break;
+      
+      // Multi-sample matrix metering (median)
+      let lumaVals = [];
+      const data = streamCtx.getImageData(0, 0, cw, ch).data;
+      const step = 4 * 10; // sample every 10 pixels
+      for (let i = 0; i < data.length; i += step) {
+          lumaVals.push(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+      }
+      lumaVals.sort((a,b) => a - b);
+      const avgLuma = lumaVals[Math.floor(lumaVals.length / 2)] || 1;
+      
+      if (Math.abs(avgLuma - targetLuma) <= tolerance) {
+          setStatus(`AE settled. Median Luma: ${avgLuma.toFixed(1)}`);
+          break;
+      }
+      
+      let ratio = targetLuma / Math.max(1, avgLuma);
+      ratio = 1 + (ratio - 1) * 0.7; // dampen to prevent oscillation
+      
+      const expCtrl = controlDefs.find(c => c.key === 'exposure');
+      const agCtrl  = controlDefs.find(c => c.key === 'analogue_gain');
+      const dgCtrl  = controlDefs.find(c => c.key === 'digital_gain');
+      
+      if (!expCtrl && !agCtrl && !dgCtrl) {
+          setStatus('Camera controls not loaded or missing AE controls.');
+          break;
+      }
+      
+      const readVal = (k, def) => parseInt(document.getElementById(`ctrl-${k}`)?.value) || def;
+      
+      let curExp = expCtrl ? readVal('exposure', expCtrl.current) : 1;
+      let curAg = agCtrl ? readVal('analogue_gain', agCtrl.current) : 1;
+      let curDg = dgCtrl ? readVal('digital_gain', dgCtrl.current) : 1;
+      
+      let newExp = curExp, newAg = curAg, newDg = curDg;
+      
+      if (ratio > 1) { 
+          if (expCtrl) {
+              newExp = Math.min(expCtrl.max, Math.max(expCtrl.min, Math.round(curExp * ratio)));
+              ratio /= (newExp / Math.max(1, curExp));
+          }
+          if (agCtrl && ratio > 1.01) {
+              newAg = Math.min(agCtrl.max, Math.max(agCtrl.min, Math.round(curAg * ratio)));
+              ratio /= (newAg / Math.max(1, curAg));
+          }
+          if (dgCtrl && ratio > 1.01) {
+              newDg = Math.min(dgCtrl.max, Math.max(dgCtrl.min, Math.round(curDg * ratio)));
+          }
+      } else { 
+          if (dgCtrl) {
+              newDg = Math.max(dgCtrl.min, Math.round(curDg * ratio));
+              ratio /= (Math.max(1, newDg) / Math.max(1, curDg));
+          }
+          if (agCtrl && ratio < 0.99) {
+              newAg = Math.max(agCtrl.min, Math.round(curAg * ratio));
+              ratio /= (Math.max(1, newAg) / Math.max(1, curAg));
+          }
+          if (expCtrl && ratio < 0.99) {
+              newExp = Math.max(expCtrl.min, Math.round(curExp * ratio));
+          }
+      }
+      
+      setStatus(`AE Iter ${it+1}: Luma ${avgLuma.toFixed(1)} -> target ${targetLuma}. Setting E:${newExp} AG:${newAg} DG:${newDg}`);
+      
+      const applyAndSync = async (k, v) => {
+          await applyProp(k, v);
+          const range = document.getElementById(`ctrl-${k}`);
+          const valEl = document.getElementById(`val-${k}`);
+          if (range) range.value = v;
+          if (valEl) valEl.textContent = v;
+      };
+      
+      let changed = false;
+      if (expCtrl && newExp !== curExp) { await applyAndSync('exposure', newExp); changed = true; }
+      if (agCtrl && newAg !== curAg) { await applyAndSync('analogue_gain', newAg); changed = true; }
+      if (dgCtrl && newDg !== curDg) { await applyAndSync('digital_gain', newDg); changed = true; }
+      
+      if (!changed) {
+          setStatus(`AE reached limits. Median Luma: ${avgLuma.toFixed(1)}`);
+          break;
+      }
+      
+      await new Promise(r => setTimeout(r, 1000)); // wait for camera frame to update
+  }
+  return true;
+}
+
+document.getElementById('btn-auto-exp').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-auto-exp');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.innerHTML = 'Auto Brightness…<span class="spinner"></span>';
+  
+  await runAutoBrightness(120);
+  
+  if (btn.innerHTML.includes('Auto Brightness')) {
+      setStatus('Auto Brightness complete.');
+  }
+  btn.disabled = false;
+  btn.innerHTML = origText;
+});
+
+// (camera controls are built dynamically in buildControlsPanel)
+
+// ============================================================
+// Calibration log
+// ============================================================
+function logCalibration(iter, gains, errors) {
+  const card = document.getElementById('log-card');
+  const log  = document.getElementById('log-content');
+  card.style.display = 'block';
+
+  let line = `--- Iter ${iter} ---\n`;
+  if (gains) {
+    line += Object.entries(gains).map(([k,v]) => `  ${k}: ${v}`).join('\n') + '\n';
+  }
+  if (errors && errors.length) {
+    line += `  Errors: ${errors.join('; ')}\n`;
+  }
+  log.textContent += line;
+  log.scrollTop = log.scrollHeight;
+}
+
+// ============================================================
+// Status helper
+// ============================================================
+function setStatus(msg) { statusMsg.textContent = msg; }
+
+// ============================================================
+// Init
+// ============================================================
+document.getElementById('sel-camera').addEventListener('change', onCameraChange);
+document.getElementById('sel-subdev').addEventListener('change', () => {
+  currentSubdev = document.getElementById('sel-subdev').value;
+  onCameraChange();  // re-fetch formats with new subdev
+});
+document.getElementById('btn-start-pipeline').addEventListener('click', startPipeline);
+document.getElementById('btn-stop-pipeline').addEventListener('click', stopPipeline);
+document.getElementById('btn-vsp-toggle').addEventListener('click', () => {
+  const el = document.getElementById('vsp-text');
+  const visible = el.style.display !== 'none';
+  el.style.display = visible ? 'none' : 'block';
+  document.getElementById('btn-vsp-toggle').textContent = visible ? 'show' : 'hide';
+});
+document.getElementById('btn-vsp-save').addEventListener('click', () => {
+  const vspContent = document.getElementById('vsp-text').textContent;
+  if (!vspContent) return;
+  const blob = new Blob([vspContent], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `calibrated_camera_${currentDevice.replace(/[^a-zA-Z0-9]/g, '_')}.vsp`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+});
+
+buildPatchList();
+loadCameras();
+
+// Poll pipeline status every 5 s; reconnect stream if it dropped
+setInterval(async () => {
+  try {
+    const d = await fetch('/api/status').then(r => r.json());
+    if (d.running && _streamUrl) {
+      if (!streamOk) {
+        // Stream running but frame not yet loaded or we just applied a change – try to reload stream
+        startStream(_streamUrl);
+      }
+    } else if (!d.running && streamOk) {
+      streamOk = false;
+      statusEl.textContent = '⏹ Stopped';
+      statusEl.className = '';
+    }
+  } catch {}
+}, 5000);
+</script>
+</body>
+</html>

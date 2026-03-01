@@ -336,9 +336,13 @@
                         <span>arithmetic</span>
                         <span class="nav-item-count">28</span>
                     </a>
+                    <a class="nav-item" href="#camera" onclick="filterByCategory('camera')">
+                        <span>camera</span>
+                        <span class="nav-item-count">2</span>
+                    </a>
                     <a class="nav-item" href="#color" onclick="filterByCategory('color')">
                         <span>color</span>
-                        <span class="nav-item-count">15</span>
+                        <span class="nav-item-count">17</span>
                     </a>
                     <a class="nav-item" href="#conditional" onclick="filterByCategory('conditional')">
                         <span>conditional</span>
@@ -363,6 +367,10 @@
                     <a class="nav-item" href="#edge" onclick="filterByCategory('edge')">
                         <span>edge</span>
                         <span class="nav-item-count">23</span>
+                    </a>
+                    <a class="nav-item" href="#fastcv" onclick="filterByCategory('fastcv')">
+                        <span>fastcv</span>
+                        <span class="nav-item-count">20</span>
                     </a>
                     <a class="nav-item" href="#feature" onclick="filterByCategory('feature')">
                         <span>feature</span>
@@ -402,18 +410,18 @@
                     </a>
                     <a class="nav-item" href="#video_io" onclick="filterByCategory('video_io')">
                         <span>video_io</span>
-                        <span class="nav-item-count">22</span>
+                        <span class="nav-item-count">36</span>
                     </a>
                 </div>
             </nav>
             <div class="sidebar-footer">
                 <div class="sidebar-stats">
                     <div class="stat-item">
-                        <div class="stat-value">434</div>
+                        <div class="stat-value">472</div>
                         <div class="stat-label">Functions</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-value">19</div>
+                        <div class="stat-value">21</div>
                         <div class="stat-label">Categories</div>
                     </div>
                 </div>
@@ -429,6 +437,7 @@
                     <button class="filter-chip active" onclick="filterByCategory('all')" data-category="all">All</button>
                     <button class="filter-chip" onclick="filterByCategory('advanced')" data-category="advanced">advanced</button>
                     <button class="filter-chip" onclick="filterByCategory('arithmetic')" data-category="arithmetic">arithmetic</button>
+                    <button class="filter-chip" onclick="filterByCategory('camera')" data-category="camera">camera</button>
                     <button class="filter-chip" onclick="filterByCategory('color')" data-category="color">color</button>
                     <button class="filter-chip" onclick="filterByCategory('conditional')" data-category="conditional">conditional</button>
                     <button class="filter-chip" onclick="filterByCategory('control')" data-category="control">control</button>
@@ -436,6 +445,7 @@
                     <button class="filter-chip" onclick="filterByCategory('dnn')" data-category="dnn">dnn</button>
                     <button class="filter-chip" onclick="filterByCategory('draw')" data-category="draw">draw</button>
                     <button class="filter-chip" onclick="filterByCategory('edge')" data-category="edge">edge</button>
+                    <button class="filter-chip" onclick="filterByCategory('fastcv')" data-category="fastcv">fastcv</button>
                     <button class="filter-chip" onclick="filterByCategory('feature')" data-category="feature">feature</button>
                     <button class="filter-chip" onclick="filterByCategory('filter')" data-category="filter">filter</button>
                     <button class="filter-chip" onclick="filterByCategory('gui')" data-category="gui">gui</button>
@@ -2128,11 +2138,114 @@
                             </div>
                         </div>
                     </section>
+                    <section class="category-section" id="camera" data-category="camera">
+                        <div class="category-header">
+                            <div class="category-icon">&#128736;</div>
+                            <h2 class="category-title">camera</h2>
+                            <span class="category-count">2 items</span>
+                        </div>
+                        <div class="items-grid">
+                            <div class="item-card" data-name="auto_exposure" data-category="camera">
+                                <div class="item-header">
+                                    <span class="item-name">auto_exposure</span>
+                                </div>
+                                <p class="item-desc">Software auto-exposure: analyses frame brightness over N samples and returns a computed exposure value within [min_exp, max_exp]</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">min_exp</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Minimum exposure value (device units)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">max_exp</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Maximum exposure value (device units)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">samples</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Number of brightness samples to accumulate before recalculating <em style="color:var(--text-muted)">(default: RuntimeValue(int: 10))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">target</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Target mean brightness (0-255) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 128))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">speed</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Convergence speed / gain (0.0-1.0, higher = faster) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.3))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">roi_x</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">ROI x-offset as fraction of width (0.0-1.0) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">roi_y</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">ROI y-offset as fraction of height (0.0-1.0) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">roi_w</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">ROI width as fraction of width (0.0-1.0, 0 = full) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 1))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">roi_h</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">ROI height as fraction of height (0.0-1.0, 0 = full) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 1))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">exp = auto_exposure(50, 10000, 10, 128, 0.3)
+v4l2_prop(&quot;/dev/video0&quot;, &quot;Exposure (Absolute)&quot;, exp)</div>
+                                <div class="item-tags">
+                                    <span class="tag">auto</span>
+                                    <span class="tag">exposure</span>
+                                    <span class="tag">brightness</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">control</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="auto_exposure_reset" data-category="camera">
+                                <div class="item-header">
+                                    <span class="item-name">auto_exposure_reset</span>
+                                </div>
+                                <p class="item-desc">Resets accumulated auto-exposure state</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Source identifier to reset (omit to reset all) <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">auto_exposure_reset() | auto_exposure_reset(&quot;/dev/video0&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">auto</span>
+                                    <span class="tag">exposure</span>
+                                    <span class="tag">reset</span>
+                                    <span class="tag">camera</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                     <section class="category-section" id="color" data-category="color">
                         <div class="category-header">
                             <div class="category-icon">&#128736;</div>
                             <h2 class="category-title">color</h2>
-                            <span class="category-count">15 items</span>
+                            <span class="category-count">17 items</span>
                         </div>
                         <div class="items-grid">
                             <div class="item-card" data-name="apply_colormap" data-category="color">
@@ -2314,15 +2427,57 @@
                                     <div class="param-row">
                                         <span class="param-name">code</span>
                                         <span class="param-type">string</span>
-                                        <span class="param-desc">Conversion code: bgr2gray, gray2bgr, bgr2rgb, rgb2bgr, bgr2hsv, hsv2bgr, bgr2hls, hls2bgr, bgr2lab, lab2bgr, bgr2luv, luv2bgr, bgr2xyz, xyz2bgr, bgr2ycrcb, ycrcb2bgr, bgr2yuv, yuv2bgr</span>
+                                        <span class="param-desc">Conversion code: bgr2gray, bgr2hsv, bgr2lab, yuv2bgr, uyvy2bgr, nv122bgr, bayerbg2bgr, etc.</span>
                                         <span class="param-required">*</span>
                                     </div>
                                 </div>
-                                <div class="item-example">cvt_color(&quot;bgr2gray&quot;) | cvt_color(&quot;bgr2hsv&quot;)</div>
+                                <div class="item-example">cvt_color(&quot;bgr2gray&quot;) | cvt_color(&quot;uyvy2bgr&quot;)</div>
                                 <div class="item-tags">
                                     <span class="tag">color</span>
                                     <span class="tag">convert</span>
                                     <span class="tag">space</span>
+                                    <span class="tag">transform</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="debayer" data-category="color">
+                                <div class="item-header">
+                                    <span class="item-name">debayer</span>
+                                </div>
+                                <p class="item-desc">Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">pattern</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or &quot;auto&quot; to detect from the active camera <em style="color:var(--text-muted)">(default: RuntimeValue(string: "RGGB"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">algorithm</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Demosaic algorithm: bilinear, vng, ea <em style="color:var(--text-muted)">(default: RuntimeValue(string: "bilinear"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">output</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Output format: bgr or rgb <em style="color:var(--text-muted)">(default: RuntimeValue(string: "bgr"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">bit_shift</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">debayer() | debayer(&quot;auto&quot;) | debayer(&quot;RGGB&quot;, &quot;ea&quot;, &quot;bgr&quot;, 2)</div>
+                                <div class="item-tags">
+                                    <span class="tag">bayer</span>
+                                    <span class="tag">debayer</span>
+                                    <span class="tag">demosaic</span>
+                                    <span class="tag">color</span>
+                                    <span class="tag">raw</span>
                                 </div>
                             </div>
                             <div class="item-card" data-name="equalize_hist" data-category="color">
@@ -2377,6 +2532,49 @@
                                     <span class="tag">gamma</span>
                                     <span class="tag">correction</span>
                                     <span class="tag">adjust</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="gpu_debayer" data-category="color">
+                                <div class="item-header">
+                                    <span class="item-name">gpu_debayer</span>
+                                </div>
+                                <p class="item-desc">GPU-accelerated Bayer demosaicing using OpenCL. Falls back to CPU when OpenCL is unavailable. Supports bilinear, VNG, and EA algorithms.</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">pattern</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or &quot;auto&quot; <em style="color:var(--text-muted)">(default: RuntimeValue(string: "RGGB"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">algorithm</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Demosaic algorithm: bilinear, vng, ea <em style="color:var(--text-muted)">(default: RuntimeValue(string: "ea"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">output</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Output format: bgr or rgb <em style="color:var(--text-muted)">(default: RuntimeValue(string: "bgr"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">bit_shift</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">gpu_debayer(&quot;auto&quot;, &quot;ea&quot;) | gpu_debayer(&quot;RGGB&quot;, &quot;vng&quot;, &quot;bgr&quot;, 2)</div>
+                                <div class="item-tags">
+                                    <span class="tag">gpu</span>
+                                    <span class="tag">opencl</span>
+                                    <span class="tag">debayer</span>
+                                    <span class="tag">demosaic</span>
+                                    <span class="tag">bayer</span>
+                                    <span class="tag">color</span>
+                                    <span class="tag">acceleration</span>
                                 </div>
                             </div>
                             <div class="item-card" data-name="in_range" data-category="color">
@@ -7099,6 +7297,612 @@
                             </div>
                         </div>
                     </section>
+                    <section class="category-section" id="fastcv" data-category="fastcv">
+                        <div class="category-header">
+                            <div class="category-icon">&#128736;</div>
+                            <h2 class="category-title">fastcv</h2>
+                            <span class="category-count">20 items</span>
+                        </div>
+                        <div class="items-grid">
+                            <div class="item-card" data-name="fcv_bilateral_filter" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_bilateral_filter</span>
+                                </div>
+                                <p class="item-desc">Bilateral filter accelerated by FastCV (kernel d: 5, 7, or 9; 8U grayscale input)</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">d</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Kernel diameter (5, 7, or 9) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">sigma_color</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Color sigma (typical: 50) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 50))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">sigma_space</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Space sigma (typical: 1) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 1))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_bilateral_filter(5, 50.0, 1.0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">bilateral</span>
+                                    <span class="tag">filter</span>
+                                    <span class="tag">edge-preserving</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_bilateral_recursive" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_bilateral_recursive</span>
+                                </div>
+                                <p class="item-desc">Recursive bilateral filter accelerated by FastCV (fast edge-preserving; 8U grayscale)</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">sigma_color</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Color sigma in [0,1] (typical: 0.03) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.03))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">sigma_space</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Space sigma in [0,1] (typical: 0.1) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.1))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_bilateral_recursive(0.03, 0.1)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">bilateral</span>
+                                    <span class="tag">recursive</span>
+                                    <span class="tag">filter</span>
+                                    <span class="tag">edge-preserving</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_calc_hist" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_calc_hist</span>
+                                </div>
+                                <p class="item-desc">Grayscale histogram accelerated by FastCV; returns a 256-wide histogram bar chart</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Height of the histogram visualization in pixels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 128))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_calc_hist(128)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">histogram</span>
+                                    <span class="tag">statistics</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_fast10" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_fast10</span>
+                                </div>
+                                <p class="item-desc">FAST10 corner detection accelerated by FastCV; draws detected corners on output</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">barrier</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Intensity barrier threshold <em style="color:var(--text-muted)">(default: RuntimeValue(int: 10))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">border</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Border width to skip around edges <em style="color:var(--text-muted)">(default: RuntimeValue(int: 4))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">nms</span>
+                                        <span class="param-type">bool</span>
+                                        <span class="param-desc">Enable non-maximum suppression <em style="color:var(--text-muted)">(default: RuntimeValue(bool: true))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_fast10(10, 4, true)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">corner</span>
+                                    <span class="tag">feature</span>
+                                    <span class="tag">detect</span>
+                                    <span class="tag">fast10</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_fft" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_fft</span>
+                                </div>
+                                <p class="item-desc">Fast Fourier Transform accelerated by FastCV (input: 8U grayscale); returns log-magnitude spectrum</p>
+                                <div class="item-example">fcv_fft()</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">fft</span>
+                                    <span class="tag">frequency</span>
+                                    <span class="tag">transform</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_filter2d" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_filter2d</span>
+                                </div>
+                                <p class="item-desc">2D convolution filter accelerated by FastCV (kernel sizes 3-11; 8U grayscale input)</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">kernel_size</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Kernel size (3, 5, 7, 9, or 11) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 3))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">ddepth</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Output depth: u8, s16, f32 <em style="color:var(--text-muted)">(default: RuntimeValue(string: "u8"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_filter2d(3, &quot;u8&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">filter</span>
+                                    <span class="tag">convolution</span>
+                                    <span class="tag">2d</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_gaussian_blur" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_gaussian_blur</span>
+                                </div>
+                                <p class="item-desc">Gaussian blur accelerated by FastCV (supports 3x3 and 5x5 kernels, types: 8U/16S/32S)</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">kernel_size</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Kernel size: 3 or 5 <em style="color:var(--text-muted)">(default: RuntimeValue(int: 5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">blur_border</span>
+                                        <span class="param-type">bool</span>
+                                        <span class="param-desc">Process image border pixels <em style="color:var(--text-muted)">(default: RuntimeValue(bool: true))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_gaussian_blur(5, true)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">blur</span>
+                                    <span class="tag">gaussian</span>
+                                    <span class="tag">filter</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_hough_lines" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_hough_lines</span>
+                                </div>
+                                <p class="item-desc">Hough line detection accelerated by FastCV (input: grayscale or edge image); draws lines on output</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">threshold</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Normalized quality threshold [0,1] <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.25))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">color</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Line draw color (green, red, blue, white) <em style="color:var(--text-muted)">(default: RuntimeValue(string: "green"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_hough_lines(0.25, &quot;green&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">hough</span>
+                                    <span class="tag">lines</span>
+                                    <span class="tag">detect</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_ifft" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_ifft</span>
+                                </div>
+                                <p class="item-desc">Inverse FFT accelerated by FastCV (input: 2-channel CV_32F output of fcv_fft raw)</p>
+                                <div class="item-example">fcv_ifft()</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">ifft</span>
+                                    <span class="tag">frequency</span>
+                                    <span class="tag">transform</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_mean_shift" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_mean_shift</span>
+                                </div>
+                                <p class="item-desc">Mean shift tracking accelerated by FastCV; ROI rect [x,y,w,h] stored as 1x4 CV_32F Mat in cache</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">track_cache</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Cache ID holding ROI rect (1x4 CV_32F [x,y,w,h])</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">max_iter</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Maximum iterations <em style="color:var(--text-muted)">(default: RuntimeValue(int: 10))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">epsilon</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Convergence epsilon in pixels <em style="color:var(--text-muted)">(default: RuntimeValue(float: 1))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_mean_shift(&quot;roi&quot;, 10, 1.0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">mean-shift</span>
+                                    <span class="tag">tracking</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_moments" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_moments</span>
+                                </div>
+                                <p class="item-desc">Image moments accelerated by FastCV; prints m00, m10, m01, centroid to console</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">binary</span>
+                                        <span class="param-type">bool</span>
+                                        <span class="param-desc">Treat image as binary before computing moments <em style="color:var(--text-muted)">(default: RuntimeValue(bool: false))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_moments(false)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">moments</span>
+                                    <span class="tag">statistics</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_mser" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_mser</span>
+                                </div>
+                                <p class="item-desc">MSER region detector accelerated by FastCV; draws colored contours and bounding boxes on output</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">min_area</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Minimum region area in pixels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 256))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">max_area_ratio</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Maximum region area as fraction of image <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.25))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">delta</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">MSER delta parameter <em style="color:var(--text-muted)">(default: RuntimeValue(int: 2))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_mser(256, 0.25, 2)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">mser</span>
+                                    <span class="tag">region</span>
+                                    <span class="tag">detect</span>
+                                    <span class="tag">feature</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_normalize_local_box" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_normalize_local_box</span>
+                                </div>
+                                <p class="item-desc">Local box contrast normalization accelerated by FastCV (8U grayscale input)</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">box_width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Local box width <em style="color:var(--text-muted)">(default: RuntimeValue(int: 5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">box_height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Local box height <em style="color:var(--text-muted)">(default: RuntimeValue(int: 5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">use_stddev</span>
+                                        <span class="param-type">bool</span>
+                                        <span class="param-desc">Normalize by std deviation (true) or mean (false) <em style="color:var(--text-muted)">(default: RuntimeValue(bool: true))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_normalize_local_box(5, 5, true)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">normalize</span>
+                                    <span class="tag">local</span>
+                                    <span class="tag">contrast</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_pyramid" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_pyramid</span>
+                                </div>
+                                <p class="item-desc">Image pyramid accelerated by FastCV; each level is stored in cache as &lt;prefix&gt;_0, &lt;prefix&gt;_1, ...</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">levels</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Number of pyramid levels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 4))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">scale_by2</span>
+                                        <span class="param-type">bool</span>
+                                        <span class="param-desc">Scale by 2 (true) or ORB factor 0.84 (false) <em style="color:var(--text-muted)">(default: RuntimeValue(bool: true))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">cache_prefix</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Cache key prefix for pyramid levels <em style="color:var(--text-muted)">(default: RuntimeValue(string: "pyr"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_pyramid(4, true, &quot;pyr&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">pyramid</span>
+                                    <span class="tag">scale</span>
+                                    <span class="tag">multi-scale</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_resize_down" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_resize_down</span>
+                                </div>
+                                <p class="item-desc">Optimized downscale resize accelerated by FastCV; specify either target size or scale factors</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Target width (0 = use scale) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Target height (0 = use scale) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">inv_scale_x</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Horizontal inverse scale (e.g., 0.5 = half width) <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">inv_scale_y</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Vertical inverse scale <em style="color:var(--text-muted)">(default: RuntimeValue(float: 0.5))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_resize_down(640, 480, 0, 0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">resize</span>
+                                    <span class="tag">scale</span>
+                                    <span class="tag">downsample</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_sobel" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_sobel</span>
+                                </div>
+                                <p class="item-desc">Sobel edge detection accelerated by FastCV; stores dx and dy to cache as &lt;id&gt;_dx and &lt;id&gt;_dy; returns magnitude</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">kernel_size</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Kernel size (3, 5, or 7) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 3))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">cache_id</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Cache prefix for dx/dy gradient outputs <em style="color:var(--text-muted)">(default: RuntimeValue(string: "sobel"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_sobel(3, &quot;sobel&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">sobel</span>
+                                    <span class="tag">edge</span>
+                                    <span class="tag">gradient</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_threshold_range" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_threshold_range</span>
+                                </div>
+                                <p class="item-desc">Range threshold (FastCV): pixels in [low_thresh, high_thresh] become true_value, others become false_value</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">low_thresh</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Lower threshold (inclusive)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">high_thresh</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Upper threshold (inclusive)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">true_value</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Value assigned to in-range pixels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 255))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">false_value</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Value assigned to out-of-range pixels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_threshold_range(100, 200, 255, 0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">threshold</span>
+                                    <span class="tag">range</span>
+                                    <span class="tag">binary</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_track_lk" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_track_lk</span>
+                                </div>
+                                <p class="item-desc">Lucas-Kanade sparse optical flow accelerated by FastCV; tracks FAST10 corners between consecutive frames; re-detects corners when all are lost</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">max_corners</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Maximum number of corners to track <em style="color:var(--text-muted)">(default: RuntimeValue(int: 200))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">win_size</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">LK search window size (odd number, e.g. 7) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 7))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">levels</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Number of pyramid levels <em style="color:var(--text-muted)">(default: RuntimeValue(int: 3))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_track_lk(200, 7, 3)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">optical-flow</span>
+                                    <span class="tag">tracking</span>
+                                    <span class="tag">lk</span>
+                                    <span class="tag">lucas-kanade</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_warp_affine" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_warp_affine</span>
+                                </div>
+                                <p class="item-desc">Affine warp accelerated by FastCV; 2x3 CV_32F matrix loaded from cache</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">matrix_cache</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Cache ID holding the 2x3 CV_32F affine matrix</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Output width  (0 = same as input) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Output height (0 = same as input) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_warp_affine(&quot;A&quot;, 640, 480)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">warp</span>
+                                    <span class="tag">affine</span>
+                                    <span class="tag">transform</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="fcv_warp_perspective" data-category="fastcv">
+                                <div class="item-header">
+                                    <span class="item-name">fcv_warp_perspective</span>
+                                </div>
+                                <p class="item-desc">Perspective warp accelerated by FastCV; 3x3 CV_32F matrix loaded from cache</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">matrix_cache</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Cache ID holding the 3x3 CV_32F perspective matrix</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Output width  (0 = same as input) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Output height (0 = same as input) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">fcv_warp_perspective(&quot;M&quot;, 640, 480)</div>
+                                <div class="item-tags">
+                                    <span class="tag">fastcv</span>
+                                    <span class="tag">warp</span>
+                                    <span class="tag">perspective</span>
+                                    <span class="tag">transform</span>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                     <section class="category-section" id="feature" data-category="feature">
                         <div class="category-header">
                             <div class="category-icon">&#128736;</div>
@@ -8446,10 +9250,10 @@
                                         <span class="param-required">*</span>
                                     </div>
                                     <div class="param-row">
-                                        <span class="param-name">result_var</span>
+                                        <span class="param-name">var_name</span>
                                         <span class="param-type">string</span>
-                                        <span class="param-desc">Variable to store click state</span>
-                                        <span class="param-required">*</span>
+                                        <span class="param-desc">Return value into this variable <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
                                     </div>
                                 </div>
                                 <div class="item-example">check_button_click(&quot;Apply&quot;, &quot;Control&quot;, &quot;was_clicked&quot;)</div>
@@ -8594,8 +9398,8 @@
                                     <div class="param-row">
                                         <span class="param-name">var_name</span>
                                         <span class="param-type">string</span>
-                                        <span class="param-desc">Variable to store result</span>
-                                        <span class="param-required">*</span>
+                                        <span class="param-desc">Return value into this variable <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
                                     </div>
                                 </div>
                                 <div class="item-example">get_checkbox(&quot;Enable Filter&quot;, &quot;Control&quot;, &quot;is_enabled&quot;)</div>
@@ -8839,8 +9643,8 @@
                                     <div class="param-row">
                                         <span class="param-name">var_name</span>
                                         <span class="param-type">string</span>
-                                        <span class="param-desc">Variable name to store value</span>
-                                        <span class="param-required">*</span>
+                                        <span class="param-desc">Return value into this variable <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
                                     </div>
                                 </div>
                                 <div class="item-example">trackbar_value(&quot;Threshold&quot;, &quot;Control&quot;, &quot;thresh&quot;)</div>
@@ -13332,7 +14136,7 @@
                         <div class="category-header">
                             <div class="category-icon">&#128736;</div>
                             <h2 class="category-title">video_io</h2>
-                            <span class="category-count">22 items</span>
+                            <span class="category-count">36 items</span>
                         </div>
                         <div class="items-grid">
                             <div class="item-card" data-name="get_camera_capabilities" data-category="video_io">
@@ -13435,6 +14239,192 @@
                                     <span class="tag">image</span>
                                     <span class="tag">encode</span>
                                     <span class="tag">memory</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_debug_config" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_debug_config</span>
+                                </div>
+                                <p class="item-desc">Print detailed debug information about a libcamera session configuration</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source identifier</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_debug_config(0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">debug</span>
+                                    <span class="tag">configuration</span>
+                                    <span class="tag">diagnostics</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_get_bayer" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_get_bayer</span>
+                                </div>
+                                <p class="item-desc">Get the Bayer pattern string for a camera</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source identifier</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_get_bayer(0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">bayer</span>
+                                    <span class="tag">format</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_list" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_list</span>
+                                </div>
+                                <p class="item-desc">List available libcamera devices</p>
+                                <div class="item-example">libcam_list()</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">list</span>
+                                    <span class="tag">enumerate</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_list_controls" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_list_controls</span>
+                                </div>
+                                <p class="item-desc">List all available controls for a libcamera device</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source identifier (index or ID) <em style="color:var(--text-muted)">(default: RuntimeValue(int: 0))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_list_controls(0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">controls</span>
+                                    <span class="tag">list</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_list_formats" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_list_formats</span>
+                                </div>
+                                <p class="item-desc">List all supported pixel formats and resolutions for a camera</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source identifier</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_list_formats(0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">formats</span>
+                                    <span class="tag">resolutions</span>
+                                    <span class="tag">diagnostics</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_prop" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_prop</span>
+                                </div>
+                                <p class="item-desc">Set a libcamera control by name</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source identifier (index or ID)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">control</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">value</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Control value (number or boolean)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_prop(0, &quot;AeEnable&quot;, 0)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">control</span>
+                                    <span class="tag">property</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="libcam_setup" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">libcam_setup</span>
+                                </div>
+                                <p class="item-desc">Configure libcamera-specific settings for a camera</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Camera source (index or ID string)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Frame width <em style="color:var(--text-muted)">(default: RuntimeValue(int: 640))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Frame height <em style="color:var(--text-muted)">(default: RuntimeValue(int: 480))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">pixel_format</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Pixel format: BGR888, YUYV, MJPEG <em style="color:var(--text-muted)">(default: RuntimeValue(string: "BGR888"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">buffer_count</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Number of buffers <em style="color:var(--text-muted)">(default: RuntimeValue(int: 4))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">stream_role</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Stream role: VideoRecording, StillCapture, Viewfinder <em style="color:var(--text-muted)">(default: RuntimeValue(string: "VideoRecording"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">libcam_setup(0, 1920, 1080, &quot;SRGGB10&quot;, 4, &quot;Viewfinder&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">libcamera</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">setup</span>
+                                    <span class="tag">configuration</span>
                                 </div>
                             </div>
                             <div class="item-card" data-name="list_cameras" data-category="video_io">
@@ -13901,6 +14891,221 @@
                                     <span class="tag">set</span>
                                 </div>
                             </div>
+                            <div class="item-card" data-name="v4l2_enum_devices" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_enum_devices</span>
+                                </div>
+                                <p class="item-desc">Enumerate /dev/video* devices and their capabilities</p>
+                                <div class="item-example">v4l2_enum_devices()</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">enumerate</span>
+                                    <span class="tag">devices</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_get_bayer" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_get_bayer</span>
+                                </div>
+                                <p class="item-desc">Get the Bayer pattern string from the active V4L2 format</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">v4l2_get_bayer(&quot;/dev/video0&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">bayer</span>
+                                    <span class="tag">format</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_get_prop" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_get_prop</span>
+                                </div>
+                                <p class="item-desc">Get current value of a V4L2 control.
+Works on both /dev/video* and /dev/v4l-subdev* paths.
+Auto-discovers linked sub-devices when control not found on primary device.</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">control_name</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Control name, case-insensitive (e.g. &quot;exposure&quot;, &quot;analogue_gain&quot;)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">exp = v4l2_get_prop(&quot;/dev/video0&quot;, &quot;exposure&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">control</span>
+                                    <span class="tag">get</span>
+                                    <span class="tag">subdev</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_list_controls" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_list_controls</span>
+                                </div>
+                                <p class="item-desc">List all V4L2 controls (all classes) with ranges and current values.
+Automatically includes controls from linked sub-devices (sensors, ISPs) discovered via the media controller.</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">v4l2_list_controls(&quot;/dev/video3&quot;) # also shows sensor controls</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">controls</span>
+                                    <span class="tag">list</span>
+                                    <span class="tag">subdev</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_list_formats" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_list_formats</span>
+                                </div>
+                                <p class="item-desc">List all supported V4L2 formats and resolutions</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">v4l2_list_formats(&quot;/dev/video0&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">formats</span>
+                                    <span class="tag">resolutions</span>
+                                    <span class="tag">enumerate</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_prop" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_prop</span>
+                                </div>
+                                <p class="item-desc">Set a V4L2 control by name.
+Works on both /dev/video* (VFE) and /dev/v4l-subdev* paths.
+When the control is not found on the video device, the manager automatically discovers and tries linked sub-devices via the media controller (BFS upstream traversal, sensor first).
+Pass an explicit subdev path as the 4th argument to bypass auto-discovery.</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path (&quot;/dev/video0&quot;, &quot;/dev/v4l-subdev28&quot;) or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">control_name</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Control name, case-insensitive with space/underscore equivalence (e.g. &quot;Exposure&quot;, &quot;vertical_flip&quot;, &quot;analogue_gain&quot;)</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">value</span>
+                                        <span class="param-type">float</span>
+                                        <span class="param-desc">Control value</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">subdev</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Explicit /dev/v4l-subdev* path to target directly, bypassing auto-discovery. Useful on ISP pipelines where the video node is an intermediate VFE. <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">v4l2_prop(&quot;/dev/video0&quot;, &quot;vertical_flip&quot;, 1)
+v4l2_prop(&quot;/dev/video3&quot;, &quot;vertical_flip&quot;, 1, &quot;/dev/v4l-subdev28&quot;)
+v4l2_prop(&quot;/dev/v4l-subdev28&quot;, &quot;exposure&quot;, 800)</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">control</span>
+                                    <span class="tag">property</span>
+                                    <span class="tag">subdev</span>
+                                </div>
+                            </div>
+                            <div class="item-card" data-name="v4l2_setup" data-category="video_io">
+                                <div class="item-header">
+                                    <span class="item-name">v4l2_setup</span>
+                                </div>
+                                <p class="item-desc">Configure and open a V4L2 native device</p>
+                                <div class="item-params">
+                                    <div class="params-title">Parameters</div>
+                                    <div class="param-row">
+                                        <span class="param-name">source</span>
+                                        <span class="param-type">any</span>
+                                        <span class="param-desc">Device path (e.g. &quot;/dev/video0&quot;) or index</span>
+                                        <span class="param-required">*</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">width</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Frame width <em style="color:var(--text-muted)">(default: RuntimeValue(int: 640))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">height</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Frame height <em style="color:var(--text-muted)">(default: RuntimeValue(int: 480))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">pixel_format</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Pixel format: YUYV, MJPG, NV12, SRGGB10, etc. <em style="color:var(--text-muted)">(default: RuntimeValue(string: "YUYV"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">fps</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Framerate <em style="color:var(--text-muted)">(default: RuntimeValue(int: 30))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">buffer_count</span>
+                                        <span class="param-type">int</span>
+                                        <span class="param-desc">Number of mmap buffers <em style="color:var(--text-muted)">(default: RuntimeValue(int: 4))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">subdev</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Pin a specific /dev/v4l-subdev* path for control lookup on this device. Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). Leave empty for auto-discovery. <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                </div>
+                                <div class="item-example">v4l2_setup(&quot;/dev/video0&quot;, 1920, 1080, &quot;SRGGB10&quot;, 30)
+v4l2_setup(&quot;/dev/video3&quot;, 1640, 1232, &quot;SRGGB8&quot;, 30, 4, &quot;/dev/v4l-subdev28&quot;)</div>
+                                <div class="item-tags">
+                                    <span class="tag">v4l2</span>
+                                    <span class="tag">camera</span>
+                                    <span class="tag">setup</span>
+                                    <span class="tag">configuration</span>
+                                </div>
+                            </div>
                             <div class="item-card" data-name="video_cap" data-category="video_io">
                                 <div class="item-header">
                                     <span class="item-name">video_cap</span>
@@ -13917,7 +15122,13 @@
                                     <div class="param-row">
                                         <span class="param-name">api</span>
                                         <span class="param-type">string</span>
-                                        <span class="param-desc">API backend: auto, dshow, v4l2, ffmpeg <em style="color:var(--text-muted)">(default: RuntimeValue(string: "auto"))</em></span>
+                                        <span class="param-desc">API backend: auto, dshow, v4l2, ffmpeg, libcamera, v4l2_native, gstreamer <em style="color:var(--text-muted)">(default: RuntimeValue(string: "auto"))</em></span>
+                                        <span class="param-optional">optional</span>
+                                    </div>
+                                    <div class="param-row">
+                                        <span class="param-name">format</span>
+                                        <span class="param-type">string</span>
+                                        <span class="param-desc">Capture format: MJPG, UYVY, NV12, etc. <em style="color:var(--text-muted)">(default: RuntimeValue(string: ""))</em></span>
                                         <span class="param-optional">optional</span>
                                     </div>
                                 </div>
@@ -14572,6 +15783,24 @@
             tags: " transform matrix"
         },
         {
+            id: "auto_exposure",
+            name: "auto_exposure",
+            category: "camera",
+            description: "Software auto-exposure: analyses frame brightness over N samples and returns a computed exposure value within [min_exp, max_exp]",
+            example: "exp = auto_exposure(50, 10000, 10, 128, 0.3)\nv4l2_prop(\"/dev/video0\", \"Exposure (Absolute)\", exp)",
+            params: " min_exp Minimum exposure value (device units) max_exp Maximum exposure value (device units) samples Number of brightness samples to accumulate before recalculating target Target mean brightness (0-255) speed Convergence speed / gain (0.0-1.0, higher = faster) roi_x ROI x-offset as fraction of width (0.0-1.0) roi_y ROI y-offset as fraction of height (0.0-1.0) roi_w ROI width as fraction of width (0.0-1.0, 0 = full) roi_h ROI height as fraction of height (0.0-1.0, 0 = full)",
+            tags: " auto exposure brightness camera control"
+        },
+        {
+            id: "auto_exposure_reset",
+            name: "auto_exposure_reset",
+            category: "camera",
+            description: "Resets accumulated auto-exposure state",
+            example: "auto_exposure_reset() | auto_exposure_reset(\"/dev/video0\")",
+            params: " source Source identifier to reset (omit to reset all)",
+            tags: " auto exposure reset camera"
+        },
+        {
             id: "apply_colormap",
             name: "apply_colormap",
             category: "color",
@@ -14630,9 +15859,18 @@
             name: "cvt_color",
             category: "color",
             description: "Converts color space of the current frame",
-            example: "cvt_color(\"bgr2gray\") | cvt_color(\"bgr2hsv\")",
-            params: " code Conversion code: bgr2gray, gray2bgr, bgr2rgb, rgb2bgr, bgr2hsv, hsv2bgr, bgr2hls, hls2bgr, bgr2lab, lab2bgr, bgr2luv, luv2bgr, bgr2xyz, xyz2bgr, bgr2ycrcb, ycrcb2bgr, bgr2yuv, yuv2bgr",
-            tags: " color convert space"
+            example: "cvt_color(\"bgr2gray\") | cvt_color(\"uyvy2bgr\")",
+            params: " code Conversion code: bgr2gray, bgr2hsv, bgr2lab, yuv2bgr, uyvy2bgr, nv122bgr, bayerbg2bgr, etc.",
+            tags: " color convert space transform"
+        },
+        {
+            id: "debayer",
+            name: "debayer",
+            category: "color",
+            description: "Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data",
+            example: "debayer() | debayer(\"auto\") | debayer(\"RGGB\", \"ea\", \"bgr\", 2)",
+            params: " pattern Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or \"auto\" to detect from the active camera algorithm Demosaic algorithm: bilinear, vng, ea output Output format: bgr or rgb bit_shift Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)",
+            tags: " bayer debayer demosaic color raw"
         },
         {
             id: "equalize_hist",
@@ -14660,6 +15898,15 @@
             example: "gamma(0.5)  // Brighten | gamma(2.0)  // Darken",
             params: " gamma Gamma value (>1 darkens, <1 brightens)",
             tags: " gamma correction adjust"
+        },
+        {
+            id: "gpu_debayer",
+            name: "gpu_debayer",
+            category: "color",
+            description: "GPU-accelerated Bayer demosaicing using OpenCL. Falls back to CPU when OpenCL is unavailable. Supports bilinear, VNG, and EA algorithms.",
+            example: "gpu_debayer(\"auto\", \"ea\") | gpu_debayer(\"RGGB\", \"vng\", \"bgr\", 2)",
+            params: " pattern Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or \"auto\" algorithm Demosaic algorithm: bilinear, vng, ea output Output format: bgr or rgb bit_shift Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)",
+            tags: " gpu opencl debayer demosaic bayer color acceleration"
         },
         {
             id: "in_range",
@@ -16057,6 +17304,186 @@
             tags: " point polygon test"
         },
         {
+            id: "fcv_bilateral_filter",
+            name: "fcv_bilateral_filter",
+            category: "fastcv",
+            description: "Bilateral filter accelerated by FastCV (kernel d: 5, 7, or 9; 8U grayscale input)",
+            example: "fcv_bilateral_filter(5, 50.0, 1.0)",
+            params: " d Kernel diameter (5, 7, or 9) sigma_color Color sigma (typical: 50) sigma_space Space sigma (typical: 1)",
+            tags: " fastcv bilateral filter edge-preserving"
+        },
+        {
+            id: "fcv_bilateral_recursive",
+            name: "fcv_bilateral_recursive",
+            category: "fastcv",
+            description: "Recursive bilateral filter accelerated by FastCV (fast edge-preserving; 8U grayscale)",
+            example: "fcv_bilateral_recursive(0.03, 0.1)",
+            params: " sigma_color Color sigma in [0,1] (typical: 0.03) sigma_space Space sigma in [0,1] (typical: 0.1)",
+            tags: " fastcv bilateral recursive filter edge-preserving"
+        },
+        {
+            id: "fcv_calc_hist",
+            name: "fcv_calc_hist",
+            category: "fastcv",
+            description: "Grayscale histogram accelerated by FastCV; returns a 256-wide histogram bar chart",
+            example: "fcv_calc_hist(128)",
+            params: " height Height of the histogram visualization in pixels",
+            tags: " fastcv histogram statistics"
+        },
+        {
+            id: "fcv_fast10",
+            name: "fcv_fast10",
+            category: "fastcv",
+            description: "FAST10 corner detection accelerated by FastCV; draws detected corners on output",
+            example: "fcv_fast10(10, 4, true)",
+            params: " barrier Intensity barrier threshold border Border width to skip around edges nms Enable non-maximum suppression",
+            tags: " fastcv corner feature detect fast10"
+        },
+        {
+            id: "fcv_fft",
+            name: "fcv_fft",
+            category: "fastcv",
+            description: "Fast Fourier Transform accelerated by FastCV (input: 8U grayscale); returns log-magnitude spectrum",
+            example: "fcv_fft()",
+            params: "",
+            tags: " fastcv fft frequency transform"
+        },
+        {
+            id: "fcv_filter2d",
+            name: "fcv_filter2d",
+            category: "fastcv",
+            description: "2D convolution filter accelerated by FastCV (kernel sizes 3-11; 8U grayscale input)",
+            example: "fcv_filter2d(3, \"u8\")",
+            params: " kernel_size Kernel size (3, 5, 7, 9, or 11) ddepth Output depth: u8, s16, f32",
+            tags: " fastcv filter convolution 2d"
+        },
+        {
+            id: "fcv_gaussian_blur",
+            name: "fcv_gaussian_blur",
+            category: "fastcv",
+            description: "Gaussian blur accelerated by FastCV (supports 3x3 and 5x5 kernels, types: 8U/16S/32S)",
+            example: "fcv_gaussian_blur(5, true)",
+            params: " kernel_size Kernel size: 3 or 5 blur_border Process image border pixels",
+            tags: " fastcv blur gaussian filter"
+        },
+        {
+            id: "fcv_hough_lines",
+            name: "fcv_hough_lines",
+            category: "fastcv",
+            description: "Hough line detection accelerated by FastCV (input: grayscale or edge image); draws lines on output",
+            example: "fcv_hough_lines(0.25, \"green\")",
+            params: " threshold Normalized quality threshold [0,1] color Line draw color (green, red, blue, white)",
+            tags: " fastcv hough lines detect"
+        },
+        {
+            id: "fcv_ifft",
+            name: "fcv_ifft",
+            category: "fastcv",
+            description: "Inverse FFT accelerated by FastCV (input: 2-channel CV_32F output of fcv_fft raw)",
+            example: "fcv_ifft()",
+            params: "",
+            tags: " fastcv ifft frequency transform"
+        },
+        {
+            id: "fcv_mean_shift",
+            name: "fcv_mean_shift",
+            category: "fastcv",
+            description: "Mean shift tracking accelerated by FastCV; ROI rect [x,y,w,h] stored as 1x4 CV_32F Mat in cache",
+            example: "fcv_mean_shift(\"roi\", 10, 1.0)",
+            params: " track_cache Cache ID holding ROI rect (1x4 CV_32F [x,y,w,h]) max_iter Maximum iterations epsilon Convergence epsilon in pixels",
+            tags: " fastcv mean-shift tracking"
+        },
+        {
+            id: "fcv_moments",
+            name: "fcv_moments",
+            category: "fastcv",
+            description: "Image moments accelerated by FastCV; prints m00, m10, m01, centroid to console",
+            example: "fcv_moments(false)",
+            params: " binary Treat image as binary before computing moments",
+            tags: " fastcv moments statistics"
+        },
+        {
+            id: "fcv_mser",
+            name: "fcv_mser",
+            category: "fastcv",
+            description: "MSER region detector accelerated by FastCV; draws colored contours and bounding boxes on output",
+            example: "fcv_mser(256, 0.25, 2)",
+            params: " min_area Minimum region area in pixels max_area_ratio Maximum region area as fraction of image delta MSER delta parameter",
+            tags: " fastcv mser region detect feature"
+        },
+        {
+            id: "fcv_normalize_local_box",
+            name: "fcv_normalize_local_box",
+            category: "fastcv",
+            description: "Local box contrast normalization accelerated by FastCV (8U grayscale input)",
+            example: "fcv_normalize_local_box(5, 5, true)",
+            params: " box_width Local box width box_height Local box height use_stddev Normalize by std deviation (true) or mean (false)",
+            tags: " fastcv normalize local contrast"
+        },
+        {
+            id: "fcv_pyramid",
+            name: "fcv_pyramid",
+            category: "fastcv",
+            description: "Image pyramid accelerated by FastCV; each level is stored in cache as <prefix>_0, <prefix>_1, ...",
+            example: "fcv_pyramid(4, true, \"pyr\")",
+            params: " levels Number of pyramid levels scale_by2 Scale by 2 (true) or ORB factor 0.84 (false) cache_prefix Cache key prefix for pyramid levels",
+            tags: " fastcv pyramid scale multi-scale"
+        },
+        {
+            id: "fcv_resize_down",
+            name: "fcv_resize_down",
+            category: "fastcv",
+            description: "Optimized downscale resize accelerated by FastCV; specify either target size or scale factors",
+            example: "fcv_resize_down(640, 480, 0, 0)",
+            params: " width Target width (0 = use scale) height Target height (0 = use scale) inv_scale_x Horizontal inverse scale (e.g., 0.5 = half width) inv_scale_y Vertical inverse scale",
+            tags: " fastcv resize scale downsample"
+        },
+        {
+            id: "fcv_sobel",
+            name: "fcv_sobel",
+            category: "fastcv",
+            description: "Sobel edge detection accelerated by FastCV; stores dx and dy to cache as <id>_dx and <id>_dy; returns magnitude",
+            example: "fcv_sobel(3, \"sobel\")",
+            params: " kernel_size Kernel size (3, 5, or 7) cache_id Cache prefix for dx/dy gradient outputs",
+            tags: " fastcv sobel edge gradient"
+        },
+        {
+            id: "fcv_threshold_range",
+            name: "fcv_threshold_range",
+            category: "fastcv",
+            description: "Range threshold (FastCV): pixels in [low_thresh, high_thresh] become true_value, others become false_value",
+            example: "fcv_threshold_range(100, 200, 255, 0)",
+            params: " low_thresh Lower threshold (inclusive) high_thresh Upper threshold (inclusive) true_value Value assigned to in-range pixels false_value Value assigned to out-of-range pixels",
+            tags: " fastcv threshold range binary"
+        },
+        {
+            id: "fcv_track_lk",
+            name: "fcv_track_lk",
+            category: "fastcv",
+            description: "Lucas-Kanade sparse optical flow accelerated by FastCV; tracks FAST10 corners between consecutive frames; re-detects corners when all are lost",
+            example: "fcv_track_lk(200, 7, 3)",
+            params: " max_corners Maximum number of corners to track win_size LK search window size (odd number, e.g. 7) levels Number of pyramid levels",
+            tags: " fastcv optical-flow tracking lk lucas-kanade"
+        },
+        {
+            id: "fcv_warp_affine",
+            name: "fcv_warp_affine",
+            category: "fastcv",
+            description: "Affine warp accelerated by FastCV; 2x3 CV_32F matrix loaded from cache",
+            example: "fcv_warp_affine(\"A\", 640, 480)",
+            params: " matrix_cache Cache ID holding the 2x3 CV_32F affine matrix width Output width  (0 = same as input) height Output height (0 = same as input)",
+            tags: " fastcv warp affine transform"
+        },
+        {
+            id: "fcv_warp_perspective",
+            name: "fcv_warp_perspective",
+            category: "fastcv",
+            description: "Perspective warp accelerated by FastCV; 3x3 CV_32F matrix loaded from cache",
+            example: "fcv_warp_perspective(\"M\", 640, 480)",
+            params: " matrix_cache Cache ID holding the 3x3 CV_32F perspective matrix width Output width  (0 = same as input) height Output height (0 = same as input)",
+            tags: " fastcv warp perspective transform"
+        },
+        {
             id: "agast",
             name: "agast",
             category: "feature",
@@ -16377,7 +17804,7 @@
             category: "gui",
             description: "Checks if button was clicked and resets the state",
             example: "check_button_click(\"Apply\", \"Control\", \"was_clicked\")",
-            params: " name Button name window Window name result_var Variable to store click state",
+            params: " name Button name window Window name var_name Return value into this variable",
             tags: " gui button check"
         },
         {
@@ -16413,7 +17840,7 @@
             category: "gui",
             description: "Gets checkbox state as boolean into a variable",
             example: "get_checkbox(\"Enable Filter\", \"Control\", \"is_enabled\")",
-            params: " name Checkbox name window Window name var_name Variable to store result",
+            params: " name Checkbox name window Window name var_name Return value into this variable",
             tags: " gui checkbox boolean"
         },
         {
@@ -16485,7 +17912,7 @@
             category: "gui",
             description: "Gets trackbar value and stores in a variable",
             example: "trackbar_value(\"Threshold\", \"Control\", \"thresh\")",
-            params: " name Trackbar name window Window name var_name Variable name to store value",
+            params: " name Trackbar name window Window name var_name Return value into this variable",
             tags: " gui trackbar value"
         },
         {
@@ -17794,6 +19221,69 @@
             tags: " image encode memory"
         },
         {
+            id: "libcam_debug_config",
+            name: "libcam_debug_config",
+            category: "video_io",
+            description: "Print detailed debug information about a libcamera session configuration",
+            example: "libcam_debug_config(0)",
+            params: " source Camera source identifier",
+            tags: " libcamera debug configuration diagnostics"
+        },
+        {
+            id: "libcam_get_bayer",
+            name: "libcam_get_bayer",
+            category: "video_io",
+            description: "Get the Bayer pattern string for a camera",
+            example: "libcam_get_bayer(0)",
+            params: " source Camera source identifier",
+            tags: " libcamera bayer format"
+        },
+        {
+            id: "libcam_list",
+            name: "libcam_list",
+            category: "video_io",
+            description: "List available libcamera devices",
+            example: "libcam_list()",
+            params: "",
+            tags: " libcamera camera list enumerate"
+        },
+        {
+            id: "libcam_list_controls",
+            name: "libcam_list_controls",
+            category: "video_io",
+            description: "List all available controls for a libcamera device",
+            example: "libcam_list_controls(0)",
+            params: " source Camera source identifier (index or ID)",
+            tags: " libcamera camera controls list"
+        },
+        {
+            id: "libcam_list_formats",
+            name: "libcam_list_formats",
+            category: "video_io",
+            description: "List all supported pixel formats and resolutions for a camera",
+            example: "libcam_list_formats(0)",
+            params: " source Camera source identifier",
+            tags: " libcamera formats resolutions diagnostics"
+        },
+        {
+            id: "libcam_prop",
+            name: "libcam_prop",
+            category: "video_io",
+            description: "Set a libcamera control by name",
+            example: "libcam_prop(0, \"AeEnable\", 0)",
+            params: " source Camera source identifier (index or ID) control Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness) value Control value (number or boolean)",
+            tags: " libcamera camera control property"
+        },
+        {
+            id: "libcam_setup",
+            name: "libcam_setup",
+            category: "video_io",
+            description: "Configure libcamera-specific settings for a camera",
+            example: "libcam_setup(0, 1920, 1080, \"SRGGB10\", 4, \"Viewfinder\")",
+            params: " source Camera source (index or ID string) width Frame width height Frame height pixel_format Pixel format: BGR888, YUYV, MJPEG buffer_count Number of buffers stream_role Stream role: VideoRecording, StillCapture, Viewfinder",
+            tags: " libcamera camera setup configuration"
+        },
+        {
             id: "list_cameras",
             name: "list_cameras",
             category: "video_io",
@@ -17920,12 +19410,75 @@
             tags: " video property set"
         },
         {
+            id: "v4l2_enum_devices",
+            name: "v4l2_enum_devices",
+            category: "video_io",
+            description: "Enumerate /dev/video* devices and their capabilities",
+            example: "v4l2_enum_devices()",
+            params: "",
+            tags: " v4l2 enumerate devices"
+        },
+        {
+            id: "v4l2_get_bayer",
+            name: "v4l2_get_bayer",
+            category: "video_io",
+            description: "Get the Bayer pattern string from the active V4L2 format",
+            example: "v4l2_get_bayer(\"/dev/video0\")",
+            params: " source Device path or index",
+            tags: " v4l2 bayer format"
+        },
+        {
+            id: "v4l2_get_prop",
+            name: "v4l2_get_prop",
+            category: "video_io",
+            description: "Get current value of a V4L2 control.\nWorks on both /dev/video* and /dev/v4l-subdev* paths.\nAuto-discovers linked sub-devices when control not found on primary device.",
+            example: "exp = v4l2_get_prop(\"/dev/video0\", \"exposure\")",
+            params: " source Device path or index control_name Control name, case-insensitive (e.g. \"exposure\", \"analogue_gain\")",
+            tags: " v4l2 camera control get subdev"
+        },
+        {
+            id: "v4l2_list_controls",
+            name: "v4l2_list_controls",
+            category: "video_io",
+            description: "List all V4L2 controls (all classes) with ranges and current values.\nAutomatically includes controls from linked sub-devices (sensors, ISPs) discovered via the media controller.",
+            example: "v4l2_list_controls(\"/dev/video3\") # also shows sensor controls",
+            params: " source Device path or index",
+            tags: " v4l2 camera controls list subdev"
+        },
+        {
+            id: "v4l2_list_formats",
+            name: "v4l2_list_formats",
+            category: "video_io",
+            description: "List all supported V4L2 formats and resolutions",
+            example: "v4l2_list_formats(\"/dev/video0\")",
+            params: " source Device path or index",
+            tags: " v4l2 formats resolutions enumerate"
+        },
+        {
+            id: "v4l2_prop",
+            name: "v4l2_prop",
+            category: "video_io",
+            description: "Set a V4L2 control by name.\nWorks on both /dev/video* (VFE) and /dev/v4l-subdev* paths.\nWhen the control is not found on the video device, the manager automatically discovers and tries linked sub-devices via the media controller (BFS upstream traversal, sensor first).\nPass an explicit subdev path as the 4th argument to bypass auto-discovery.",
+            example: "v4l2_prop(\"/dev/video0\", \"vertical_flip\", 1)\nv4l2_prop(\"/dev/video3\", \"vertical_flip\", 1, \"/dev/v4l-subdev28\")\nv4l2_prop(\"/dev/v4l-subdev28\", \"exposure\", 800)",
+            params: " source Device path (\"/dev/video0\", \"/dev/v4l-subdev28\") or index control_name Control name, case-insensitive with space/underscore equivalence (e.g. \"Exposure\", \"vertical_flip\", \"analogue_gain\") value Control value subdev Explicit /dev/v4l-subdev* path to target directly, bypassing auto-discovery. Useful on ISP pipelines where the video node is an intermediate VFE.",
+            tags: " v4l2 camera control property subdev"
+        },
+        {
+            id: "v4l2_setup",
+            name: "v4l2_setup",
+            category: "video_io",
+            description: "Configure and open a V4L2 native device",
+            example: "v4l2_setup(\"/dev/video0\", 1920, 1080, \"SRGGB10\", 30)\nv4l2_setup(\"/dev/video3\", 1640, 1232, \"SRGGB8\", 30, 4, \"/dev/v4l-subdev28\")",
+            params: " source Device path (e.g. \"/dev/video0\") or index width Frame width height Frame height pixel_format Pixel format: YUYV, MJPG, NV12, SRGGB10, etc. fps Framerate buffer_count Number of mmap buffers subdev Pin a specific /dev/v4l-subdev* path for control lookup on this device. Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). Leave empty for auto-discovery.",
+            tags: " v4l2 camera setup configuration"
+        },
+        {
             id: "video_cap",
             name: "video_cap",
             category: "video_io",
             description: "Captures video frames from a source (camera, file, or URL)",
             example: "video_cap(0) | video_cap(\"video.mp4\")",
-            params: " source Source: device index, file path, or URL api API backend: auto, dshow, v4l2, ffmpeg",
+            params: " source Source: device index, file path, or URL api API backend: auto, dshow, v4l2, ffmpeg, libcamera, v4l2_native, gstreamer format Capture format: MJPG, UYVY, NV12, etc.",
             tags: " video capture input camera"
         },
         {

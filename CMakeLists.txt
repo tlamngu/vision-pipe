@@ -121,6 +121,8 @@ endif()
 if(VISIONPIPE_WITH_FASTCV)
     # Check if OpenCV was built with FastCV
     # FastCV is typically available as a Qualcomm SDK
+
+    
     find_path(FASTCV_INCLUDE_DIR fastcv.h
         HINTS
         $ENV{FASTCV_SDK}/inc
@@ -129,13 +131,33 @@ if(VISIONPIPE_WITH_FASTCV)
     )
     find_library(FASTCV_LIBRARY fastcv
         HINTS
+        $ENV{FASTCV_SDK}/libs
         $ENV{FASTCV_SDK}/lib
         /usr/local/lib
+        /usr/local/libs
         /opt/fastcv/lib
+        /opt/fastcv/libs
     )
+
+    # message(STATUS "ENV{FASTCV_SDK} = [$ENV{FASTCV_SDK}]")
+    # message(STATUS "FASTCV_INCLUDE_DIR = [${FASTCV_INCLUDE_DIR}]")
+    # message(STATUS "FASTCV_LIBRARY     = [${FASTCV_LIBRARY}]")
+
     if(FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
         add_definitions(-DVISIONPIPE_FASTCV_ENABLED)
-        message(STATUS "FastCV support enabled")
+        # Find the OpenCV fastcv contrib module library (cv::fastcv:: symbols)
+        find_library(OpenCV_FASTCV_LIB opencv_fastcv
+            PATHS
+                ${OpenCV_DIR}/lib
+                ${OpenCV_DIR}/../lib
+                /home/radxa/System/opencv/build/lib
+            NO_DEFAULT_PATH
+        )
+        if(OpenCV_FASTCV_LIB)
+            message(STATUS "FastCV support enabled (opencv_fastcv: ${OpenCV_FASTCV_LIB})")
+        else()
+            message(WARNING "libopencv_fastcv not found — cv::fastcv:: symbols may fail to link")
+        endif()
     else()
         message(WARNING "FastCV not found, disabling FastCV extensions")
         set(VISIONPIPE_WITH_FASTCV OFF)
@@ -257,6 +279,8 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/gui_enhanced_items.cpp
     src/interpreter/items/tensor_items.cpp
     src/interpreter/items/ip_stream_items.cpp
+    src/interpreter/items/auto_exposure_items.cpp
+    src/interpreter/items/gpu_debayer_items.cpp
 )
 
 # IP Stream sources (optional feature)
@@ -296,13 +320,13 @@ set(VISIONPIPE_CLI_SOURCES
     src/cli/main.cpp
     src/cli/doc_gen.cpp
 )
-
-# Optional extension sources
-# if(VISIONPIPE_WITH_FASTCV)
-#     list(APPEND VISIONPIPE_CORE_SOURCES
-#         src/extensions/fastcv/fastcv_items.cpp
-#     )
-# endif()
+# FastCV accelerated items (optional feature)
+if(VISIONPIPE_WITH_FASTCV AND FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/interpreter/items/fastcv_items.cpp
+    )
+    message(STATUS "FastCV items registered")
+endif()
 
 # if(VISIONPIPE_WITH_ICEORYX2)
 #     list(APPEND VISIONPIPE_CORE_SOURCES
@@ -439,6 +463,16 @@ target_link_libraries(visionpipe_interpreter PUBLIC
     visionpipe_core
 )
 
+# FastCV items compiled in visionpipe_interpreter need direct link to both
+# the native FastCV SDK (${FASTCV_LIBRARY}) and the OpenCV fastcv contrib module
+if(VISIONPIPE_WITH_FASTCV AND FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
+    target_include_directories(visionpipe_interpreter PRIVATE ${FASTCV_INCLUDE_DIR})
+    target_link_libraries(visionpipe_interpreter PRIVATE ${FASTCV_LIBRARY})
+    if(OpenCV_FASTCV_LIB)
+        target_link_libraries(visionpipe_interpreter PRIVATE ${OpenCV_FASTCV_LIB})
+    endif()
+endif()
+
 # Link ONNX Runtime if available
 if(VISIONPIPE_WITH_ONNXRUNTIME AND OnnxRuntime_FOUND)
     target_include_directories(visionpipe_interpreter PRIVATE ${OnnxRuntime_INCLUDE_DIRS})
@@ -459,7 +493,16 @@ if(VISIONPIPE_BUILD_CLI)
         visionpipe_interpreter
         visionpipe_core
     )
-    
+
+    # Resolve the RPATH cycle: libopencv_fastcv lives in a different directory
+    # than the installed OpenCV libs. Pin its directory explicitly in RPATH so
+    # CMake doesn't try to merge conflicting search order constraints.
+    if(OpenCV_FASTCV_LIB)
+        get_filename_component(_fcv_lib_dir "${OpenCV_FASTCV_LIB}" DIRECTORY)
+        set_property(TARGET visionpipe APPEND PROPERTY BUILD_RPATH "${_fcv_lib_dir}")
+        set_property(TARGET visionpipe APPEND PROPERTY INSTALL_RPATH "${_fcv_lib_dir}")
+    endif()
+
     # Copy OpenCV DLLs to output directory on Windows
     if(WIN32 AND OpenCV_FOUND)
         # Get OpenCV library path and derive bin directory

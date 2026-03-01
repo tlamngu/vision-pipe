@@ -360,6 +360,10 @@ int cmdRun(const CLIOptions& opts) {
         std::signal(SIGINT, signalHandler);
 #ifndef _WIN32
         std::signal(SIGTERM, signalHandler);
+        // Ignore SIGPIPE so that a streaming client disconnecting mid-send does
+        // not terminate the visionpipe process. send() will return -1/EPIPE
+        // instead, which the clientHandler already handles gracefully.
+        std::signal(SIGPIPE, SIG_IGN);
 #endif
         
         if (!opts.quiet) {
