@@ -28,6 +28,9 @@ void registerAllItems(ItemRegistry& registry) {
     // GPU-accelerated debayering
     registerGpuDebayerItems(registry);
 
+    // Frame sink (shared memory IPC for libvisionpipe)
+    registerFrameSinkItems(registry);
+
     // Optional: Register IP Stream items when feature is enabled
     // This function is a no-op when VISIONPIPE_IP_STREAM_ENABLED is not defined
     registerIPStreamItems(registry);

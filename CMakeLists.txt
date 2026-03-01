@@ -281,6 +281,7 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/ip_stream_items.cpp
     src/interpreter/items/auto_exposure_items.cpp
     src/interpreter/items/gpu_debayer_items.cpp
+    src/interpreter/items/frame_sink_items.cpp
 )
 
 # IP Stream sources (optional feature)
@@ -614,6 +615,52 @@ if(VISIONPIPE_BUILD_CLI)
 endif()
 
 # ============================================================================
+# Shared Library Target - libvisionpipe (client library)
+# ============================================================================
+option(VISIONPIPE_BUILD_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
+
+if(VISIONPIPE_BUILD_LIBVISIONPIPE)
+    set(LIBVISIONPIPE_SOURCES
+        src/libvisionpipe/frame_transport.cpp
+        src/libvisionpipe/libvisionpipe.cpp
+    )
+
+    add_library(visionpipe_client SHARED ${LIBVISIONPIPE_SOURCES})
+    target_include_directories(visionpipe_client PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(visionpipe_client PUBLIC
+        ${OpenCV_LIBS}
+        rt              # POSIX shared memory (shm_open, shm_unlink)
+        Threads::Threads
+    )
+    target_compile_definitions(visionpipe_client PRIVATE LIBVISIONPIPE_BUILDING)
+    set_target_properties(visionpipe_client PROPERTIES
+        OUTPUT_NAME "visionpipe"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1
+    )
+
+    # Also link frame_transport into visionpipe_core so the frame_sink item can use it
+    target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
+    target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(visionpipe_core PUBLIC rt)
+
+    install(TARGETS visionpipe_client
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+    install(DIRECTORY include/libvisionpipe/
+        DESTINATION include/libvisionpipe
+        FILES_MATCHING PATTERN "*.h"
+    )
+
+    message(STATUS "libvisionpipe shared library: ENABLED")
+endif()
+
+# ============================================================================
 # Install Configuration
 # ============================================================================
 install(TARGETS visionpipe_core visionpipe_interpreter
@@ -672,5 +719,6 @@ message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
 message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
+message(STATUS "  libvisionpipe:  ${VISIONPIPE_BUILD_LIBVISIONPIPE}")
 message(STATUS "========================================")
 message(STATUS "")

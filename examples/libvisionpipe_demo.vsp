@@ -1,0 +1,18 @@
+# Example .vsp script for use with libvisionpipe
+# This script captures from camera 0, processes, and exposes frames via frame_sink()
+
+pipeline main {
+    video_cap(0)
+    resize(640, 480)
+    frame_sink("raw")
+
+    # Process the frame
+    gaussian_blur(5)
+    frame_sink("processed")
+
+    # Optional: also show on screen if running standalone
+    # display("Camera Output")
+    # wait_key(1)
+}
+
+exec_loop(main)
