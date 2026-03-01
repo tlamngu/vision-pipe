@@ -59,7 +59,7 @@ VisionPipe is designed for developers, researchers, and vision engineers who nee
 
 **Memory Leaks in Cache Management**: Under specific conditions where the cache is not properly utilized, pipelines may experience memory leaks. The primary issue was resolved in v1.2; similar errors may persist in edge cases. If you encounter memory-related issues, ensure proper cache initialization and refer to `examples/test_cache.vsp`.
 
-**Libcamera Dependencies Issue**: Due to a design constraint introduced with the libcamera integration, all builds currently require `-DLIBCAMERA_BACKEND=ON` to target camera services. This is a known issue planned for resolution in a future release.
+**Libvisionpipe frame receive**: Under edge case, or unmanaged session, libvisionpipe might leaves Visionpipe process stay running even closed the application. You must pay attention on this for this version. 
 
 ### For Production Users
 
