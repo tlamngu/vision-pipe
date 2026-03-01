@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find dependencies
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui videoio)
+find_package(Threads REQUIRED)
 
 # Option 1: Find installed libvisionpipe
 find_library(LIBVISIONPIPE_LIB visionpipe HINTS /usr/local/lib ${CMAKE_BINARY_DIR}/..)
@@ -14,7 +15,10 @@ find_path(LIBVISIONPIPE_INC libvisionpipe/libvisionpipe.h HINTS /usr/local/inclu
 if(LIBVISIONPIPE_LIB AND LIBVISIONPIPE_INC)
     add_executable(demo example_libvisionpipe.cpp)
     target_include_directories(demo PRIVATE ${LIBVISIONPIPE_INC} ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(demo PRIVATE ${LIBVISIONPIPE_LIB} ${OpenCV_LIBS} rt pthread)
+    target_link_libraries(demo PRIVATE ${LIBVISIONPIPE_LIB} ${OpenCV_LIBS} Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(demo PRIVATE rt)
+    endif()
     message(STATUS "Found libvisionpipe: ${LIBVISIONPIPE_LIB}")
 else()
     message(WARNING "libvisionpipe not found. Build the main project first with -DVISIONPIPE_BUILD_LIBVISIONPIPE=ON")

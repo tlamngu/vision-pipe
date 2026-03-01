@@ -1,7 +1,12 @@
 #include "interpreter/items/frame_sink_items.h"
 #include <cstdlib>
 #include <iostream>
-#include <unistd.h>
+
+#if defined(_WIN32)
+  #include <process.h>   // _getpid
+#else
+  #include <unistd.h>    // getpid
+#endif
 
 namespace visionpipe {
 
@@ -29,7 +34,11 @@ std::shared_ptr<FrameShmProducer> FrameSinkRegistry::getProducer(const std::stri
             _sessionId = env;
         } else {
             // Generate from PID
+#if defined(_WIN32)
+            _sessionId = std::to_string(_getpid());
+#else
             _sessionId = std::to_string(getpid());
+#endif
         }
     }
 

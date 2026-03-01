@@ -632,9 +632,12 @@ if(VISIONPIPE_BUILD_LIBVISIONPIPE)
     )
     target_link_libraries(visionpipe_client PUBLIC
         ${OpenCV_LIBS}
-        rt              # POSIX shared memory (shm_open, shm_unlink)
         Threads::Threads
     )
+    # POSIX shared memory: -lrt needed on Linux (on macOS it's in libc)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_client PUBLIC rt)
+    endif()
     target_compile_definitions(visionpipe_client PRIVATE LIBVISIONPIPE_BUILDING)
     set_target_properties(visionpipe_client PROPERTIES
         OUTPUT_NAME "visionpipe"
@@ -645,7 +648,9 @@ if(VISIONPIPE_BUILD_LIBVISIONPIPE)
     # Also link frame_transport into visionpipe_core so the frame_sink item can use it
     target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
     target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(visionpipe_core PUBLIC rt)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_core PUBLIC rt)
+    endif()
 
     install(TARGETS visionpipe_client
         LIBRARY DESTINATION lib

@@ -5,12 +5,15 @@
  * @file frame_transport.h
  * @brief Zero-copy shared memory frame transport between visionpipe process and clients
  *
- * Uses POSIX shared memory (shm_open/mmap) for zero-copy cv::Mat transfer.
+ * Cross-platform support:
+ *   - Linux/macOS: POSIX shared memory (shm_open/mmap)
+ *   - Windows:     Named shared memory (CreateFileMapping/MapViewOfFile)
+ *
  * Protocol:
  *   - Each frame_sink("name") in a .vsp script creates a shared memory region
  *   - The region contains a header + frame data buffer
  *   - Producer (visionpipe) writes frames, consumer (libvisionpipe client) reads them
- *   - Synchronization via atomic frame counter + mutex in shared memory
+ *   - Synchronization via atomic frame counter + spin-lock in shared memory
  */
 
 #include <string>
@@ -18,10 +21,22 @@
 #include <cstddef>
 #include <atomic>
 
+#if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+#endif
+
 namespace visionpipe {
 
 // Shared memory segment name prefix
+// On POSIX this becomes "/visionpipe_sink_...", on Windows "Local\\visionpipe_sink_..."
+#if defined(_WIN32)
+constexpr const char* SHM_PREFIX = "Local\\visionpipe_sink_";
+#else
 constexpr const char* SHM_PREFIX = "/visionpipe_sink_";
+#endif
 
 // Maximum frame size (default 4K resolution * 4 channels = ~33MB)
 constexpr size_t MAX_FRAME_BYTES = 3840 * 2160 * 4;
@@ -30,9 +45,12 @@ constexpr size_t MAX_FRAME_BYTES = 3840 * 2160 * 4;
 constexpr uint32_t SHM_MAGIC = 0x56505346; // "VPSF" = VisionPipe Shared Frame
 
 /**
- * @brief Header structure in shared memory (placed at the start of the mmap region)
+ * @brief Header structure in shared memory (placed at the start of the mapped region)
  *
  * Layout: [FrameShmHeader][frame_data_bytes...]
+ *
+ * NOTE: This struct uses std::atomic for lock-free synchronization across processes.
+ * std::atomic<T> is lock-free for 32/64-bit integers on all major platforms (x86, ARM).
  */
 struct FrameShmHeader {
     uint32_t magic;                  // SHM_MAGIC
@@ -44,7 +62,7 @@ struct FrameShmHeader {
     uint32_t dataSize;               // Actual frame data size in bytes
     std::atomic<int32_t> writerLock; // Simple spin-lock: 0=free, 1=writing
     int32_t producerPid;             // PID of the visionpipe process
-    uint8_t _pad[16];               // Reserved
+    uint8_t _pad[16];               // Reserved for future use
 };
 
 /**
@@ -55,7 +73,7 @@ constexpr size_t shmTotalSize() {
 }
 
 /**
- * @brief Build the POSIX shm name for a given session + sink
+ * @brief Build the shared memory name for a given session + sink
  * @param sessionId Unique session identifier
  * @param sinkName Sink name from frame_sink("name")
  */
@@ -69,6 +87,10 @@ public:
     FrameShmProducer();
     ~FrameShmProducer();
 
+    // Non-copyable
+    FrameShmProducer(const FrameShmProducer&) = delete;
+    FrameShmProducer& operator=(const FrameShmProducer&) = delete;
+
     /**
      * @brief Create/open shared memory for a sink
      * @param shmName Full shm name (from buildShmName)
@@ -77,8 +99,8 @@ public:
     bool open(const std::string& shmName);
 
     /**
-     * @brief Write a frame into shared memory (zero-copy when possible)
-     * @param data Pointer to raw pixel data
+     * @brief Write a frame into shared memory
+     * @param data Pointer to raw pixel data (must be at least rows*step bytes)
      * @param rows Frame rows
      * @param cols Frame cols
      * @param type cv::Mat type
@@ -87,14 +109,18 @@ public:
     void writeFrame(const uint8_t* data, int rows, int cols, int type, int step);
 
     /**
-     * @brief Close and unlink shared memory
+     * @brief Close and unlink/destroy shared memory
      */
     void close();
 
     bool isOpen() const { return _mapped != nullptr; }
 
 private:
+#if defined(_WIN32)
+    HANDLE _hMapFile = NULL;
+#else
     int _fd = -1;
+#endif
     void* _mapped = nullptr;
     std::string _shmName;
 };
@@ -106,6 +132,10 @@ class FrameShmConsumer {
 public:
     FrameShmConsumer();
     ~FrameShmConsumer();
+
+    // Non-copyable
+    FrameShmConsumer(const FrameShmConsumer&) = delete;
+    FrameShmConsumer& operator=(const FrameShmConsumer&) = delete;
 
     /**
      * @brief Open existing shared memory (created by producer)
@@ -121,7 +151,7 @@ public:
      * @param[out] cols Output cols
      * @param[out] type Output Mat type
      * @param[out] step Output step
-     * @param[out] data Pointer set to the frame data in shared memory (zero-copy!)
+     * @param[out] data Pointer set to frame data in shared memory (zero-copy!)
      * @param[out] seq Frame sequence number
      * @return true if a frame is available
      */
@@ -146,7 +176,11 @@ public:
     bool isOpen() const { return _mapped != nullptr; }
 
 private:
+#if defined(_WIN32)
+    HANDLE _hMapFile = NULL;
+#else
     int _fd = -1;
+#endif
     void* _mapped = nullptr;
     std::string _shmName;
     uint64_t _lastSeq = 0;

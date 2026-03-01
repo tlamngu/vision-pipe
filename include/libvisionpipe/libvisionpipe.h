@@ -3,7 +3,9 @@
 
 /**
  * @file libvisionpipe.h
- * @brief libvisionpipe - C++ shared library client for VisionPipe
+ * @brief libvisionpipe - Cross-platform C++ shared library client for VisionPipe
+ *
+ * Supported platforms: Linux, macOS, Windows
  *
  * This library spawns a VisionPipe process as a sidecar and provides
  * zero-copy frame access to frames produced by frame_sink() items
@@ -16,7 +18,7 @@
  *   visionpipe::VisionPipe camera;
  *   auto session = camera.run("my_pipeline.vsp");
  *
- *   session->onFrame("output", [](const cv::Mat& frame) {
+ *   session->onFrame("output", [](const cv::Mat& frame, uint64_t seq) {
  *       // Process frame...
  *   });
  *
@@ -38,6 +40,14 @@
 #include <map>
 #include <atomic>
 #include <opencv2/core/mat.hpp>
+
+// Platform-specific process handle type
+#if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <windows.h>
+#endif
 
 // Shared library export macros
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -82,12 +92,16 @@ enum class SessionState {
  * @brief Configuration for VisionPipe execution
  */
 struct LIBVISIONPIPE_API VisionPipeConfig {
-    std::string executablePath = "visionpipe";   ///< Path to visionpipe binary
-    bool verbose = false;                         ///< Pass --verbose to visionpipe
-    bool noDisplay = true;                        ///< Pass --no-display (typical for library use)
-    std::map<std::string, std::string> params;    ///< Script parameters (--param key=value)
-    std::string pipeline;                         ///< Specific pipeline to run (--pipeline name)
-    int sinkTimeoutMs = 10000;                    ///< Timeout waiting for frame_sink shm to appear
+#if defined(_WIN32)
+    std::string executablePath = "visionpipe.exe"; ///< Path to visionpipe binary
+#else
+    std::string executablePath = "visionpipe";     ///< Path to visionpipe binary
+#endif
+    bool verbose = false;                           ///< Pass --verbose to visionpipe
+    bool noDisplay = true;                          ///< Pass --no-display (typical for library use)
+    std::map<std::string, std::string> params;      ///< Script parameters (--param key=value)
+    std::string pipeline;                           ///< Specific pipeline to run (--pipeline name)
+    int sinkTimeoutMs = 10000;                      ///< Timeout waiting for frame_sink shm to appear
 };
 
 // ============================================================================
@@ -101,6 +115,8 @@ struct LIBVISIONPIPE_API VisionPipeConfig {
  * - The child visionpipe process
  * - Shared memory connections to frame_sink() outputs
  * - Frame dispatch callbacks
+ *
+ * Cross-platform: uses fork/exec on POSIX, CreateProcess on Windows.
  */
 class LIBVISIONPIPE_API Session {
 public:
@@ -149,7 +165,7 @@ public:
 
     /**
      * @brief Stop the VisionPipe process
-     * @param timeoutMs Max time to wait for graceful shutdown before SIGKILL
+     * @param timeoutMs Max time to wait for graceful shutdown before force kill
      */
     void stop(int timeoutMs = 3000);
 
@@ -182,7 +198,13 @@ public:
 
 private:
     friend class VisionPipe;
+
+#if defined(_WIN32)
+    Session(const std::string& sessionId, HANDLE hProcess, HANDLE hThread,
+            const VisionPipeConfig& config);
+#else
     Session(const std::string& sessionId, pid_t pid, const VisionPipeConfig& config);
+#endif
 
     struct SinkConnection {
         std::unique_ptr<FrameShmConsumer> consumer;
@@ -192,7 +214,14 @@ private:
     };
 
     std::string _sessionId;
+
+#if defined(_WIN32)
+    HANDLE _hProcess = NULL;
+    HANDLE _hThread = NULL;
+#else
     pid_t _pid = -1;
+#endif
+
     VisionPipeConfig _config;
     std::atomic<SessionState> _state{SessionState::CREATED};
     int _exitCode = -1;
@@ -203,6 +232,7 @@ private:
     void connectSink(const std::string& sinkName);
     int dispatchSink(const std::string& sinkName, SinkConnection& sink);
     void checkProcess();
+    void cleanupProcess();
 };
 
 // ============================================================================
@@ -261,7 +291,7 @@ public:
     std::unique_ptr<Session> run(const std::string& scriptPath);
 
     /**
-     * @brief Execute a visionpipe command (like "execute")
+     * @brief Execute a visionpipe command (like "execute") synchronously
      * @param args Command line arguments
      * @return Exit code
      */

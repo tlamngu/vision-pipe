@@ -1,17 +1,21 @@
 /**
  * @file example_libvisionpipe.cpp
- * @brief Example demonstrating libvisionpipe usage
+ * @brief Cross-platform example demonstrating libvisionpipe usage
  *
- * Build:
+ * Supported platforms: Linux, macOS, Windows
+ *
+ * Build (standalone):
+ *   # Linux/macOS:
  *   g++ -std=c++17 example_libvisionpipe.cpp -lvisionpipe $(pkg-config --cflags --libs opencv4) -o demo
  *
- * Or with CMake (see below).
+ *   # Or with CMake (see examples/CMakeLists.txt):
+ *   mkdir build && cd build && cmake .. && make
  *
  * Run:
- *   ./demo
+ *   ./demo [path_to_script.vsp]
  *
  * This requires the `visionpipe` CLI to be in PATH and a .vsp script
- * that uses frame_sink("output") to expose frames.
+ * that uses frame_sink("output") to expose frames over shared memory.
  */
 
 #include <libvisionpipe/libvisionpipe.h>
@@ -19,15 +23,38 @@
 #include <iostream>
 #include <atomic>
 #include <csignal>
+#include <thread>
+#include <chrono>
+
+#if defined(_WIN32)
+  #include <windows.h>
+#endif
 
 static std::atomic<bool> g_running{true};
 
+// Cross-platform signal handling
 void sigHandler(int) {
-    g_running.store(false);
+    g_running.store(false, std::memory_order_release);
 }
 
+#if defined(_WIN32)
+BOOL WINAPI consoleHandler(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT) {
+        g_running.store(false, std::memory_order_release);
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 int main(int argc, char* argv[]) {
+    // Register signal handlers (cross-platform)
     signal(SIGINT, sigHandler);
+#if defined(_WIN32)
+    SetConsoleCtrlHandler(consoleHandler, TRUE);
+#else
+    signal(SIGTERM, sigHandler);
+#endif
 
     // Path to .vsp script (default: examples/libvisionpipe_demo.vsp)
     std::string scriptPath = "examples/libvisionpipe_demo.vsp";
