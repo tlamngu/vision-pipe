@@ -10,11 +10,16 @@
 #ifdef _WIN32
     #include <iphlpapi.h>
     #pragma comment(lib, "iphlpapi.lib")
+    #define VSP_SEND_FLAGS 0
 #else
     #include <ifaddrs.h>
     #include <netdb.h>
     #include <fcntl.h>
     #include <errno.h>
+    // Prevent SIGPIPE from killing the process when a streaming client disconnects
+    // mid-send. MSG_NOSIGNAL suppresses it at the call site; the client handler
+    // already breaks on send failure, so we only need the per-call flag.
+    #define VSP_SEND_FLAGS MSG_NOSIGNAL
 #endif
 
 namespace visionpipe {
@@ -266,7 +271,7 @@ void HttpFrameServer::acceptLoop() {
             const char* response = "HTTP/1.1 503 Service Unavailable\r\n"
                                    "Content-Type: text/plain\r\n\r\n"
                                    "Too many clients connected";
-            send(clientSocket, response, static_cast<int>(strlen(response)), 0);
+            send(clientSocket, response, static_cast<int>(strlen(response)), VSP_SEND_FLAGS);
             closeSocket(clientSocket);
             continue;
         }
@@ -304,7 +309,7 @@ void HttpFrameServer::clientHandler(SocketType clientSocket) {
     // We accept any GET request and serve the stream
     if (strncmp(buffer, "GET", 3) != 0) {
         const char* response = "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
-        send(clientSocket, response, static_cast<int>(strlen(response)), 0);
+        send(clientSocket, response, static_cast<int>(strlen(response)), VSP_SEND_FLAGS);
         goto cleanup;
     }
     
@@ -351,7 +356,7 @@ bool HttpFrameServer::sendHttpHeaders(SocketType socket) {
         "Connection: keep-alive\r\n"
         "\r\n";
     
-    int sent = send(socket, headers.c_str(), static_cast<int>(headers.length()), 0);
+    int sent = send(socket, headers.c_str(), static_cast<int>(headers.length()), VSP_SEND_FLAGS);
     return sent == static_cast<int>(headers.length());
 }
 
@@ -370,7 +375,7 @@ bool HttpFrameServer::sendFrame(SocketType socket, const std::vector<uint8_t>& j
     std::string headerStr = header.str();
     
     // Send header
-    int sent = send(socket, headerStr.c_str(), static_cast<int>(headerStr.length()), 0);
+    int sent = send(socket, headerStr.c_str(), static_cast<int>(headerStr.length()), VSP_SEND_FLAGS);
     if (sent != static_cast<int>(headerStr.length())) {
         return false;
     }
@@ -381,7 +386,7 @@ bool HttpFrameServer::sendFrame(SocketType socket, const std::vector<uint8_t>& j
     while (totalSent < jpegData.size()) {
         size_t remaining = jpegData.size() - totalSent;
         int toSend = static_cast<int>(std::min<size_t>(remaining, chunkSize));
-        sent = send(socket, reinterpret_cast<const char*>(jpegData.data() + totalSent), toSend, 0);
+        sent = send(socket, reinterpret_cast<const char*>(jpegData.data() + totalSent), toSend, VSP_SEND_FLAGS);
         
         if (sent <= 0) {
             return false;
@@ -392,7 +397,7 @@ bool HttpFrameServer::sendFrame(SocketType socket, const std::vector<uint8_t>& j
     
     // Send trailing CRLF
     const char* crlf = "\r\n";
-    sent = send(socket, crlf, 2, 0);
+    sent = send(socket, crlf, 2, VSP_SEND_FLAGS);
     
     return sent == 2;
 }

@@ -550,6 +550,33 @@
         ]
       }
     ],
+    "camera": [
+      {
+        "name": "auto_exposure",
+        "description": "Software auto-exposure: analyses frame brightness over N samples and returns a computed exposure value within [min_exp, max_exp]",
+        "example": "exp = auto_exposure(50, 10000, 10, 128, 0.3)
+v4l2_prop("/dev/video0", "Exposure (Absolute)", exp)",
+        "params": [
+          {"name": "min_exp", "type": "float", "required": true, "description": "Minimum exposure value (device units)"},
+          {"name": "max_exp", "type": "float", "required": true, "description": "Maximum exposure value (device units)"},
+          {"name": "samples", "type": "int", "required": false, "description": "Number of brightness samples to accumulate before recalculating"},
+          {"name": "target", "type": "float", "required": false, "description": "Target mean brightness (0-255)"},
+          {"name": "speed", "type": "float", "required": false, "description": "Convergence speed / gain (0.0-1.0, higher = faster)"},
+          {"name": "roi_x", "type": "float", "required": false, "description": "ROI x-offset as fraction of width (0.0-1.0)"},
+          {"name": "roi_y", "type": "float", "required": false, "description": "ROI y-offset as fraction of height (0.0-1.0)"},
+          {"name": "roi_w", "type": "float", "required": false, "description": "ROI width as fraction of width (0.0-1.0, 0 = full)"},
+          {"name": "roi_h", "type": "float", "required": false, "description": "ROI height as fraction of height (0.0-1.0, 0 = full)"}
+        ]
+      },
+      {
+        "name": "auto_exposure_reset",
+        "description": "Resets accumulated auto-exposure state",
+        "example": "auto_exposure_reset() | auto_exposure_reset("/dev/video0")",
+        "params": [
+          {"name": "source", "type": "string", "required": false, "description": "Source identifier to reset (omit to reset all)"}
+        ]
+      }
+    ],
     "color": [
       {
         "name": "apply_colormap",
@@ -609,9 +636,20 @@
       {
         "name": "cvt_color",
         "description": "Converts color space of the current frame",
-        "example": "cvt_color("bgr2gray") | cvt_color("bgr2hsv")",
+        "example": "cvt_color("bgr2gray") | cvt_color("uyvy2bgr")",
         "params": [
-          {"name": "code", "type": "string", "required": true, "description": "Conversion code: bgr2gray, gray2bgr, bgr2rgb, rgb2bgr, bgr2hsv, hsv2bgr, bgr2hls, hls2bgr, bgr2lab, lab2bgr, bgr2luv, luv2bgr, bgr2xyz, xyz2bgr, bgr2ycrcb, ycrcb2bgr, bgr2yuv, yuv2bgr"}
+          {"name": "code", "type": "string", "required": true, "description": "Conversion code: bgr2gray, bgr2hsv, bgr2lab, yuv2bgr, uyvy2bgr, nv122bgr, bayerbg2bgr, etc."}
+        ]
+      },
+      {
+        "name": "debayer",
+        "description": "Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data",
+        "example": "debayer() | debayer("auto") | debayer("RGGB", "ea", "bgr", 2)",
+        "params": [
+          {"name": "pattern", "type": "string", "required": false, "description": "Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or "auto" to detect from the active camera"},
+          {"name": "algorithm", "type": "string", "required": false, "description": "Demosaic algorithm: bilinear, vng, ea"},
+          {"name": "output", "type": "string", "required": false, "description": "Output format: bgr or rgb"},
+          {"name": "bit_shift", "type": "int", "required": false, "description": "Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)"}
         ]
       },
       {
@@ -635,6 +673,17 @@
         "example": "gamma(0.5)  // Brighten | gamma(2.0)  // Darken",
         "params": [
           {"name": "gamma", "type": "float", "required": false, "description": "Gamma value (>1 darkens, <1 brightens)"}
+        ]
+      },
+      {
+        "name": "gpu_debayer",
+        "description": "GPU-accelerated Bayer demosaicing using OpenCL. Falls back to CPU when OpenCL is unavailable. Supports bilinear, VNG, and EA algorithms.",
+        "example": "gpu_debayer("auto", "ea") | gpu_debayer("RGGB", "vng", "bgr", 2)",
+        "params": [
+          {"name": "pattern", "type": "string", "required": false, "description": "Bayer tile pattern: RGGB, BGGR, GBRG, GRBG, or "auto""},
+          {"name": "algorithm", "type": "string", "required": false, "description": "Demosaic algorithm: bilinear, vng, ea"},
+          {"name": "output", "type": "string", "required": false, "description": "Output format: bgr or rgb"},
+          {"name": "bit_shift", "type": "int", "required": false, "description": "Right-shift for 10/12-bit packed inputs (e.g. 2 for 10-bit in 16-bit container)"}
         ]
       },
       {
@@ -2129,6 +2178,195 @@
         ]
       }
     ],
+    "fastcv": [
+      {
+        "name": "fcv_bilateral_filter",
+        "description": "Bilateral filter accelerated by FastCV (kernel d: 5, 7, or 9; 8U grayscale input)",
+        "example": "fcv_bilateral_filter(5, 50.0, 1.0)",
+        "params": [
+          {"name": "d", "type": "int", "required": false, "description": "Kernel diameter (5, 7, or 9)"},
+          {"name": "sigma_color", "type": "float", "required": false, "description": "Color sigma (typical: 50)"},
+          {"name": "sigma_space", "type": "float", "required": false, "description": "Space sigma (typical: 1)"}
+        ]
+      },
+      {
+        "name": "fcv_bilateral_recursive",
+        "description": "Recursive bilateral filter accelerated by FastCV (fast edge-preserving; 8U grayscale)",
+        "example": "fcv_bilateral_recursive(0.03, 0.1)",
+        "params": [
+          {"name": "sigma_color", "type": "float", "required": false, "description": "Color sigma in [0,1] (typical: 0.03)"},
+          {"name": "sigma_space", "type": "float", "required": false, "description": "Space sigma in [0,1] (typical: 0.1)"}
+        ]
+      },
+      {
+        "name": "fcv_calc_hist",
+        "description": "Grayscale histogram accelerated by FastCV; returns a 256-wide histogram bar chart",
+        "example": "fcv_calc_hist(128)",
+        "params": [
+          {"name": "height", "type": "int", "required": false, "description": "Height of the histogram visualization in pixels"}
+        ]
+      },
+      {
+        "name": "fcv_fast10",
+        "description": "FAST10 corner detection accelerated by FastCV; draws detected corners on output",
+        "example": "fcv_fast10(10, 4, true)",
+        "params": [
+          {"name": "barrier", "type": "int", "required": false, "description": "Intensity barrier threshold"},
+          {"name": "border", "type": "int", "required": false, "description": "Border width to skip around edges"},
+          {"name": "nms", "type": "bool", "required": false, "description": "Enable non-maximum suppression"}
+        ]
+      },
+      {
+        "name": "fcv_fft",
+        "description": "Fast Fourier Transform accelerated by FastCV (input: 8U grayscale); returns log-magnitude spectrum",
+        "example": "fcv_fft()",
+        "params": [
+        ]
+      },
+      {
+        "name": "fcv_filter2d",
+        "description": "2D convolution filter accelerated by FastCV (kernel sizes 3-11; 8U grayscale input)",
+        "example": "fcv_filter2d(3, "u8")",
+        "params": [
+          {"name": "kernel_size", "type": "int", "required": false, "description": "Kernel size (3, 5, 7, 9, or 11)"},
+          {"name": "ddepth", "type": "string", "required": false, "description": "Output depth: u8, s16, f32"}
+        ]
+      },
+      {
+        "name": "fcv_gaussian_blur",
+        "description": "Gaussian blur accelerated by FastCV (supports 3x3 and 5x5 kernels, types: 8U/16S/32S)",
+        "example": "fcv_gaussian_blur(5, true)",
+        "params": [
+          {"name": "kernel_size", "type": "int", "required": false, "description": "Kernel size: 3 or 5"},
+          {"name": "blur_border", "type": "bool", "required": false, "description": "Process image border pixels"}
+        ]
+      },
+      {
+        "name": "fcv_hough_lines",
+        "description": "Hough line detection accelerated by FastCV (input: grayscale or edge image); draws lines on output",
+        "example": "fcv_hough_lines(0.25, "green")",
+        "params": [
+          {"name": "threshold", "type": "float", "required": false, "description": "Normalized quality threshold [0,1]"},
+          {"name": "color", "type": "string", "required": false, "description": "Line draw color (green, red, blue, white)"}
+        ]
+      },
+      {
+        "name": "fcv_ifft",
+        "description": "Inverse FFT accelerated by FastCV (input: 2-channel CV_32F output of fcv_fft raw)",
+        "example": "fcv_ifft()",
+        "params": [
+        ]
+      },
+      {
+        "name": "fcv_mean_shift",
+        "description": "Mean shift tracking accelerated by FastCV; ROI rect [x,y,w,h] stored as 1x4 CV_32F Mat in cache",
+        "example": "fcv_mean_shift("roi", 10, 1.0)",
+        "params": [
+          {"name": "track_cache", "type": "string", "required": true, "description": "Cache ID holding ROI rect (1x4 CV_32F [x,y,w,h])"},
+          {"name": "max_iter", "type": "int", "required": false, "description": "Maximum iterations"},
+          {"name": "epsilon", "type": "float", "required": false, "description": "Convergence epsilon in pixels"}
+        ]
+      },
+      {
+        "name": "fcv_moments",
+        "description": "Image moments accelerated by FastCV; prints m00, m10, m01, centroid to console",
+        "example": "fcv_moments(false)",
+        "params": [
+          {"name": "binary", "type": "bool", "required": false, "description": "Treat image as binary before computing moments"}
+        ]
+      },
+      {
+        "name": "fcv_mser",
+        "description": "MSER region detector accelerated by FastCV; draws colored contours and bounding boxes on output",
+        "example": "fcv_mser(256, 0.25, 2)",
+        "params": [
+          {"name": "min_area", "type": "int", "required": false, "description": "Minimum region area in pixels"},
+          {"name": "max_area_ratio", "type": "float", "required": false, "description": "Maximum region area as fraction of image"},
+          {"name": "delta", "type": "int", "required": false, "description": "MSER delta parameter"}
+        ]
+      },
+      {
+        "name": "fcv_normalize_local_box",
+        "description": "Local box contrast normalization accelerated by FastCV (8U grayscale input)",
+        "example": "fcv_normalize_local_box(5, 5, true)",
+        "params": [
+          {"name": "box_width", "type": "int", "required": false, "description": "Local box width"},
+          {"name": "box_height", "type": "int", "required": false, "description": "Local box height"},
+          {"name": "use_stddev", "type": "bool", "required": false, "description": "Normalize by std deviation (true) or mean (false)"}
+        ]
+      },
+      {
+        "name": "fcv_pyramid",
+        "description": "Image pyramid accelerated by FastCV; each level is stored in cache as <prefix>_0, <prefix>_1, ...",
+        "example": "fcv_pyramid(4, true, "pyr")",
+        "params": [
+          {"name": "levels", "type": "int", "required": false, "description": "Number of pyramid levels"},
+          {"name": "scale_by2", "type": "bool", "required": false, "description": "Scale by 2 (true) or ORB factor 0.84 (false)"},
+          {"name": "cache_prefix", "type": "string", "required": false, "description": "Cache key prefix for pyramid levels"}
+        ]
+      },
+      {
+        "name": "fcv_resize_down",
+        "description": "Optimized downscale resize accelerated by FastCV; specify either target size or scale factors",
+        "example": "fcv_resize_down(640, 480, 0, 0)",
+        "params": [
+          {"name": "width", "type": "int", "required": false, "description": "Target width (0 = use scale)"},
+          {"name": "height", "type": "int", "required": false, "description": "Target height (0 = use scale)"},
+          {"name": "inv_scale_x", "type": "float", "required": false, "description": "Horizontal inverse scale (e.g., 0.5 = half width)"},
+          {"name": "inv_scale_y", "type": "float", "required": false, "description": "Vertical inverse scale"}
+        ]
+      },
+      {
+        "name": "fcv_sobel",
+        "description": "Sobel edge detection accelerated by FastCV; stores dx and dy to cache as <id>_dx and <id>_dy; returns magnitude",
+        "example": "fcv_sobel(3, "sobel")",
+        "params": [
+          {"name": "kernel_size", "type": "int", "required": false, "description": "Kernel size (3, 5, or 7)"},
+          {"name": "cache_id", "type": "string", "required": false, "description": "Cache prefix for dx/dy gradient outputs"}
+        ]
+      },
+      {
+        "name": "fcv_threshold_range",
+        "description": "Range threshold (FastCV): pixels in [low_thresh, high_thresh] become true_value, others become false_value",
+        "example": "fcv_threshold_range(100, 200, 255, 0)",
+        "params": [
+          {"name": "low_thresh", "type": "int", "required": true, "description": "Lower threshold (inclusive)"},
+          {"name": "high_thresh", "type": "int", "required": true, "description": "Upper threshold (inclusive)"},
+          {"name": "true_value", "type": "int", "required": false, "description": "Value assigned to in-range pixels"},
+          {"name": "false_value", "type": "int", "required": false, "description": "Value assigned to out-of-range pixels"}
+        ]
+      },
+      {
+        "name": "fcv_track_lk",
+        "description": "Lucas-Kanade sparse optical flow accelerated by FastCV; tracks FAST10 corners between consecutive frames; re-detects corners when all are lost",
+        "example": "fcv_track_lk(200, 7, 3)",
+        "params": [
+          {"name": "max_corners", "type": "int", "required": false, "description": "Maximum number of corners to track"},
+          {"name": "win_size", "type": "int", "required": false, "description": "LK search window size (odd number, e.g. 7)"},
+          {"name": "levels", "type": "int", "required": false, "description": "Number of pyramid levels"}
+        ]
+      },
+      {
+        "name": "fcv_warp_affine",
+        "description": "Affine warp accelerated by FastCV; 2x3 CV_32F matrix loaded from cache",
+        "example": "fcv_warp_affine("A", 640, 480)",
+        "params": [
+          {"name": "matrix_cache", "type": "string", "required": true, "description": "Cache ID holding the 2x3 CV_32F affine matrix"},
+          {"name": "width", "type": "int", "required": false, "description": "Output width  (0 = same as input)"},
+          {"name": "height", "type": "int", "required": false, "description": "Output height (0 = same as input)"}
+        ]
+      },
+      {
+        "name": "fcv_warp_perspective",
+        "description": "Perspective warp accelerated by FastCV; 3x3 CV_32F matrix loaded from cache",
+        "example": "fcv_warp_perspective("M", 640, 480)",
+        "params": [
+          {"name": "matrix_cache", "type": "string", "required": true, "description": "Cache ID holding the 3x3 CV_32F perspective matrix"},
+          {"name": "width", "type": "int", "required": false, "description": "Output width  (0 = same as input)"},
+          {"name": "height", "type": "int", "required": false, "description": "Output height (0 = same as input)"}
+        ]
+      }
+    ],
     "feature": [
       {
         "name": "agast",
@@ -2514,7 +2752,7 @@
         "params": [
           {"name": "name", "type": "string", "required": true, "description": "Button name"},
           {"name": "window", "type": "string", "required": true, "description": "Window name"},
-          {"name": "result_var", "type": "string", "required": true, "description": "Variable to store click state"}
+          {"name": "var_name", "type": "string", "required": false, "description": "Return value into this variable"}
         ]
       },
       {
@@ -2556,7 +2794,7 @@
         "params": [
           {"name": "name", "type": "string", "required": true, "description": "Checkbox name"},
           {"name": "window", "type": "string", "required": true, "description": "Window name"},
-          {"name": "var_name", "type": "string", "required": true, "description": "Variable to store result"}
+          {"name": "var_name", "type": "string", "required": false, "description": "Return value into this variable"}
         ]
       },
       {
@@ -2632,7 +2870,7 @@
         "params": [
           {"name": "name", "type": "string", "required": true, "description": "Trackbar name"},
           {"name": "window", "type": "string", "required": true, "description": "Window name"},
-          {"name": "var_name", "type": "string", "required": true, "description": "Variable name to store value"}
+          {"name": "var_name", "type": "string", "required": false, "description": "Return value into this variable"}
         ]
       },
       {
@@ -2655,6 +2893,50 @@
         "params": [
           {"name": "window", "type": "string", "required": true, "description": "Window name"},
           {"name": "format", "type": "string", "required": true, "description": "Title format with {var} placeholders"}
+        ]
+      }
+    ],
+    "ip_stream": [
+      {
+        "name": "ip_stream",
+        "description": "Stream frames over HTTP (MJPEG) to remote clients. Access the stream from any web browser, VLC, or MJPEG viewer at http://<ip>:<port>/stream",
+        "example": "ip_stream(8080) | ip_stream(9000, "0.0.0.0", 90)",
+        "params": [
+          {"name": "port", "type": "int", "required": false, "description": "TCP port to stream on"},
+          {"name": "bind_address", "type": "string", "required": false, "description": "IP address to bind to. Use '0.0.0.0' for all interfaces (LAN access)"},
+          {"name": "quality", "type": "int", "required": false, "description": "JPEG encoding quality (1-100)"}
+        ]
+      },
+      {
+        "name": "ip_stream_info",
+        "description": "Get information about active IP streams",
+        "example": "ip_stream_info()",
+        "params": [
+        ]
+      },
+      {
+        "name": "ip_stream_quality",
+        "description": "Set the JPEG encoding quality for an IP stream",
+        "example": "ip_stream_quality(8080, 90)",
+        "params": [
+          {"name": "port", "type": "int", "required": true, "description": "Port of the stream to configure"},
+          {"name": "quality", "type": "int", "required": true, "description": "JPEG quality 1-100"}
+        ]
+      },
+      {
+        "name": "ip_stream_stop",
+        "description": "Stop an IP stream server",
+        "example": "ip_stream_stop(8080)",
+        "params": [
+          {"name": "port", "type": "int", "required": true, "description": "Port of the stream to stop"}
+        ]
+      },
+      {
+        "name": "ip_stream_url",
+        "description": "Get the URL for an IP stream",
+        "example": "$url = ip_stream_url(8080)",
+        "params": [
+          {"name": "port", "type": "int", "required": false, "description": "Port of the stream"}
         ]
       }
     ],
@@ -4010,6 +4292,68 @@
         ]
       },
       {
+        "name": "libcam_debug_config",
+        "description": "Print detailed debug information about a libcamera session configuration",
+        "example": "libcam_debug_config(0)",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Camera source identifier"}
+        ]
+      },
+      {
+        "name": "libcam_get_bayer",
+        "description": "Get the Bayer pattern string for a camera",
+        "example": "libcam_get_bayer(0)",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Camera source identifier"}
+        ]
+      },
+      {
+        "name": "libcam_list",
+        "description": "List available libcamera devices",
+        "example": "libcam_list()",
+        "params": [
+        ]
+      },
+      {
+        "name": "libcam_list_controls",
+        "description": "List all available controls for a libcamera device",
+        "example": "libcam_list_controls(0)",
+        "params": [
+          {"name": "source", "type": "any", "required": false, "description": "Camera source identifier (index or ID)"}
+        ]
+      },
+      {
+        "name": "libcam_list_formats",
+        "description": "List all supported pixel formats and resolutions for a camera",
+        "example": "libcam_list_formats(0)",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Camera source identifier"}
+        ]
+      },
+      {
+        "name": "libcam_prop",
+        "description": "Set a libcamera control by name",
+        "example": "libcam_prop(0, "AeEnable", 0)",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Camera source identifier (index or ID)"},
+          {"name": "control", "type": "string", "required": true, "description": "Control name (AeEnable, ExposureTime, AwbMode, Brightness, Contrast, Saturation, Sharpness)"},
+          {"name": "value", "type": "any", "required": true, "description": "Control value (number or boolean)"}
+        ]
+      },
+      {
+        "name": "libcam_setup",
+        "description": "Configure libcamera-specific settings for a camera",
+        "example": "libcam_setup(0, 1920, 1080, "SRGGB10", 4, "Viewfinder")",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Camera source (index or ID string)"},
+          {"name": "width", "type": "int", "required": false, "description": "Frame width"},
+          {"name": "height", "type": "int", "required": false, "description": "Frame height"},
+          {"name": "pixel_format", "type": "string", "required": false, "description": "Pixel format: BGR888, YUYV, MJPEG"},
+          {"name": "buffer_count", "type": "int", "required": false, "description": "Number of buffers"},
+          {"name": "stream_role", "type": "string", "required": false, "description": "Stream role: VideoRecording, StillCapture, Viewfinder"}
+        ]
+      },
+      {
         "name": "list_cameras",
         "description": "Lists all available camera devices",
         "example": "list_cameras()",
@@ -4149,12 +4493,87 @@
         ]
       },
       {
+        "name": "v4l2_enum_devices",
+        "description": "Enumerate /dev/video* devices and their capabilities",
+        "example": "v4l2_enum_devices()",
+        "params": [
+        ]
+      },
+      {
+        "name": "v4l2_get_bayer",
+        "description": "Get the Bayer pattern string from the active V4L2 format",
+        "example": "v4l2_get_bayer("/dev/video0")",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path or index"}
+        ]
+      },
+      {
+        "name": "v4l2_get_prop",
+        "description": "Get current value of a V4L2 control.
+Works on both /dev/video* and /dev/v4l-subdev* paths.
+Auto-discovers linked sub-devices when control not found on primary device.",
+        "example": "exp = v4l2_get_prop("/dev/video0", "exposure")",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path or index"},
+          {"name": "control_name", "type": "string", "required": true, "description": "Control name, case-insensitive (e.g. "exposure", "analogue_gain")"}
+        ]
+      },
+      {
+        "name": "v4l2_list_controls",
+        "description": "List all V4L2 controls (all classes) with ranges and current values.
+Automatically includes controls from linked sub-devices (sensors, ISPs) discovered via the media controller.",
+        "example": "v4l2_list_controls("/dev/video3") # also shows sensor controls",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path or index"}
+        ]
+      },
+      {
+        "name": "v4l2_list_formats",
+        "description": "List all supported V4L2 formats and resolutions",
+        "example": "v4l2_list_formats("/dev/video0")",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path or index"}
+        ]
+      },
+      {
+        "name": "v4l2_prop",
+        "description": "Set a V4L2 control by name.
+Works on both /dev/video* (VFE) and /dev/v4l-subdev* paths.
+When the control is not found on the video device, the manager automatically discovers and tries linked sub-devices via the media controller (BFS upstream traversal, sensor first).
+Pass an explicit subdev path as the 4th argument to bypass auto-discovery.",
+        "example": "v4l2_prop("/dev/video0", "vertical_flip", 1)
+v4l2_prop("/dev/video3", "vertical_flip", 1, "/dev/v4l-subdev28")
+v4l2_prop("/dev/v4l-subdev28", "exposure", 800)",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path ("/dev/video0", "/dev/v4l-subdev28") or index"},
+          {"name": "control_name", "type": "string", "required": true, "description": "Control name, case-insensitive with space/underscore equivalence (e.g. "Exposure", "vertical_flip", "analogue_gain")"},
+          {"name": "value", "type": "float", "required": true, "description": "Control value"},
+          {"name": "subdev", "type": "string", "required": false, "description": "Explicit /dev/v4l-subdev* path to target directly, bypassing auto-discovery. Useful on ISP pipelines where the video node is an intermediate VFE."}
+        ]
+      },
+      {
+        "name": "v4l2_setup",
+        "description": "Configure and open a V4L2 native device",
+        "example": "v4l2_setup("/dev/video0", 1920, 1080, "SRGGB10", 30)
+v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 30, 4, "/dev/v4l-subdev28")",
+        "params": [
+          {"name": "source", "type": "any", "required": true, "description": "Device path (e.g. "/dev/video0") or index"},
+          {"name": "width", "type": "int", "required": false, "description": "Frame width"},
+          {"name": "height", "type": "int", "required": false, "description": "Frame height"},
+          {"name": "pixel_format", "type": "string", "required": false, "description": "Pixel format: YUYV, MJPG, NV12, SRGGB10, etc."},
+          {"name": "fps", "type": "int", "required": false, "description": "Framerate"},
+          {"name": "buffer_count", "type": "int", "required": false, "description": "Number of mmap buffers"},
+          {"name": "subdev", "type": "string", "required": false, "description": "Pin a specific /dev/v4l-subdev* path for control lookup on this device. Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). Leave empty for auto-discovery."}
+        ]
+      },
+      {
         "name": "video_cap",
         "description": "Captures video frames from a source (camera, file, or URL)",
         "example": "video_cap(0) | video_cap("video.mp4")",
         "params": [
           {"name": "source", "type": "any", "required": true, "description": "Source: device index, file path, or URL"},
-          {"name": "api", "type": "string", "required": false, "description": "API backend: auto, dshow, v4l2, ffmpeg"}
+          {"name": "api", "type": "string", "required": false, "description": "API backend: auto, dshow, v4l2, ffmpeg, libcamera, v4l2_native, gstreamer"},
+          {"name": "format", "type": "string", "required": false, "description": "Capture format: MJPG, UYVY, NV12, etc."}
         ]
       },
       {

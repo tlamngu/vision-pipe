@@ -231,6 +231,21 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+/**
+ * @brief Applies Bayer pattern demosaicing (debayering) to single-channel raw sensor data
+ *
+ * Parameters:
+ * - pattern: Bayer tile pattern: "RGGB", "BGGR", "GBRG", "GRBG" (default: "RGGB")
+ * - algorithm: Demosaic algorithm: "bilinear", "vng", "ea" (default: "bilinear")
+ * - output: Output format: "bgr" or "rgb" (default: "bgr")
+ * - bit_shift: Right-shift for 10/12-bit packed inputs in 16-bit container (default: 0)
+ */
+class DebayerItem : public InterpreterItem {
+public:
+    DebayerItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
 } // namespace visionpipe
 
 #endif // VISIONPIPE_COLOR_ITEMS_H

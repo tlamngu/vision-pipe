@@ -430,7 +430,7 @@ private:
 #ifdef VISIONPIPE_FASTCV_ENABLED
 
 /**
- * @brief Fast Gaussian blur using FastCV
+ * @brief Fast Gaussian blur using FastCV (supports 3x3 and 5x5 kernels)
  */
 class FastGaussianBlurItem : public InterpreterItem {
 public:
@@ -439,7 +439,7 @@ public:
 };
 
 /**
- * @brief Fast corner detection using FastCV
+ * @brief Fast FAST10 corner detection using FastCV
  */
 class FastCornerDetectItem : public InterpreterItem {
 public:
@@ -448,11 +448,168 @@ public:
 };
 
 /**
- * @brief Fast pyramid generation using FastCV
+ * @brief Fast image pyramid generation using FastCV
  */
 class FastPyramidItem : public InterpreterItem {
 public:
     FastPyramidItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV-accelerated FFT
+ */
+class FastFFTItem : public InterpreterItem {
+public:
+    FastFFTItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV-accelerated IFFT
+ */
+class FastIFFTItem : public InterpreterItem {
+public:
+    FastIFFTItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV Hough line detection
+ */
+class FastHoughLinesItem : public InterpreterItem {
+public:
+    FastHoughLinesItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV image moments
+ */
+class FastMomentsItem : public InterpreterItem {
+public:
+    FastMomentsItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV range threshold - sets pixels in [lowThresh, highThresh] to trueValue, others to falseValue
+ */
+class FastThresholdRangeItem : public InterpreterItem {
+public:
+    FastThresholdRangeItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV bilateral filter (5x5, 7x7, or 9x9 kernels)
+ */
+class FastBilateralFilterItem : public InterpreterItem {
+public:
+    FastBilateralFilterItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV recursive bilateral filter (edge-preserving, fast)
+ */
+class FastBilateralRecursiveItem : public InterpreterItem {
+public:
+    FastBilateralRecursiveItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV Sobel edge detection (produces dx and dy gradients stored to cache)
+ */
+class FastSobelItem : public InterpreterItem {
+public:
+    FastSobelItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV accelerated downscale resize
+ */
+class FastResizeDownItem : public InterpreterItem {
+public:
+    FastResizeDownItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV 2D convolution filter
+ */
+class FastFilter2DItem : public InterpreterItem {
+public:
+    FastFilter2DItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV MSER region detector
+ */
+class FastMSERItem : public InterpreterItem {
+public:
+    FastMSERItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV warp perspective transform
+ */
+class FastWarpPerspectiveItem : public InterpreterItem {
+public:
+    FastWarpPerspectiveItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV warp affine transform
+ */
+class FastWarpAffineItem : public InterpreterItem {
+public:
+    FastWarpAffineItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV mean shift tracking
+ */
+class FastMeanShiftItem : public InterpreterItem {
+public:
+    FastMeanShiftItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV LK sparse optical flow tracking
+ */
+class FastTrackOpticalFlowLKItem : public InterpreterItem {
+public:
+    FastTrackOpticalFlowLKItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+
+private:
+    cv::Mat _prevFrame;
+    std::vector<cv::Point2f> _prevPts;
+};
+
+/**
+ * @brief FastCV histogram calculation (grayscale histogram visualization)
+ */
+class FastCalcHistItem : public InterpreterItem {
+public:
+    FastCalcHistItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief FastCV local box normalization
+ */
+class FastNormalizeLocalBoxItem : public InterpreterItem {
+public:
+    FastNormalizeLocalBoxItem();
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 

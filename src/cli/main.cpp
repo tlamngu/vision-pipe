@@ -34,6 +34,7 @@ using namespace visionpipe;
 
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_paused{false};
+static Runtime* g_runtime = nullptr;  // Set before signal registration
 
 void signalHandler(int signum) {
     (void)signum;
@@ -43,6 +44,10 @@ void signalHandler(int signum) {
         std::exit(1);
     }
     g_running.store(false);
+    // Tell the runtime/interpreter to stop its loops immediately
+    if (g_runtime) {
+        g_runtime->stop();
+    }
     std::cout << "\n[VisionPipe] Stopping pipeline (press Ctrl+C again to force)..." << std::endl;
     g_paused.store(true);
 }
@@ -357,9 +362,14 @@ int cmdRun(const CLIOptions& opts) {
         });
         
         // Set up signal handler
+        g_runtime = &runtime;
         std::signal(SIGINT, signalHandler);
 #ifndef _WIN32
         std::signal(SIGTERM, signalHandler);
+        // Ignore SIGPIPE so that a streaming client disconnecting mid-send does
+        // not terminate the visionpipe process. send() will return -1/EPIPE
+        // instead, which the clientHandler already handles gracefully.
+        std::signal(SIGPIPE, SIG_IGN);
 #endif
         
         if (!opts.quiet) {
@@ -368,6 +378,7 @@ int cmdRun(const CLIOptions& opts) {
         
         // Run
         int result = runtime.run(opts.scriptPath);
+        g_runtime = nullptr;  // Clear before exit
         
         // Print statistics
         auto endTime = std::chrono::high_resolution_clock::now();

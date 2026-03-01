@@ -6,6 +6,7 @@
 #include "interpreter/cache_manager.h"
 #include <string>
 #include <memory>
+#include <atomic>
 #include <unordered_map>
 #include <functional>
 #include <stack>
@@ -214,7 +215,7 @@ private:
     
     // Execution state
     bool _loopRunning = false;
-    bool _stopRequested = false;
+    std::atomic<bool> _stopRequested{false};
     bool _hasError = false;
     std::string _lastError;
     size_t _recursionDepth = 0;

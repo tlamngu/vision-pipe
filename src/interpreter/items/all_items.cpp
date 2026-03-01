@@ -22,6 +22,15 @@ void registerAllItems(ItemRegistry& registry) {
     registerGuiEnhancedItems(registry);
     registerTensorItems(registry);
     
+    // Auto Exposure
+    registerAutoExposureItems(registry);
+
+    // GPU-accelerated debayering
+    registerGpuDebayerItems(registry);
+
+    // Frame sink (shared memory IPC for libvisionpipe)
+    registerFrameSinkItems(registry);
+
     // Optional: Register IP Stream items when feature is enabled
     // This function is a no-op when VISIONPIPE_IP_STREAM_ENABLED is not defined
     registerIPStreamItems(registry);
@@ -34,6 +43,16 @@ void registerAllItems(ItemRegistry& registry) {
     // Optional: Register LibCamera items when feature is enabled
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
     registerLibCameraItems(registry);
+#endif
+
+    // Optional: Register V4L2 native items when feature is enabled
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    registerV4L2Items(registry);
+#endif
+
+    // Optional: Register FastCV accelerated items when feature is enabled
+#ifdef VISIONPIPE_FASTCV_ENABLED
+    registerFastCVItems(registry);
 #endif
 }
 

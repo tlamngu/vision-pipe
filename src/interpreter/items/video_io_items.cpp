@@ -46,7 +46,7 @@ VideoCaptureItem::VideoCaptureItem() {
     _category = "video_io";
     _params = {
         ParamDef::required("source", BaseType::ANY, "Source: device index, file path, or URL"),
-        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg, libcamera", "auto"),
+        ParamDef::optional("api", BaseType::STRING, "API backend: auto, dshow, v4l2, ffmpeg, libcamera, v4l2_native, gstreamer", "auto"),
         ParamDef::optional("format", BaseType::STRING, "Capture format: MJPG, UYVY, NV12, etc.", "")
     };
     _example = "video_cap(0) | video_cap(\"video.mp4\")";
@@ -86,7 +86,8 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
         }
         return ExecutionResult::fail(failMsg);
     }
-    
+
+    ctx.lastSourceId = sourceId;
     return ExecutionResult::ok(frame);
 }
 

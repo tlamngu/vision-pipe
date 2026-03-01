@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(VisionPipe VERSION 1.2.1 LANGUAGES CXX)
+project(VisionPipe VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,7 @@ option(VISIONPIPE_WITH_DNN "Enable DeepLearning/DNN features (requires OpenCV DN
 option(VISIONPIPE_WITH_ONNXRUNTIME "Enable ONNX Runtime backend for DNN (alternative to OpenCV DNN)" ON)
 option(VISIONPIPE_IP_CAM "Enable HTTP-based IP streaming (MJPEG) for remote frame access" OFF)
 option(LIBCAMERA_BACKEND "Enable native libcamera backend for Linux camera support" OFF)
+option(V4L2_NATIVE_BACKEND "Enable native V4L2 backend (Linux only)" OFF)
 
 # Performance options
 option(VISIONPIPE_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -120,6 +121,8 @@ endif()
 if(VISIONPIPE_WITH_FASTCV)
     # Check if OpenCV was built with FastCV
     # FastCV is typically available as a Qualcomm SDK
+
+    
     find_path(FASTCV_INCLUDE_DIR fastcv.h
         HINTS
         $ENV{FASTCV_SDK}/inc
@@ -128,13 +131,33 @@ if(VISIONPIPE_WITH_FASTCV)
     )
     find_library(FASTCV_LIBRARY fastcv
         HINTS
+        $ENV{FASTCV_SDK}/libs
         $ENV{FASTCV_SDK}/lib
         /usr/local/lib
+        /usr/local/libs
         /opt/fastcv/lib
+        /opt/fastcv/libs
     )
+
+    # message(STATUS "ENV{FASTCV_SDK} = [$ENV{FASTCV_SDK}]")
+    # message(STATUS "FASTCV_INCLUDE_DIR = [${FASTCV_INCLUDE_DIR}]")
+    # message(STATUS "FASTCV_LIBRARY     = [${FASTCV_LIBRARY}]")
+
     if(FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
         add_definitions(-DVISIONPIPE_FASTCV_ENABLED)
-        message(STATUS "FastCV support enabled")
+        # Find the OpenCV fastcv contrib module library (cv::fastcv:: symbols)
+        find_library(OpenCV_FASTCV_LIB opencv_fastcv
+            PATHS
+                ${OpenCV_DIR}/lib
+                ${OpenCV_DIR}/../lib
+                /home/radxa/System/opencv/build/lib
+            NO_DEFAULT_PATH
+        )
+        if(OpenCV_FASTCV_LIB)
+            message(STATUS "FastCV support enabled (opencv_fastcv: ${OpenCV_FASTCV_LIB})")
+        else()
+            message(WARNING "libopencv_fastcv not found — cv::fastcv:: symbols may fail to link")
+        endif()
     else()
         message(WARNING "FastCV not found, disabling FastCV extensions")
         set(VISIONPIPE_WITH_FASTCV OFF)
@@ -193,6 +216,24 @@ if(LIBCAMERA_BACKEND)
     endif()
 endif()
 
+# V4L2 Native Backend (Linux only)
+if(V4L2_NATIVE_BACKEND)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(WARNING "V4L2 native backend is only supported on Linux, disabling V4L2_NATIVE_BACKEND")
+        set(V4L2_NATIVE_BACKEND OFF)
+    else()
+        # Simple file-exists check instead of try-compile (known issue)
+        # TODO: Implement proper checks.
+        if(EXISTS "/usr/include/linux/videodev2.h")
+            add_definitions(-DVISIONPIPE_V4L2_NATIVE_ENABLED)
+            message(STATUS "V4L2 native backend enabled (found /usr/include/linux/videodev2.h)")
+        else()
+            message(WARNING "/usr/include/linux/videodev2.h not found, disabling V4L2_NATIVE_BACKEND")
+            set(V4L2_NATIVE_BACKEND OFF)
+        endif()
+    endif()
+endif()
+
 # Threading support
 find_package(Threads REQUIRED)
 
@@ -238,6 +279,9 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/gui_enhanced_items.cpp
     src/interpreter/items/tensor_items.cpp
     src/interpreter/items/ip_stream_items.cpp
+    src/interpreter/items/auto_exposure_items.cpp
+    src/interpreter/items/gpu_debayer_items.cpp
+    src/interpreter/items/frame_sink_items.cpp
 )
 
 # IP Stream sources (optional feature)
@@ -262,17 +306,28 @@ if(LIBCAMERA_BACKEND)
     message(STATUS "libcamera items enabled")
 endif()
 
+# V4L2 Native sources (optional feature)
+if(V4L2_NATIVE_BACKEND)
+    list(APPEND VISIONPIPE_CORE_SOURCES
+        src/utils/v4l2_device_manager.cpp
+    )
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/interpreter/items/v4l2_items.cpp
+    )
+    message(STATUS "V4L2 native items enabled")
+endif()
+
 set(VISIONPIPE_CLI_SOURCES
     src/cli/main.cpp
     src/cli/doc_gen.cpp
 )
-
-# Optional extension sources
-# if(VISIONPIPE_WITH_FASTCV)
-#     list(APPEND VISIONPIPE_CORE_SOURCES
-#         src/extensions/fastcv/fastcv_items.cpp
-#     )
-# endif()
+# FastCV accelerated items (optional feature)
+if(VISIONPIPE_WITH_FASTCV AND FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/interpreter/items/fastcv_items.cpp
+    )
+    message(STATUS "FastCV items registered")
+endif()
 
 # if(VISIONPIPE_WITH_ICEORYX2)
 #     list(APPEND VISIONPIPE_CORE_SOURCES
@@ -409,6 +464,16 @@ target_link_libraries(visionpipe_interpreter PUBLIC
     visionpipe_core
 )
 
+# FastCV items compiled in visionpipe_interpreter need direct link to both
+# the native FastCV SDK (${FASTCV_LIBRARY}) and the OpenCV fastcv contrib module
+if(VISIONPIPE_WITH_FASTCV AND FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
+    target_include_directories(visionpipe_interpreter PRIVATE ${FASTCV_INCLUDE_DIR})
+    target_link_libraries(visionpipe_interpreter PRIVATE ${FASTCV_LIBRARY})
+    if(OpenCV_FASTCV_LIB)
+        target_link_libraries(visionpipe_interpreter PRIVATE ${OpenCV_FASTCV_LIB})
+    endif()
+endif()
+
 # Link ONNX Runtime if available
 if(VISIONPIPE_WITH_ONNXRUNTIME AND OnnxRuntime_FOUND)
     target_include_directories(visionpipe_interpreter PRIVATE ${OnnxRuntime_INCLUDE_DIRS})
@@ -429,7 +494,16 @@ if(VISIONPIPE_BUILD_CLI)
         visionpipe_interpreter
         visionpipe_core
     )
-    
+
+    # Resolve the RPATH cycle: libopencv_fastcv lives in a different directory
+    # than the installed OpenCV libs. Pin its directory explicitly in RPATH so
+    # CMake doesn't try to merge conflicting search order constraints.
+    if(OpenCV_FASTCV_LIB)
+        get_filename_component(_fcv_lib_dir "${OpenCV_FASTCV_LIB}" DIRECTORY)
+        set_property(TARGET visionpipe APPEND PROPERTY BUILD_RPATH "${_fcv_lib_dir}")
+        set_property(TARGET visionpipe APPEND PROPERTY INSTALL_RPATH "${_fcv_lib_dir}")
+    endif()
+
     # Copy OpenCV DLLs to output directory on Windows
     if(WIN32 AND OpenCV_FOUND)
         # Get OpenCV library path and derive bin directory
@@ -541,6 +615,111 @@ if(VISIONPIPE_BUILD_CLI)
 endif()
 
 # ============================================================================
+# Shared Library Target - libvisionpipe (client library)
+# ============================================================================
+option(VISIONPIPE_WITH_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
+option(LIB_VISIONPIPE_EXAMPLE "Build libvisionpipe example program" OFF)
+
+if(VISIONPIPE_WITH_LIBVISIONPIPE)
+    set(LIBVISIONPIPE_SOURCES
+        src/libvisionpipe/frame_transport.cpp
+        src/libvisionpipe/libvisionpipe.cpp
+    )
+
+    add_library(visionpipe_client SHARED ${LIBVISIONPIPE_SOURCES})
+    target_include_directories(visionpipe_client PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(visionpipe_client PUBLIC
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
+    # POSIX shared memory: -lrt needed on Linux (on macOS it's in libc)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_client PUBLIC rt)
+    endif()
+    target_compile_definitions(visionpipe_client PRIVATE LIBVISIONPIPE_BUILDING)
+    set_target_properties(visionpipe_client PROPERTIES
+        OUTPUT_NAME "visionpipe"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1
+    )
+
+    # Also link frame_transport into visionpipe_core so the frame_sink item can use it
+    target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
+    target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_core PUBLIC rt)
+    endif()
+
+    install(TARGETS visionpipe_client
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+    install(DIRECTORY include/libvisionpipe/
+        DESTINATION include/libvisionpipe
+        FILES_MATCHING PATTERN "*.h"
+    )
+
+    message(STATUS "libvisionpipe shared library: ENABLED")
+
+    # Optional: build example program
+    if(LIB_VISIONPIPE_EXAMPLE)
+        add_executable(libvisionpipe_example examples/example_libvisionpipe.cpp)
+        target_include_directories(libvisionpipe_example PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${OpenCV_INCLUDE_DIRS}
+        )
+        target_link_libraries(libvisionpipe_example PRIVATE
+            visionpipe_client
+            ${OpenCV_LIBS}
+            Threads::Threads
+        )
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(libvisionpipe_example PRIVATE rt)
+        endif()
+        set_target_properties(libvisionpipe_example PROPERTIES
+            OUTPUT_NAME "libvisionpipe_example"
+        )
+        message(STATUS "libvisionpipe example: ENABLED")
+    endif()
+endif()
+
+# ============================================================================
+# Python Bindings - pyvisionpipe
+# ============================================================================
+option(VISIONPIPE_WITH_PYTHON "Build Python bindings (pyvisionpipe)" OFF)
+
+if(VISIONPIPE_WITH_PYTHON)
+    if(NOT VISIONPIPE_WITH_LIBVISIONPIPE)
+        message(FATAL_ERROR "VISIONPIPE_WITH_PYTHON requires VISIONPIPE_WITH_LIBVISIONPIPE=ON")
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+    find_package(pybind11 REQUIRED)
+
+    pybind11_add_module(pyvisionpipe python/pyvisionpipe.cpp)
+    target_link_libraries(pyvisionpipe PRIVATE
+        visionpipe_client
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(pyvisionpipe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+
+    # Install to Python site-packages
+    install(TARGETS pyvisionpipe
+        LIBRARY DESTINATION "${Python3_SITEARCH}"
+    )
+
+    message(STATUS "Python bindings (pyvisionpipe): ENABLED")
+    message(STATUS "  Python: ${Python3_EXECUTABLE} (${Python3_VERSION})")
+endif()
+
+# ============================================================================
 # Install Configuration
 # ============================================================================
 install(TARGETS visionpipe_core visionpipe_interpreter
@@ -598,5 +777,9 @@ message(STATUS "  IP Stream:      ${VISIONPIPE_IP_CAM}")
 message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
+message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
+message(STATUS "  libvisionpipe:  ${VISIONPIPE_WITH_LIBVISIONPIPE}")
+message(STATUS "  libvp example: ${LIB_VISIONPIPE_EXAMPLE}")
+message(STATUS "  Python bind:   ${VISIONPIPE_WITH_PYTHON}")
 message(STATUS "========================================")
 message(STATUS "")
