@@ -688,6 +688,38 @@ if(VISIONPIPE_WITH_LIBVISIONPIPE)
 endif()
 
 # ============================================================================
+# Python Bindings - pyvisionpipe
+# ============================================================================
+option(VISIONPIPE_WITH_PYTHON "Build Python bindings (pyvisionpipe)" OFF)
+
+if(VISIONPIPE_WITH_PYTHON)
+    if(NOT VISIONPIPE_WITH_LIBVISIONPIPE)
+        message(FATAL_ERROR "VISIONPIPE_WITH_PYTHON requires VISIONPIPE_WITH_LIBVISIONPIPE=ON")
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+    find_package(pybind11 REQUIRED)
+
+    pybind11_add_module(pyvisionpipe python/pyvisionpipe.cpp)
+    target_link_libraries(pyvisionpipe PRIVATE
+        visionpipe_client
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(pyvisionpipe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+
+    # Install to Python site-packages
+    install(TARGETS pyvisionpipe
+        LIBRARY DESTINATION "${Python3_SITEARCH}"
+    )
+
+    message(STATUS "Python bindings (pyvisionpipe): ENABLED")
+    message(STATUS "  Python: ${Python3_EXECUTABLE} (${Python3_VERSION})")
+endif()
+
+# ============================================================================
 # Install Configuration
 # ============================================================================
 install(TARGETS visionpipe_core visionpipe_interpreter
@@ -748,5 +780,6 @@ message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
 message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
 message(STATUS "  libvisionpipe:  ${VISIONPIPE_WITH_LIBVISIONPIPE}")
 message(STATUS "  libvp example: ${LIB_VISIONPIPE_EXAMPLE}")
+message(STATUS "  Python bind:   ${VISIONPIPE_WITH_PYTHON}")
 message(STATUS "========================================")
 message(STATUS "")
