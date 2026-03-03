@@ -26,6 +26,22 @@
 #include "interpreter/lexer.h"
 #include "interpreter/parser.h"
 
+// TCP client helpers for the 'params' subcommand
+#if defined(_WIN32)
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  using ParamSockFd = SOCKET;
+  #define PARAM_CLOSE_SOCK closesocket
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  using ParamSockFd = int;
+  #define PARAM_CLOSE_SOCK ::close
+#endif
+
 using namespace visionpipe;
 
 // ============================================================================
@@ -107,6 +123,7 @@ Usage:
 Commands:
   run <script.vsp>    Execute a VisionPipe script
   validate <script>   Validate script syntax without executing
+  params <pid>        Inspect / control a running pipeline's runtime params
   docs                Generate documentation for interpreter items
   serve               Start documentation web server
   version             Show version information
@@ -114,7 +131,7 @@ Commands:
   execute <item>      Execute a single interpreter item directly
 
 Run Options:
-  --param, -p key=value    Set pipeline parameter (repeatable)
+  --param, -p key=value    Set initial pipeline parameter (repeatable)
   --pipeline, -P name      Run specific pipeline (default: first or 'main')
   --verbose, -v            Enable verbose output
   --quiet, -q              Suppress non-error output
@@ -131,8 +148,12 @@ Serve Options:
 
 Examples:
   visionpipe run stereo.vsp
-  visionpipe run stereo.vsp --param input_left=0 --param input_right=1 --verbose
+  visionpipe run stereo.vsp --param brightness=75 --param gain=1.5
   visionpipe validate mypipeline.vsp
+  visionpipe params 12345              # interactive REPL for PID 12345
+  visionpipe params 12345 list         # list all runtime params
+  visionpipe params 12345 get brightness
+  visionpipe params 12345 set brightness=80
   visionpipe docs --output ./docs --format html
   visionpipe serve --port 3000
   visionpipe execute 'libcam_list_controls()'
@@ -204,7 +225,12 @@ CLIOptions parseArgs(int argc, char* argv[]) {
     }
     
     opts.command = argv[1];
-    
+
+    // 'params' subcommand handles its own arguments in cmdParams()
+    if (opts.command == "params") {
+        return opts;
+    }
+
     if (opts.command == "execute" && argc > 2) {
         opts.executeItem = argv[2];
     }
@@ -312,9 +338,13 @@ int cmdRun(const CLIOptions& opts) {
         Runtime runtime(config);
         runtime.loadBuiltins();
         
-        // Set verbose parameters
-        if (opts.verbose) {
-            std::cout << "[VisionPipe] Parameters:" << std::endl;
+        // Apply initial --param overrides (before run, before declare()
+        // fills defaults — ParameterStore::declare only sets if not yet set)
+        for (const auto& [key, value] : opts.params) {
+            runtime.setParam(key, value);
+        }
+        if (opts.verbose && !opts.params.empty()) {
+            std::cout << "[VisionPipe] Initial parameters:" << std::endl;
             for (const auto& [key, value] : opts.params) {
                 std::cout << "  " << key << " = " << value << std::endl;
             }
@@ -484,7 +514,28 @@ int cmdValidate(const CLIOptions& opts) {
         std::cout << std::endl;
         std::cout << "Summary:" << std::endl;
         std::cout << "  Pipelines: " << program->pipelines.size() << std::endl;
-        
+
+        // Show runtime parameter declarations
+        if (!program->paramDecls.empty()) {
+            int totalParams = 0;
+            for (const auto& decl : program->paramDecls) {
+                totalParams += static_cast<int>(decl->entries.size());
+            }
+            std::cout << "  Runtime params: " << totalParams << std::endl;
+            if (opts.verbose) {
+                for (const auto& decl : program->paramDecls) {
+                    for (const auto& e : decl->entries) {
+                        std::cout << "    - " << e.name << " : " << e.typeName;
+                        if (e.defaultValue.has_value()) {
+                            std::cout << " = " << e.defaultValue.value();
+                        }
+                        std::cout << std::endl;
+                    }
+                }
+            }
+            std::cout << "  on_params handlers: " << program->onParamsHandlers.size() << std::endl;
+        }
+
         for (const auto& pipeline : program->pipelines) {
             std::cout << "    - " << pipeline->name;
             if (!pipeline->parameters.empty()) {
@@ -543,6 +594,123 @@ int cmdValidate(const CLIOptions& opts) {
         std::cerr << "\nError: " << e.what() << std::endl;
         return 1;
     }
+}
+
+// ============================================================================
+// Command: params  (TCP client to a running pipeline's param server)
+// ============================================================================
+
+// Read /tmp/visionpipe-params-<pid>.port with a short retry timeout
+static int probeParamPort(int pid, int timeoutMs = 3000) {
+    std::string path = "/tmp/visionpipe-params-" + std::to_string(pid) + ".port";
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::ifstream f(path);
+        if (f.is_open()) {
+            int port = 0; f >> port;
+            if (port > 0) return port;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return -1;
+}
+
+// Send one line command to param server, return response line
+static std::string paramSendCmd(int port, const std::string& cmd) {
+    ParamSockFd fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return "";
+    struct timeval tv{ 3, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(static_cast<uint16_t>(port));
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        PARAM_CLOSE_SOCK(fd); return "";
+    }
+    std::string line = cmd + "\n";
+    ::send(fd, line.c_str(), static_cast<int>(line.size()), 0);
+    std::string resp; char ch;
+    while (::recv(fd, &ch, 1, 0) == 1 && ch != '\n') resp += ch;
+    PARAM_CLOSE_SOCK(fd);
+    return resp;
+}
+
+int cmdParams(int argc, char* argv[], int argOffset) {
+    // argv[argOffset] = pid
+    // argv[argOffset+1] (optional) = list | get | set
+    if (argOffset >= argc) {
+        std::cerr << "Usage: visionpipe params <pid> [list|get <name>|set <name>=<value>]" << std::endl;
+        return 1;
+    }
+
+    int pid = std::stoi(argv[argOffset]);
+    std::cout << "[params] Connecting to pipeline PID " << pid << " ..." << std::flush;
+    int port = probeParamPort(pid);
+    if (port < 0) {
+        std::cout << " FAILED" << std::endl;
+        std::cerr << "[params] Could not find param server for PID " << pid
+                  << ". Is the pipeline running with a 'params' declaration?" << std::endl;
+        return 1;
+    }
+    std::cout << " port " << port << std::endl;
+
+    // One-shot mode when extra arguments are provided
+    if (argOffset + 1 < argc) {
+        std::string sub = argv[argOffset + 1];
+        if (sub == "list") {
+            std::string resp = paramSendCmd(port, "LIST");
+            std::cout << resp << std::endl;
+        } else if (sub == "get" && argOffset + 2 < argc) {
+            std::string resp = paramSendCmd(port, std::string("GET ") + argv[argOffset + 2]);
+            std::cout << resp << std::endl;
+        } else if (sub == "set" && argOffset + 2 < argc) {
+            std::string kv = argv[argOffset + 2];
+            size_t eq = kv.find('=');
+            if (eq == std::string::npos) {
+                std::cerr << "[params] Expected name=value, got: " << kv << std::endl;
+                return 1;
+            }
+            std::string resp = paramSendCmd(port,
+                "SET " + kv.substr(0, eq) + " " + kv.substr(eq + 1));
+            std::cout << resp << std::endl;
+        } else {
+            std::cerr << "[params] Unknown sub-command: " << sub << std::endl;
+            std::cerr << "  Usage: list | get <name> | set <name>=<value>" << std::endl;
+            return 1;
+        }
+        return 0;
+    }
+
+    // Interactive REPL
+    std::cout << "[params] Interactive mode. Commands: list, get <name>, set <name>=<value>, quit" << std::endl;
+    std::string input;
+    while (true) {
+        std::cout << "params> " << std::flush;
+        if (!std::getline(std::cin, input)) break;
+        if (input.empty()) continue;
+        if (input == "quit" || input == "exit" || input == "q") break;
+
+        // Map friendly input to protocol commands
+        std::string cmd;
+        if (input == "list") {
+            cmd = "LIST";
+        } else if (input.substr(0, 4) == "get ") {
+            cmd = "GET " + input.substr(4);
+        } else if (input.substr(0, 4) == "set ") {
+            std::string kv = input.substr(4);
+            size_t eq = kv.find('=');
+            if (eq == std::string::npos) { std::cerr << "Expected name=value" << std::endl; continue; }
+            cmd = "SET " + kv.substr(0, eq) + " " + kv.substr(eq + 1);
+        } else {
+            // pass-through raw protocol command
+            cmd = input;
+        }
+        std::string resp = paramSendCmd(port, cmd);
+        std::cout << resp << std::endl;
+    }
+    return 0;
 }
 
 // ============================================================================
@@ -614,6 +782,9 @@ int main(int argc, char* argv[]) {
         printVersion();
     } else if (opts.command == "run") {
         result = cmdRun(opts);
+    } else if (opts.command == "params") {
+        // Pass remaining args starting from index 2 (after "params")
+        result = cmdParams(argc, argv, 2);
     } else if (opts.command == "validate") {
         result = cmdValidate(opts);
     } else if (opts.command == "docs") {

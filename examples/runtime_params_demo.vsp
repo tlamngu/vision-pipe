@@ -1,0 +1,87 @@
+# runtime_params_demo.vsp
+#
+# Demonstrates VisionPipe runtime parameters.
+#
+# Runtime parameters let you adjust pipeline values while the pipeline is
+# running, without restarting or modifying the script.
+#
+# Declare parameters with: params [name:type=default, ...]
+# Reference them with:     @name
+# React to changes with:   on_params @name ... end
+#
+# To control parameters from the command line while this pipeline is running:
+#
+#   visionpipe params <pid> list
+#   visionpipe params <pid> set brightness=80
+#   visionpipe params <pid> set blur_size=9
+#
+# Or from Python:
+#
+#   import pyvisionpipe as vp
+#   vp_inst = vp.VisionPipe()
+#   session = vp_inst.run("runtime_params_demo.vsp")
+#   session.set_param("brightness", "80")
+#   session.set_param("blur_size", "9")
+#   print(session.list_params())   # -> {"brightness": "80", "blur_size": "9", ...}
+
+# ── Runtime parameter declarations ────────────────────────────────────────────
+params [
+    brightness:int=50,
+    contrast:float=1.0,
+    blur_size:int=5,
+    show_edges:bool=false,
+    device_id:int=0
+]
+
+# ── Camera pipeline ────────────────────────────────────────────────────────────
+pipeline capture
+    video_cap source=@device_id
+end
+
+# ── Processing pipeline ────────────────────────────────────────────────────────
+pipeline process
+    use capture
+
+    # Apply brightness correction (+/- 0..255 mapped to -128..127)
+    let offset = @brightness - 50
+    add_weighted alpha=1.0 beta={offset}
+
+    # Scale contrast around the midpoint
+    let scale = @contrast
+    add_weighted alpha={scale} beta=0.0
+
+    # Gaussian blur (kernel size must be odd, clamp to nearest odd ≥1)
+    gaussian_blur ksize=@blur_size
+
+    # Optionally show edge overlay
+    if @show_edges
+        canny_edge low=50 high=150
+        display title="Edges"
+    end
+
+    display title="Camera Feed  [brightness={brightness}  contrast={contrast}]"
+end
+
+# ── Event handlers: react immediately when params change ───────────────────────
+on_params @brightness
+    log "Brightness changed to {brightness}"
+end
+
+on_params @contrast
+    log "Contrast changed to {contrast}"
+end
+
+on_params @blur_size
+    log "Blur size changed to {blur_size}"
+end
+
+on_params @show_edges
+    if @show_edges
+        log "Edge overlay: ON"
+    else
+        log "Edge overlay: OFF"
+    end
+end
+
+# ── Execution ──────────────────────────────────────────────────────────────────
+exec_loop process

@@ -32,8 +32,12 @@
 #include "interpreter/items/tensor_items.h"
 #include "interpreter/items/ip_stream_items.h"
 #include "interpreter/items/auto_exposure_items.h"
+#include "interpreter/items/adaptive_brightness_items.h"
 #include "interpreter/items/gpu_debayer_items.h"
+#include "interpreter/items/gpu_transform_items.h"
 #include "interpreter/items/frame_sink_items.h"
+#include "interpreter/items/stabilization_items.h"
+#include "interpreter/items/gpu_stabilization_items.h"
 
 // Optional: DeepLearning/DNN items (when VISIONPIPE_WITH_DNN is enabled)
 #ifdef VISIONPIPE_WITH_DNN

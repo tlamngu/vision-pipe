@@ -4,6 +4,7 @@
   "scopeName": "source.vsp",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#param-refs" },
     { "include": "#keywords" },
     { "include": "#execution" },
     { "include": "#cache-operators" },
@@ -23,11 +24,24 @@
         }
       ]
     },
+    "param-refs": {
+      "comment": "Runtime parameter references: @param_name",
+      "patterns": [
+        {
+          "name": "variable.language.param-ref.vsp",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.vsp",
           "match": "\\b(pipeline|end|if|else|while|for|break|continue|return)\\b"
+        },
+        {
+          "name": "keyword.control.params.vsp",
+          "match": "\\b(params|on_params)\\b"
         },
         {
           "name": "keyword.other.vsp",

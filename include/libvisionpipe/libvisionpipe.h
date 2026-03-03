@@ -39,6 +39,8 @@
 #include <vector>
 #include <map>
 #include <atomic>
+#include <mutex>
+#include <thread>
 #include <opencv2/core/mat.hpp>
 
 // Platform-specific process handle type
@@ -196,6 +198,60 @@ public:
      */
     bool waitForExit(int timeoutMs = 0);
 
+    // =========================================================================
+    // Runtime Parameter Control
+    // =========================================================================
+
+    /**
+     * @brief Set a runtime parameter in the running VSP script.
+     *
+     * Connects to the param server in the child visionpipe process and sends
+     * a SET command.  The value must be representable as a string.
+     *
+     * @param name  Parameter name (must match a `params [name:type]` declaration)
+     * @param value String representation of the value
+     * @return true on success, false if param server is unavailable
+     */
+    bool setParam(const std::string& name, const std::string& value);
+
+    /**
+     * @brief Get the current value of a runtime parameter.
+     * @param name    Parameter name
+     * @param[out] value  Value as a string
+     * @return true on success
+     */
+    bool getParam(const std::string& name, std::string& value);
+
+    /**
+     * @brief List all current runtime parameters.
+     * @return Map of name -> value (as strings), empty on failure
+     */
+    std::map<std::string, std::string> listParams();
+
+    /**
+     * @brief Subscribe to changes on a parameter.
+     *
+     * Opens a persistent TCP connection and dispatches the callback
+     * whenever the named parameter changes.
+     *
+     * @param name     Parameter name, or "*" for all params
+     * @param callback Called with (name, new_value_string) on each change
+     * @return Subscription ID (pass to unwatchParam())
+     */
+    uint64_t watchParam(const std::string& name,
+                        std::function<void(const std::string& name,
+                                           const std::string& value)> callback);
+
+    /**
+     * @brief Stop watching a parameter.
+     */
+    void unwatchParam(uint64_t subscriptionId);
+
+    /**
+     * @brief Port of the param server in the child process (0 if unknown).
+     */
+    int paramServerPort() const { return _paramPort.load(); }
+
 private:
     friend class VisionPipe;
 
@@ -229,6 +285,26 @@ private:
     std::map<std::string, SinkConnection> _sinks;
     std::atomic<bool> _stopRequested{false};
     std::string _tempScriptPath;  ///< Temp file from runString(), deleted on destruction
+
+    // -----------------------------------------------------------------------
+    // Param client state
+    // -----------------------------------------------------------------------
+    std::atomic<int> _paramPort{0};   ///< Port of child param server (0 = unknown)
+    std::thread      _paramPortThread; ///< Probes for the port file in background
+
+    struct WatchSubscription {
+        uint64_t  id;
+        int       sockFd;
+        std::thread thread;
+        std::atomic<bool> stop{false};
+        std::function<void(const std::string&, const std::string&)> callback;
+    };
+    std::vector<std::shared_ptr<WatchSubscription>> _watchers;
+    std::mutex                                       _watcherMutex;
+    std::atomic<uint64_t>                           _nextWatchId{1};
+
+    void startParamPortProbe();
+    bool sendParamCommand(const std::string& cmd, std::string& response, int timeoutMs = 3000);
 
     void connectSink(const std::string& sinkName);
     int dispatchSink(const std::string& sinkName, SinkConnection& sink);

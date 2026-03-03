@@ -132,6 +132,13 @@ private:
     std::shared_ptr<Statement> execSeqStatement();
     std::shared_ptr<Statement> execMultiStatement();
     std::shared_ptr<Statement> execLoopStatement();
+    std::shared_ptr<Statement> execIntervalStatement();
+    std::shared_ptr<Statement> noIntervalStatement();
+    std::shared_ptr<Statement> execIntervalMultiStatement();
+    std::shared_ptr<Statement> execRtSeqStatement();
+    std::shared_ptr<Statement> execRtMultiStatement();
+    std::shared_ptr<Statement> debugStartStatement();
+    std::shared_ptr<Statement> debugEndStatement();
     std::shared_ptr<Statement> useStatement();
     std::shared_ptr<Statement> cacheStatement();
     std::shared_ptr<Statement> globalPromoteStatement();
@@ -141,6 +148,8 @@ private:
     std::shared_ptr<Statement> breakStatement();
     std::shared_ptr<Statement> continueStatement();
     std::shared_ptr<Statement> expressionStatement();
+    std::shared_ptr<Statement> paramDeclStatement();   ///< params [ name:type = default, ... ]
+    std::shared_ptr<Statement> onParamsStatement();    ///< on_params @name ... end
     
     // Expressions (precedence climbing)
     std::shared_ptr<Expression> expression();

@@ -281,6 +281,65 @@ PYBIND11_MODULE(pyvisionpipe, m) {
             self.stop(3000);
         })
 
+        // ----------------------------------------------------------------
+        // Runtime parameter API
+        // ----------------------------------------------------------------
+        .def("set_param", [](visionpipe::Session& self,
+                              const std::string& name, const std::string& value) -> bool {
+            return self.setParam(name, value);
+        }, py::arg("name"), py::arg("value"),
+        R"pbdoc(
+            Set a runtime parameter in the running pipeline.
+
+            Args:
+                name:  Parameter name (must be declared in the .vsp with ``params``)
+                value: String representation of the new value
+
+            Returns:
+                True on success, False if the param server is not yet ready.
+        )pbdoc")
+
+        .def("get_param", [](visionpipe::Session& self,
+                              const std::string& name) -> py::object {
+            std::string value;
+            if (self.getParam(name, value)) return py::str(value);
+            return py::none();
+        }, py::arg("name"),
+        "Get a runtime parameter value as a string, or None if unavailable.")
+
+        .def("list_params", [](visionpipe::Session& self) {
+            return self.listParams();
+        }, "Return a dict of all declared runtime parameters and their current values.")
+
+        .def("watch_param", [](visionpipe::Session& self,
+                                const std::string& name, py::function cb) -> uint64_t {
+            return self.watchParam(name,
+                [cb](const std::string& n, const std::string& v) {
+                    py::gil_scoped_acquire acquire;
+                    cb(n, v);
+                });
+        }, py::arg("name"), py::arg("callback"),
+        R"pbdoc(
+            Subscribe to changes of a runtime parameter.
+
+            The callback is called on a background thread whenever the parameter
+            value changes inside the pipeline.
+
+            Args:
+                name:     Parameter name (or ``"*"`` to watch all).
+                callback: Callable with signature ``(name: str, value: str) -> None``.
+
+            Returns:
+                Subscription ID (pass to ``unwatch_param`` to cancel).
+        )pbdoc")
+
+        .def("unwatch_param", &visionpipe::Session::unwatchParam,
+            py::arg("subscription_id"),
+            "Cancel a param watch subscription by its ID.")
+
+        .def_property_readonly("param_server_port", &visionpipe::Session::paramServerPort,
+            "TCP port of the pipeline's param server (0 if not yet ready).")
+
         .def("__repr__", [](const visionpipe::Session& self) {
             std::string stateStr;
             switch (self.state()) {

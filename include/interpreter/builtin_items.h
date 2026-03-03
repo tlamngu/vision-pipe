@@ -615,6 +615,36 @@ public:
 
 #endif // VISIONPIPE_FASTCV_ENABLED
 
+
+// ============================================================================
+// Mat Geometry Utilities
+// ============================================================================
+
+/**
+ * @brief Returns or checks the size of the current Mat
+ *
+ * Signatures:
+ *   mat_size()        → [width, height]  (array of two integers)
+ *   mat_size(w, h)    → bool  (true if current mat matches w × h)
+ *   mat_size(w, h, c) → bool  (true if current mat matches w × h and has c channels)
+ */
+class MatSizeItem : public InterpreterItem {
+public:
+    MatSizeItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Returns the number of channels in the current Mat
+ *
+ *   mat_channels() → int
+ */
+class MatChannelsItem : public InterpreterItem {
+public:
+    MatChannelsItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
 } // namespace visionpipe
 
 #endif // VISIONPIPE_BUILTIN_ITEMS_H

@@ -5,6 +5,7 @@
 #include <map>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
 #include <memory>
 #include <optional>
 #include <opencv2/core/mat.hpp>
@@ -25,15 +26,43 @@ struct CacheEntry {
 };
 
 /**
+ * @brief Shared storage for the global cache, so multiple CacheManager instances
+ *        (e.g. per-thread child interpreters) can all read/write the same global data.
+ */
+struct GlobalCacheData {
+    // shared_mutex allows concurrent reads (e.g. multiple exec_multi workers
+    // all reading the same ccm_matrix) while serialising writes.
+    mutable std::shared_mutex mutex;
+    std::unordered_map<std::string, CacheEntry> entries;
+};
+
+/**
  * @brief Manages frame/Mat caching for the interpreter
  * 
  * Supports both local (pipeline-scoped) and global caches.
  * Thread-safe for concurrent access.
+ * 
+ * Multiple CacheManager instances can share the same GlobalCacheData
+ * (e.g. for parallel pipeline execution via exec_multi).
  */
 class CacheManager {
 public:
+    /// Creates a standalone CacheManager with its own private global cache.
     CacheManager();
+
+    /// Creates a CacheManager whose global cache is shared with other managers.
+    explicit CacheManager(std::shared_ptr<GlobalCacheData> sharedGlobal);
+
     ~CacheManager() = default;
+
+    /// Returns the underlying shared global cache storage.
+    std::shared_ptr<GlobalCacheData> getGlobalData() const { return _sharedGlobal; }
+
+    /// Replaces the global cache backing store (safe to call before the manager
+    /// is accessed by any thread).
+    void replaceGlobalData(std::shared_ptr<GlobalCacheData> sharedGlobal) {
+        _sharedGlobal = std::move(sharedGlobal);
+    }
     
     // =========================================================================
     // Global cache operations
@@ -108,6 +137,13 @@ public:
      * @brief Clear the current local scope
      */
     void clearLocalScope();
+
+    /**
+     * @brief Reset local scope stack to a single empty scope.
+     * Used when reusing a child interpreter across exec_multi iterations
+     * to avoid growing stale scope data between frames.
+     */
+    void resetLocalScopes();
     
     // =========================================================================
     // Unified cache operations (searches local first, then global)
@@ -174,12 +210,12 @@ public:
     std::string debugString() const;
     
 private:
-    // Global cache (shared across all pipelines)
-    mutable std::mutex _globalMutex;
-    std::unordered_map<std::string, CacheEntry> _globalCache;
-    
-    // Local cache stack (one map per scope level)
-    mutable std::mutex _localMutex;
+    // Global cache (shared across all pipelines and, optionally, across threads)
+    std::shared_ptr<GlobalCacheData> _sharedGlobal;
+
+    // Local cache stack — strictly owned by this CacheManager instance.
+    // No mutex needed: local scopes are only accessed by the thread that owns
+    // this CacheManager (each child interpreter has its own instance).
     std::vector<std::unordered_map<std::string, CacheEntry>> _localScopes;
     
     // Helper to estimate Mat memory

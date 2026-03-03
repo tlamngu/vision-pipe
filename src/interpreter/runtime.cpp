@@ -1,11 +1,14 @@
 #include "interpreter/runtime.h"
 #include "interpreter/items/all_items.h"
 #include "interpreter/parser.h"
+#include "interpreter/param_store.h"
+#include "interpreter/param_server.h"
 #ifdef VISIONPIPE_WITH_DNN
 #include "interpreter/ml/model_registry.h"
 #endif
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 #include <opencv2/highgui.hpp>
 
 namespace visionpipe {
@@ -35,7 +38,11 @@ Runtime::Runtime() : Runtime(RuntimeConfig{}) {}
 
 Runtime::Runtime(RuntimeConfig config) 
     : _config(std::move(config))
-    , _interpreter(_config.interpreterConfig) {
+    , _interpreter(_config.interpreterConfig)
+    , _paramStore(std::make_shared<ParameterStore>()) {
+
+    // Attach param store to interpreter so @name references work
+    _interpreter.setParamStore(_paramStore);
     
     if (_config.autoRegisterBuiltins) {
         loadBuiltins();
@@ -56,6 +63,7 @@ Runtime::Runtime(RuntimeConfig config)
 
 Runtime::~Runtime() {
     stop();
+    disableParamServer();
     stopDocsServer();
 }
 
@@ -129,6 +137,12 @@ int Runtime::run(const std::string& filename) {
 
 void Runtime::load(const std::string& filename) {
     auto program = parseFile(filename);
+
+    // Auto-start param server if the script declares a params [] block
+    if (!program->paramDecls.empty() && (!_paramServer || !_paramServer->isRunning())) {
+        enableParamServer();
+    }
+
     _interpreter.execute(program);
 }
 
@@ -242,6 +256,81 @@ void Runtime::startDocsServer(int port) {
 
 void Runtime::stopDocsServer() {
     // Stop the docs server if running
+}
+
+// ============================================================================
+// Runtime parameter API
+// ============================================================================
+
+void Runtime::setParam(const std::string& name, const ParamValue& value) {
+    _paramStore->set(name, value);
+}
+void Runtime::setParam(const std::string& name, int64_t value) {
+    _paramStore->set(name, ParamValue(value));
+}
+void Runtime::setParam(const std::string& name, int value) {
+    _paramStore->set(name, ParamValue((int64_t)value));
+}
+void Runtime::setParam(const std::string& name, double value) {
+    _paramStore->set(name, ParamValue(value));
+}
+void Runtime::setParam(const std::string& name, const std::string& value) {
+    _paramStore->set(name, ParamValue(value));
+}
+void Runtime::setParam(const std::string& name, bool value) {
+    _paramStore->set(name, ParamValue(value));
+}
+
+ParamValue Runtime::getParam(const std::string& name) const {
+    return _paramStore->get(name);
+}
+
+bool Runtime::hasParam(const std::string& name) const {
+    return _paramStore->has(name);
+}
+
+std::unordered_map<std::string, ParamValue> Runtime::listParams() const {
+    return _paramStore->list();
+}
+
+uint64_t Runtime::onParamChange(const std::string& name, ParamChangeCallback cb) {
+    return _paramStore->subscribe(name, std::move(cb));
+}
+
+uint64_t Runtime::onAnyParamChange(ParamChangeCallback cb) {
+    return _paramStore->subscribeAll(std::move(cb));
+}
+
+void Runtime::removeParamSubscription(uint64_t id) {
+    _paramStore->unsubscribe(id);
+}
+
+// ============================================================================
+// Param server
+// ============================================================================
+
+int Runtime::enableParamServer(int startPort) {
+    if (!_paramServer) {
+        _paramServer = std::make_unique<ParamServer>(_paramStore);
+    }
+    if (!_paramServer->isRunning()) {
+        return _paramServer->start(startPort);
+    }
+    return _paramServer->port();
+}
+
+void Runtime::disableParamServer() {
+    if (_paramServer) {
+        _paramServer->stop();
+        _paramServer.reset();
+    }
+}
+
+int Runtime::paramServerPort() const {
+    if (_paramServer && _paramServer->isRunning()) {
+        return _paramServer->port();
+    }
+    return 0;
 }
 
 // ============================================================================

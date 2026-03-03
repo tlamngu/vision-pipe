@@ -6,6 +6,7 @@
 #include <opencv2/core/mat.hpp>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <mutex>
 #include <cstdint>
@@ -114,6 +115,25 @@ public:
     bool isOpen(const std::string& devicePath) const;
 
     /**
+     * @brief Enumerate all readable V4L2 control names visible on the device
+     *        and all its linked sub-devices (sensor, ISP, etc.).
+     *
+     * Scans the video node, the pinned preferred sub-dev (if any), and every
+     * sub-device discovered via the media-controller BFS at prepareDevice()
+     * time.  Names are returned in normalized form (lowercase, spaces replaced
+     * by underscores) — the same form accepted by setControl / getControl —
+     * with duplicates removed.
+     *
+     * This is used by video_sync for one-time control discovery so that even
+     * sensor controls that live on /dev/v4l-subdev* (exposure, analogue_gain,
+     * etc.) are included, not just the controls on the /dev/video* node.
+     *
+     * @param devicePath  e.g. "/dev/video0"
+     * @return Deduplicated list of normalized control names.
+     */
+    std::vector<std::string> enumerateControlNames(const std::string& devicePath);
+
+    /**
      * @brief Enable or disable verbose debug output (mirrors --verbose flag).
      */
     void setVerbose(bool verbose);
@@ -172,6 +192,10 @@ private:
         // bytesperline for each data plane (from VIDIOC_S_FMT response)
         // index 0 = plane 0, index 1 = plane 1, etc.
         std::vector<uint32_t> planeBytesPerLine;
+        // Sub-device paths discovered via media-controller BFS at prepareDevice()
+        // time and cached here so every subsequent setControl / getControl call
+        // can skip the expensive filesystem + ioctl enumeration.
+        std::vector<std::string> cachedSubDevs;
     };
 
     bool openDevice(const std::string& devicePath, V4L2Session& session);
@@ -193,10 +217,34 @@ private:
      */
     std::vector<std::string> findLinkedSubDevices(const std::string& videoDevPath) const;
 
+    /**
+     * @brief Resolve a control name or numeric ID to a V4L2 control ID,
+     *        using a per-device cache so the VIDIOC_QUERYCTRL enumeration
+     *        scan only happens once per (device, control-name) pair.
+     */
+    uint32_t resolveControlIdCached(const std::string& fdDevPath, int fd,
+                                    const std::string& nameOrId) const;
+
+    /**
+     * @brief Return the cached sub-device list for a video device.
+     *
+     * If the device was opened via prepareDevice() the list was already built
+     * by a one-time BFS at setup time and is returned directly from the session
+     * (zero extra ioctls, zero filesystem stat calls).  For devices that were
+     * never set up through prepareDevice() (e.g. ephemeral access) the live
+     * BFS fallback is used transparently.
+     */
+    std::vector<std::string> cachedLinkedSubDevs(const std::string& videoDevPath) const;
+
     mutable std::recursive_mutex _mutex;
     std::map<std::string, V4L2Session> _sessions;
     // Optional pinned subdev per video device path (set by setPreferredSubDev)
     std::map<std::string, std::string> _preferredSubDevs;
+    // Control-name → CID cache, keyed by device/subdev path.
+    // Populated on first successful resolveControlIdCached() call; invalidated
+    // when releaseDevice() removes the session for that path.
+    mutable std::unordered_map<std::string,
+                               std::unordered_map<std::string, uint32_t>> _controlIdCache;
     bool _verbose = false;
 };
 

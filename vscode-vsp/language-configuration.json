@@ -1,7 +1,6 @@
 {
   "comments": {
-    "lineComment": "//",
-    "blockComment": ["/*", "*/"]
+    "lineComment": "#"
   },
   "brackets": [
     ["{", "}"],
@@ -24,13 +23,13 @@
   ],
   "folding": {
     "markers": {
-      "start": "^\\s*(pipeline|exec_seq|exec_multi|exec_loop|config|if|while|for)\\b",
+      "start": "^\\s*(pipeline|exec_seq|exec_multi|exec_loop|config|on_params|if|while|for)\\b",
       "end": "^\\s*end\\b"
     }
   },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(pipeline|exec_seq|exec_multi|exec_loop|config|if|else|while|for)\\b.*$",
+    "increaseIndentPattern": "^\\s*(pipeline|exec_seq|exec_multi|exec_loop|config|on_params|if|else|while|for)\\b.*$",
     "decreaseIndentPattern": "^\\s*(end|else)\\b"
   },
-  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
+  "wordPattern": "(@[a-zA-Z_][a-zA-Z0-9_]*)|(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
 }

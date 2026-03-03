@@ -29,6 +29,13 @@ enum class TokenType {
     KW_EXEC_SEQ,        // exec_seq (execute sequential)
     KW_EXEC_MULTI,      // exec_multi (execute parallel/threaded)
     KW_EXEC_LOOP,       // exec_loop (execute in loop)
+    KW_EXEC_INTERVAL,   // exec_interval (execute on a recurring timer)
+    KW_NO_INTERVAL,     // no_interval (cancel a recurring timer)
+    KW_EXEC_INTERVAL_MULTI, // exec_interval_multi (parallel pipelines on a timer)
+    KW_EXEC_RT_SEQ,     // exec_rt_seq (real-time sequential with timeout)
+    KW_EXEC_RT_MULTI,   // exec_rt_multi (real-time parallel with timeout)
+    KW_DEBUG_START,     // debug_start (begin verbose debug block)
+    KW_DEBUG_END,       // debug_end   (end verbose debug block)
     KW_USE,             // use (load from cache)
     KW_IF,              // if (conditional)
     KW_ELSE,            // else
@@ -38,6 +45,8 @@ enum class TokenType {
     KW_RETURN,          // return
     KW_IMPORT,          // import (import other vsp files)
     KW_CONFIG,          // config (configuration block)
+    KW_PARAMS,          // params (runtime parameter declaration)
+    KW_ON_PARAMS,       // on_params (runtime parameter change handler)
     
     // Operators
     OP_ARROW,           // -> (cache output)
@@ -46,6 +55,7 @@ enum class TokenType {
     OP_COMMA,           // ,
     OP_DOT,             // . (member access)
     OP_COLON,           // : (type annotation)
+    OP_AT,             // @ (runtime parameter reference, e.g. @brightness)
     
     // Comparison operators
     OP_EQ,              // ==
