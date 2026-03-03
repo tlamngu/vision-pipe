@@ -698,6 +698,22 @@ if(VISIONPIPE_WITH_PYTHON)
     endif()
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+    # Auto-discover pybind11 cmake dir from the Python interpreter if not set
+    if(NOT DEFINED pybind11_DIR OR pybind11_DIR STREQUAL "")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
+            OUTPUT_VARIABLE _pybind11_cmake_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE _pybind11_result
+        )
+        if(_pybind11_result EQUAL 0 AND _pybind11_cmake_dir)
+            set(pybind11_DIR "${_pybind11_cmake_dir}" CACHE PATH "pybind11 cmake directory (auto-detected)")
+            message(STATUS "pybind11 cmake dir (auto-detected): ${pybind11_DIR}")
+        endif()
+    endif()
+
     find_package(pybind11 REQUIRED)
 
     pybind11_add_module(pyvisionpipe python/pyvisionpipe.cpp)
