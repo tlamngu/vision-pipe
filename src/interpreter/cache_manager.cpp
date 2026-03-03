@@ -1,10 +1,18 @@
 #include "interpreter/cache_manager.h"
 #include <sstream>
 #include <chrono>
+#include <shared_mutex>
 
 namespace visionpipe {
 
-CacheManager::CacheManager() {
+CacheManager::CacheManager()
+    : _sharedGlobal(std::make_shared<GlobalCacheData>()) {
+    // Start with one local scope
+    _localScopes.push_back({});
+}
+
+CacheManager::CacheManager(std::shared_ptr<GlobalCacheData> sharedGlobal)
+    : _sharedGlobal(std::move(sharedGlobal)) {
     // Start with one local scope
     _localScopes.push_back({});
 }
@@ -14,7 +22,7 @@ CacheManager::CacheManager() {
 // ============================================================================
 
 void CacheManager::setGlobal(const std::string& id, const cv::Mat& mat, const std::string& source) {
-    std::lock_guard<std::mutex> lock(_globalMutex);
+    std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
     CacheEntry entry;
     entry.mat = mat.clone();  // Always clone to ensure ownership
@@ -23,42 +31,42 @@ void CacheManager::setGlobal(const std::string& id, const cv::Mat& mat, const st
     entry.accessCount = 0;
     entry.isGlobal = true;
     
-    _globalCache[id] = std::move(entry);
+    _sharedGlobal->entries[id] = std::move(entry);
 }
 
 cv::Mat CacheManager::getGlobal(const std::string& id) const {
-    std::lock_guard<std::mutex> lock(_globalMutex);
+    std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
-    auto it = _globalCache.find(id);
-    if (it != _globalCache.end()) {
-        // Update access count (mutable in const context)
+    auto it = _sharedGlobal->entries.find(id);
+    if (it != _sharedGlobal->entries.end()) {
         const_cast<CacheEntry&>(it->second).accessCount++;
-        return it->second.mat;
+        // Clone while holding the lock so callers get an independent buffer.
+        return it->second.mat.clone();
     }
     return cv::Mat();
 }
 
 bool CacheManager::hasGlobal(const std::string& id) const {
-    std::lock_guard<std::mutex> lock(_globalMutex);
-    return _globalCache.count(id) > 0;
+    std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+    return _sharedGlobal->entries.count(id) > 0;
 }
 
 void CacheManager::removeGlobal(const std::string& id) {
-    std::lock_guard<std::mutex> lock(_globalMutex);
-    _globalCache.erase(id);
+    std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+    _sharedGlobal->entries.erase(id);
 }
 
 void CacheManager::clearGlobal() {
-    std::lock_guard<std::mutex> lock(_globalMutex);
-    _globalCache.clear();
+    std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+    _sharedGlobal->entries.clear();
 }
 
 std::vector<std::string> CacheManager::getGlobalIds() const {
-    std::lock_guard<std::mutex> lock(_globalMutex);
+    std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
     std::vector<std::string> ids;
-    ids.reserve(_globalCache.size());
-    for (const auto& [id, _] : _globalCache) {
+    ids.reserve(_sharedGlobal->entries.size());
+    for (const auto& [id, _] : _sharedGlobal->entries) {
         ids.push_back(id);
     }
     return ids;
@@ -69,32 +77,32 @@ std::vector<std::string> CacheManager::getGlobalIds() const {
 // ============================================================================
 
 size_t CacheManager::pushScope() {
-    std::lock_guard<std::mutex> lock(_localMutex);
     _localScopes.push_back({});
     return _localScopes.size() - 1;
 }
 
 void CacheManager::popScope() {
-    std::lock_guard<std::mutex> lock(_localMutex);
     if (_localScopes.size() > 1) {
         _localScopes.pop_back();
     } else {
-        // Clear the last scope but don't remove it
         _localScopes.back().clear();
     }
 }
 
 void CacheManager::setLocal(const std::string& id, const cv::Mat& mat, const std::string& source) {
-    std::lock_guard<std::mutex> lock(_localMutex);
-    
     if (_localScopes.empty()) {
         _localScopes.push_back({});
     }
     
     CacheEntry entry;
-    entry.mat = mat.clone();
+    // Shallow copy: local scopes are strictly per-thread, and most items return
+    // a newly-allocated cv::Mat rather than modifying the buffer in-place, so
+    // there is no risk of the caller mutating the stored Mat through a shared
+    // buffer.  Callers that genuinely need isolation (e.g. CacheItem) already
+    // clone before calling set(), so double-cloning is avoided here.
+    entry.mat = mat;
     entry.source = source;
-    entry.timestamp = currentTimestamp();
+    entry.timestamp = 0;   // Timestamps are metadata; skip the syscall in the hot path.
     entry.accessCount = 0;
     entry.isGlobal = false;
     
@@ -102,8 +110,6 @@ void CacheManager::setLocal(const std::string& id, const cv::Mat& mat, const std
 }
 
 cv::Mat CacheManager::getLocal(const std::string& id) const {
-    std::lock_guard<std::mutex> lock(_localMutex);
-    
     // Search from innermost scope outward
     for (auto it = _localScopes.rbegin(); it != _localScopes.rend(); ++it) {
         auto entryIt = it->find(id);
@@ -116,8 +122,6 @@ cv::Mat CacheManager::getLocal(const std::string& id) const {
 }
 
 bool CacheManager::hasLocal(const std::string& id) const {
-    std::lock_guard<std::mutex> lock(_localMutex);
-    
     for (auto it = _localScopes.rbegin(); it != _localScopes.rend(); ++it) {
         if (it->count(id) > 0) {
             return true;
@@ -127,10 +131,14 @@ bool CacheManager::hasLocal(const std::string& id) const {
 }
 
 void CacheManager::clearLocalScope() {
-    std::lock_guard<std::mutex> lock(_localMutex);
     if (!_localScopes.empty()) {
         _localScopes.back().clear();
     }
+}
+
+void CacheManager::resetLocalScopes() {
+    _localScopes.clear();
+    _localScopes.push_back({});
 }
 
 // ============================================================================
@@ -161,9 +169,8 @@ bool CacheManager::has(const std::string& id) const {
 }
 
 std::optional<CacheEntry> CacheManager::getEntry(const std::string& id) const {
-    // Check local first
+    // Check local first (no locking — local scopes are per-thread)
     {
-        std::lock_guard<std::mutex> lock(_localMutex);
         for (auto it = _localScopes.rbegin(); it != _localScopes.rend(); ++it) {
             auto entryIt = it->find(id);
             if (entryIt != it->end()) {
@@ -174,9 +181,9 @@ std::optional<CacheEntry> CacheManager::getEntry(const std::string& id) const {
     
     // Check global
     {
-        std::lock_guard<std::mutex> lock(_globalMutex);
-        auto it = _globalCache.find(id);
-        if (it != _globalCache.end()) {
+        std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+        auto it = _sharedGlobal->entries.find(id);
+        if (it != _sharedGlobal->entries.end()) {
             return it->second;
         }
     }
@@ -208,15 +215,14 @@ CacheManager::Stats CacheManager::getStats() const {
     Stats stats = {};
     
     {
-        std::lock_guard<std::mutex> lock(_globalMutex);
-        stats.globalEntryCount = _globalCache.size();
-        for (const auto& [_, entry] : _globalCache) {
+        std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+        stats.globalEntryCount = _sharedGlobal->entries.size();
+        for (const auto& [_, entry] : _sharedGlobal->entries) {
             stats.totalMemoryBytes += estimateMatMemory(entry.mat);
         }
     }
     
     {
-        std::lock_guard<std::mutex> lock(_localMutex);
         stats.scopeDepth = _localScopes.size();
         for (const auto& scope : _localScopes) {
             stats.localEntryCount += scope.size();
@@ -241,8 +247,8 @@ std::string CacheManager::debugString() const {
     
     oss << "  Global cache:\n";
     {
-        std::lock_guard<std::mutex> lock(_globalMutex);
-        for (const auto& [id, entry] : _globalCache) {
+        std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+        for (const auto& [id, entry] : _sharedGlobal->entries) {
             oss << "    [" << id << "] " 
                 << entry.mat.cols << "x" << entry.mat.rows 
                 << " (accessed " << entry.accessCount << " times)\n";
@@ -251,7 +257,7 @@ std::string CacheManager::debugString() const {
     
     oss << "  Local scopes:\n";
     {
-        std::lock_guard<std::mutex> lock(_localMutex);
+
         for (size_t i = 0; i < _localScopes.size(); ++i) {
             oss << "    Scope " << i << ":\n";
             for (const auto& [id, entry] : _localScopes[i]) {

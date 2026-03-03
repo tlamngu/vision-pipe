@@ -115,6 +115,13 @@ void Parser::synchronize() {
             case TokenType::KW_EXEC_SEQ:
             case TokenType::KW_EXEC_MULTI:
             case TokenType::KW_EXEC_LOOP:
+            case TokenType::KW_EXEC_INTERVAL:
+            case TokenType::KW_NO_INTERVAL:
+            case TokenType::KW_EXEC_INTERVAL_MULTI:
+            case TokenType::KW_EXEC_RT_SEQ:
+            case TokenType::KW_EXEC_RT_MULTI:
+            case TokenType::KW_DEBUG_START:
+            case TokenType::KW_DEBUG_END:
             case TokenType::KW_IF:
             case TokenType::KW_WHILE:
             case TokenType::KW_RETURN:
@@ -161,9 +168,26 @@ std::shared_ptr<Program> Parser::program() {
                 prog->configs.push_back(configDeclaration());
             } else if (check(TokenType::KW_PIPELINE)) {
                 prog->pipelines.push_back(pipelineDeclaration());
+            } else if (check(TokenType::KW_PARAMS)) {
+                // params [ ... ] – runtime parameter declaration
+                auto s = paramDeclStatement();
+                prog->paramDecls.push_back(
+                    std::static_pointer_cast<ParamDeclStmt>(s));
+            } else if (check(TokenType::KW_ON_PARAMS)) {
+                // on_params @name ... end
+                auto s = onParamsStatement();
+                prog->onParamsHandlers.push_back(
+                    std::static_pointer_cast<OnParamsStmt>(s));
             } else if (check(TokenType::KW_EXEC_SEQ) || 
                        check(TokenType::KW_EXEC_MULTI) || 
-                       check(TokenType::KW_EXEC_LOOP)) {
+                       check(TokenType::KW_EXEC_LOOP) ||
+                       check(TokenType::KW_EXEC_INTERVAL) ||
+                       check(TokenType::KW_NO_INTERVAL) ||
+                       check(TokenType::KW_EXEC_INTERVAL_MULTI) ||
+                       check(TokenType::KW_EXEC_RT_SEQ) ||
+                       check(TokenType::KW_EXEC_RT_MULTI) ||
+                       check(TokenType::KW_DEBUG_START) ||
+                       check(TokenType::KW_DEBUG_END)) {
                 prog->topLevelStatements.push_back(statement());
             } else if (check(TokenType::END_OF_FILE)) {
                 break;
@@ -355,6 +379,13 @@ std::shared_ptr<Statement> Parser::statement() {
     if (check(TokenType::KW_EXEC_SEQ)) return execSeqStatement();
     if (check(TokenType::KW_EXEC_MULTI)) return execMultiStatement();
     if (check(TokenType::KW_EXEC_LOOP)) return execLoopStatement();
+    if (check(TokenType::KW_EXEC_INTERVAL)) return execIntervalStatement();
+    if (check(TokenType::KW_NO_INTERVAL)) return noIntervalStatement();
+    if (check(TokenType::KW_EXEC_INTERVAL_MULTI)) return execIntervalMultiStatement();
+    if (check(TokenType::KW_EXEC_RT_SEQ)) return execRtSeqStatement();
+    if (check(TokenType::KW_EXEC_RT_MULTI)) return execRtMultiStatement();
+    if (check(TokenType::KW_DEBUG_START)) return debugStartStatement();
+    if (check(TokenType::KW_DEBUG_END))   return debugEndStatement();
     if (check(TokenType::KW_USE)) return useStatement();
     if (check(TokenType::KW_CACHE)) return cacheStatement();
     if (check(TokenType::KW_GLOBAL)) return globalPromoteStatement();
@@ -420,6 +451,90 @@ std::shared_ptr<Statement> Parser::execLoopStatement() {
         stmt->condition = expression();
     }
     
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::execIntervalStatement() {
+    auto stmt = std::make_shared<ExecIntervalStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_INTERVAL, "Expected 'exec_interval'");
+    stmt->pipelineRef = expression();
+    stmt->intervalMs  = expression();  // float: milliseconds
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::noIntervalStatement() {
+    auto stmt = std::make_shared<NoIntervalStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_NO_INTERVAL, "Expected 'no_interval'");
+    stmt->pipelineRef = expression();
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::execIntervalMultiStatement() {
+    auto stmt = std::make_shared<ExecIntervalMultiStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_INTERVAL_MULTI, "Expected 'exec_interval_multi'");
+    consume(TokenType::LBRACKET, "Expected '[' after 'exec_interval_multi'");
+
+    if (!check(TokenType::RBRACKET)) {
+        do {
+            stmt->pipelineRefs.push_back(expression());
+        } while (match(TokenType::OP_COMMA));
+    }
+
+    consume(TokenType::RBRACKET, "Expected ']' after pipeline list");
+    stmt->intervalMs = expression();  // float: milliseconds
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::execRtSeqStatement() {
+    auto stmt = std::make_shared<ExecRtSeqStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_RT_SEQ, "Expected 'exec_rt_seq'");
+    stmt->pipelineRef = expression();
+    stmt->timeoutMs   = expression();  // float: timeout in milliseconds
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::execRtMultiStatement() {
+    auto stmt = std::make_shared<ExecRtMultiStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_RT_MULTI, "Expected 'exec_rt_multi'");
+    consume(TokenType::LBRACKET, "Expected '[' after 'exec_rt_multi'");
+
+    if (!check(TokenType::RBRACKET)) {
+        do {
+            stmt->pipelineRefs.push_back(expression());
+        } while (match(TokenType::OP_COMMA));
+    }
+
+    consume(TokenType::RBRACKET, "Expected ']' after pipeline list");
+    stmt->timeoutMs = expression();  // float: timeout in milliseconds
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::debugStartStatement() {
+    auto stmt = std::make_shared<DebugStartStmt>();
+    stmt->location = current().location;
+    consume(TokenType::KW_DEBUG_START, "Expected 'debug_start'");
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::debugEndStatement() {
+    auto stmt = std::make_shared<DebugEndStmt>();
+    stmt->location = current().location;
+    consume(TokenType::KW_DEBUG_END, "Expected 'debug_end'");
     return stmt;
 }
 
@@ -802,6 +917,15 @@ std::shared_ptr<Expression> Parser::primary() {
         consume(TokenType::RPAREN, "Expected ')' after expression");
         return expr;
     }
+
+    // Runtime parameter reference: @param_name
+    if (check(TokenType::OP_AT)) {
+        Token atToken = advance();  // consume the @name token
+        auto paramRef = std::make_shared<ParamRefExpr>();
+        paramRef->location = atToken.location;
+        paramRef->paramName = atToken.asString();  // value holds name without @
+        return paramRef;
+    }
     
     // Identifier or function call
     if (match(TokenType::IDENTIFIER)) {
@@ -830,7 +954,28 @@ std::shared_ptr<Expression> Parser::functionCall(const std::string& name, Source
     consume(TokenType::LPAREN, "Expected '(' after function name");
     
     if (!check(TokenType::RPAREN)) {
-        call->arguments = argumentList();
+        // Parse mixed positional and named arguments.
+        // Named argument syntax: identifier = expression  (inside ()
+        // A named arg is detected by: current token is IDENTIFIER AND next token is OP_ASSIGN.
+        // This is unambiguous inside a call site — positional expressions never start with
+        // IDENTIFIER followed immediately by OP_ASSIGN at the argument boundary.
+        bool seenNamedArg = false;
+        do {
+            if (check(TokenType::IDENTIFIER) && peek(1).type == TokenType::OP_ASSIGN) {
+                // Named argument
+                seenNamedArg = true;
+                Token nameToken = advance();   // consume IDENTIFIER
+                advance();                     // consume OP_ASSIGN
+                auto val = expression();       // parse value (no assignment ambiguity here)
+                call->namedArguments.emplace_back(nameToken.asString(), std::move(val));
+            } else {
+                if (seenNamedArg) {
+                    // Positional args after named args are an error
+                    throw error("Positional argument cannot follow named argument");
+                }
+                call->arguments.push_back(expression());
+            }
+        } while (match(TokenType::OP_COMMA));
     }
     
     consume(TokenType::RPAREN, "Expected ')' after arguments");
@@ -906,6 +1051,73 @@ bool Parser::isStatementStart() const {
 
 bool Parser::isPipelineBodyEnd() const {
     return check(TokenType::KW_END) || isAtEnd();
+}
+
+// ============================================================================
+// Runtime parameter statements
+// ============================================================================
+
+std::shared_ptr<Statement> Parser::paramDeclStatement() {
+    auto stmt = std::make_shared<ParamDeclStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_PARAMS, "Expected 'params'");
+    consume(TokenType::LBRACKET, "Expected '[' after 'params'");
+
+    while (!check(TokenType::RBRACKET) && !isAtEnd()) {
+        ParamEntry entry;
+        entry.location = current().location;
+
+        Token nameTok = consume(TokenType::IDENTIFIER, "Expected parameter name");
+        entry.name = nameTok.asString();
+
+        // Optional :type
+        if (match(TokenType::OP_COLON)) {
+            Token typeTok = consume(TokenType::IDENTIFIER, "Expected type (int, float, string, bool)");
+            entry.typeName = typeTok.asString();
+        } else {
+            entry.typeName = "string";  // default type
+        }
+
+        // Optional = default
+        if (match(TokenType::OP_ASSIGN)) {
+            entry.defaultValue = expression();
+        }
+
+        stmt->entries.push_back(std::move(entry));
+
+        if (!match(TokenType::OP_COMMA)) break;
+    }
+
+    consume(TokenType::RBRACKET, "Expected ']' after params list");
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::onParamsStatement() {
+    auto stmt = std::make_shared<OnParamsStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_ON_PARAMS, "Expected 'on_params'");
+
+    // Expect @param_name or @*
+    if (check(TokenType::OP_AT)) {
+        Token atTok = advance();  // @name token
+        stmt->paramName = atTok.asString();  // the identifier after @
+    } else if (check(TokenType::IDENTIFIER) && current().raw == "*") {
+        advance();
+        stmt->paramName = "*";
+    } else {
+        throw error("Expected @param_name after 'on_params'");
+    }
+
+    // Body until 'end'
+    while (!check(TokenType::KW_END) && !isAtEnd()) {
+        if (match(TokenType::DOC_COMMENT)) continue;
+        stmt->body.push_back(statement());
+    }
+
+    consume(TokenType::KW_END, "Expected 'end' after on_params body");
+    return stmt;
 }
 
 // ============================================================================

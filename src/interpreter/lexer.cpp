@@ -17,6 +17,13 @@ const std::unordered_map<std::string, TokenType> Lexer::_keywords = {
     {"exec_seq", TokenType::KW_EXEC_SEQ},
     {"exec_multi", TokenType::KW_EXEC_MULTI},
     {"exec_loop", TokenType::KW_EXEC_LOOP},
+    {"exec_interval", TokenType::KW_EXEC_INTERVAL},
+    {"no_interval", TokenType::KW_NO_INTERVAL},
+    {"exec_interval_multi", TokenType::KW_EXEC_INTERVAL_MULTI},
+    {"exec_rt_seq", TokenType::KW_EXEC_RT_SEQ},
+    {"exec_rt_multi", TokenType::KW_EXEC_RT_MULTI},
+    {"debug_start", TokenType::KW_DEBUG_START},
+    {"debug_end",   TokenType::KW_DEBUG_END},
     {"use", TokenType::KW_USE},
     {"if", TokenType::KW_IF},
     {"else", TokenType::KW_ELSE},
@@ -25,7 +32,9 @@ const std::unordered_map<std::string, TokenType> Lexer::_keywords = {
     {"continue", TokenType::KW_CONTINUE},
     {"return", TokenType::KW_RETURN},
     {"import", TokenType::KW_IMPORT},
-    {"config", TokenType::KW_CONFIG},
+    {"config",    TokenType::KW_CONFIG},
+    {"params",    TokenType::KW_PARAMS},
+    {"on_params", TokenType::KW_ON_PARAMS},
     {"true", TokenType::BOOLEAN_LITERAL},
     {"false", TokenType::BOOLEAN_LITERAL},
     {"and", TokenType::OP_AND},
@@ -92,6 +101,13 @@ std::string Token::typeToString(TokenType type) {
         case TokenType::KW_EXEC_SEQ: return "EXEC_SEQ";
         case TokenType::KW_EXEC_MULTI: return "EXEC_MULTI";
         case TokenType::KW_EXEC_LOOP: return "EXEC_LOOP";
+        case TokenType::KW_EXEC_INTERVAL: return "EXEC_INTERVAL";
+        case TokenType::KW_NO_INTERVAL: return "NO_INTERVAL";
+        case TokenType::KW_EXEC_INTERVAL_MULTI: return "EXEC_INTERVAL_MULTI";
+        case TokenType::KW_EXEC_RT_SEQ: return "EXEC_RT_SEQ";
+        case TokenType::KW_EXEC_RT_MULTI: return "EXEC_RT_MULTI";
+        case TokenType::KW_DEBUG_START: return "DEBUG_START";
+        case TokenType::KW_DEBUG_END:   return "DEBUG_END";
         case TokenType::KW_USE: return "USE";
         case TokenType::KW_IF: return "IF";
         case TokenType::KW_ELSE: return "ELSE";
@@ -100,7 +116,10 @@ std::string Token::typeToString(TokenType type) {
         case TokenType::KW_CONTINUE: return "CONTINUE";
         case TokenType::KW_RETURN: return "RETURN";
         case TokenType::KW_IMPORT: return "IMPORT";
-        case TokenType::KW_CONFIG: return "CONFIG";
+        case TokenType::KW_CONFIG:    return "CONFIG";
+        case TokenType::KW_PARAMS:    return "PARAMS";
+        case TokenType::KW_ON_PARAMS: return "ON_PARAMS";
+        case TokenType::OP_AT:        return "AT";
         case TokenType::OP_ARROW: return "ARROW";
         case TokenType::OP_PIPE: return "PIPE";
         case TokenType::OP_ASSIGN: return "ASSIGN";
@@ -362,6 +381,23 @@ Token Lexer::scanToken() {
         return scanString(c);
     }
     
+    // Parameter reference @name
+    if (c == '@') {
+        advance();
+        // Scan the identifier that follows (allows @brightness, @gain etc.)
+        if (!isAtEnd() && (std::isalpha(current()) || current() == '_')) {
+            SourceLocation atLoc = startLoc;
+            std::string name;
+            while (!isAtEnd() && (std::isalnum(current()) || current() == '_')) {
+                name += advance();
+            }
+            Token token(TokenType::OP_AT, atLoc, "@" + name);
+            token.value = name;  // the identifier part (without @)
+            return token;
+        }
+        return Token(TokenType::OP_AT, startLoc, "@");
+    }
+
     // Comments
     if (c == '#') {
         return scanComment();

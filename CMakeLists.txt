@@ -256,6 +256,8 @@ set(VISIONPIPE_INTERPRETER_SOURCES
     src/interpreter/item_registry.cpp
     src/interpreter/runtime.cpp
     src/interpreter/cache_manager.cpp
+    src/interpreter/param_store.cpp
+    src/interpreter/param_server.cpp
 )
 
 # OpenCV API item implementations (modular)
@@ -280,8 +282,12 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/tensor_items.cpp
     src/interpreter/items/ip_stream_items.cpp
     src/interpreter/items/auto_exposure_items.cpp
+    src/interpreter/items/adaptive_brightness_items.cpp
     src/interpreter/items/gpu_debayer_items.cpp
+    src/interpreter/items/gpu_transform_items.cpp
     src/interpreter/items/frame_sink_items.cpp
+    src/interpreter/items/stabilization_items.cpp
+    src/interpreter/items/gpu_stabilization_items.cpp
 )
 
 # IP Stream sources (optional feature)

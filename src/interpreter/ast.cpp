@@ -62,6 +62,15 @@ std::string FunctionCallExpr::toString(int ind) const {
         oss << "]";
     }
     
+    if (!namedArguments.empty()) {
+        oss << ", named=[";
+        for (size_t i = 0; i < namedArguments.size(); ++i) {
+            if (i > 0) oss << ", ";
+            oss << namedArguments[i].first << "=" << namedArguments[i].second->toString(0);
+        }
+        oss << "]";
+    }
+    
     if (cacheOutput.has_value()) {
         oss << " -> \"" << cacheOutput->cacheId << "\"";
         if (cacheOutput->isGlobal) {
@@ -155,6 +164,48 @@ std::string ExecLoopStmt::toString(int ind) const {
     return oss.str();
 }
 
+std::string ExecIntervalStmt::toString(int ind) const {
+    return indent(ind) + "exec_interval " + pipelineRef->toString(0)
+           + " " + intervalMs->toString(0);
+}
+
+std::string NoIntervalStmt::toString(int ind) const {
+    return indent(ind) + "no_interval " + pipelineRef->toString(0);
+}
+
+std::string ExecIntervalMultiStmt::toString(int ind) const {
+    std::ostringstream oss;
+    oss << indent(ind) << "exec_interval_multi [\n";
+    for (const auto& ref : pipelineRefs) {
+        oss << ref->toString(ind + 1) << "\n";
+    }
+    oss << indent(ind) << "] " << intervalMs->toString(0);
+    return oss.str();
+}
+
+std::string ExecRtSeqStmt::toString(int ind) const {
+    return indent(ind) + "exec_rt_seq " + pipelineRef->toString(0)
+           + " " + timeoutMs->toString(0);
+}
+
+std::string ExecRtMultiStmt::toString(int ind) const {
+    std::ostringstream oss;
+    oss << indent(ind) << "exec_rt_multi [\n";
+    for (const auto& ref : pipelineRefs) {
+        oss << ref->toString(ind + 1) << "\n";
+    }
+    oss << indent(ind) << "] " << timeoutMs->toString(0);
+    return oss.str();
+}
+
+std::string DebugStartStmt::toString(int ind) const {
+    return indent(ind) + "debug_start";
+}
+
+std::string DebugEndStmt::toString(int ind) const {
+    return indent(ind) + "debug_end";
+}
+
 std::string UseStmt::toString(int ind) const {
     std::ostringstream oss;
     oss << indent(ind) << "use(\"" << cacheId << "\")";
@@ -231,6 +282,34 @@ std::string GlobalStmt::toString(int ind) const {
     if (initialValue.has_value()) {
         oss << " = " << (*initialValue)->toString(0);
     }
+    return oss.str();
+}
+
+std::string ParamRefExpr::toString(int ind) const {
+    return indent(ind) + "@" + paramName;
+}
+
+std::string ParamDeclStmt::toString(int ind) const {
+    std::ostringstream oss;
+    oss << indent(ind) << "params [\n";
+    for (const auto& e : entries) {
+        oss << indent(ind + 1) << e.name << ":" << e.typeName;
+        if (e.defaultValue.has_value()) {
+            oss << " = " << (*e.defaultValue)->toString(0);
+        }
+        oss << "\n";
+    }
+    oss << indent(ind) << "]";
+    return oss.str();
+}
+
+std::string OnParamsStmt::toString(int ind) const {
+    std::ostringstream oss;
+    oss << indent(ind) << "on_params @" << paramName << "\n";
+    for (const auto& stmt : body) {
+        oss << stmt->toString(ind + 1) << "\n";
+    }
+    oss << indent(ind) << "end";
     return oss.str();
 }
 

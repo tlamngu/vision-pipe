@@ -22,6 +22,7 @@ void registerV4L2Items(ItemRegistry& registry) {
     registry.add<V4L2ListFormatsItem>();
     registry.add<V4L2GetBayerItem>();
     registry.add<V4L2EnumDevicesItem>();
+    registry.add<VideoSyncItem>();
 }
 
 // Helper: resolve sourceId from ANY arg
@@ -59,7 +60,9 @@ V4L2SetupItem::V4L2SetupItem() {
 }
 
 ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
+    // NOTE: do NOT call V4L2DeviceManager::setVerbose(ctx.verbose) here.
+    // ctx.verbose is per-thread (controlled by debug_start/debug_end); pushing it
+    // into the process-wide singleton would poison every other concurrent thread.
     std::string sourceId = resolveSource(args[0]);
 
     int width = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 640;
@@ -137,7 +140,6 @@ V4L2PropItem::V4L2PropItem() {
 }
 
 ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     std::string controlName = args[1].asString();
     int value = static_cast<int>(args[2].asNumber());
@@ -181,7 +183,6 @@ V4L2GetPropItem::V4L2GetPropItem() {
 }
 
 ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     std::string controlName = args[1].asString();
 
@@ -214,7 +215,6 @@ V4L2ListControlsItem::V4L2ListControlsItem() {
 }
 
 ExecutionResult V4L2ListControlsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_controls source=" << sourceId << std::endl;
     CameraDeviceManager::instance().listV4L2Controls(sourceId);
@@ -238,7 +238,6 @@ V4L2ListFormatsItem::V4L2ListFormatsItem() {
 }
 
 ExecutionResult V4L2ListFormatsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_formats source=" << sourceId << std::endl;
     CameraDeviceManager::instance().listV4L2Formats(sourceId);
@@ -262,7 +261,6 @@ V4L2GetBayerItem::V4L2GetBayerItem() {
 }
 
 ExecutionResult V4L2GetBayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_bayer source=" << sourceId << std::endl;
     std::string pattern = CameraDeviceManager::instance().getV4L2BayerPattern(sourceId);
@@ -285,7 +283,6 @@ V4L2EnumDevicesItem::V4L2EnumDevicesItem() {
 }
 
 ExecutionResult V4L2EnumDevicesItem::execute(const std::vector<RuntimeValue>&, ExecutionContext& ctx) {
-    V4L2DeviceManager::instance().setVerbose(ctx.verbose);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_enum_devices scanning /dev/video0../dev/video31" << std::endl;
     std::cout << "\n=== V4L2 Device Enumeration ===" << std::endl;
 
@@ -318,6 +315,162 @@ ExecutionResult V4L2EnumDevicesItem::execute(const std::vector<RuntimeValue>&, E
     std::cout << "================================\n" << std::endl;
 
     return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// VideoSyncItem
+// ============================================================================
+
+VideoSyncItem::VideoSyncItem() {
+    _functionName = "video_sync";
+    _description =
+        "Copies V4L2 controls from a master camera device to a target device so\n"
+        "both cameras run with identical hardware settings.\n\n"
+        "Sub-device aware: enumerates controls from the video node AND every linked\n"
+        "sub-device (sensor, ISP, etc.) discovered via the media controller, so\n"
+        "sensor-level controls such as 'exposure' and 'analogue_gain' that live on\n"
+        "/dev/v4l-subdev* are included even when the device path is /dev/video*.\n\n"
+        "Cached two-phase operation:\n"
+        "  First call  — discovery: enumerate all readable controls on master,\n"
+        "                test-write each to target (marks writable/not-writable),\n"
+        "                perform initial full sync.\n"
+        "  Later calls — delta: read each tracked control from master; write to\n"
+        "                target only when the value has changed since the last sync.\n"
+        "                Zero ioctls on a stable scene.\n\n"
+        "Returns the number of controls written to target on this call.";
+    _category = "camera";
+    _params = {
+        ParamDef::required("master", BaseType::ANY,
+            "Master device: path (\"/dev/video3\") or index. Controls are READ from here."),
+        ParamDef::required("target", BaseType::ANY,
+            "Target device: path (\"/dev/video9\") or index. Controls are WRITTEN here."),
+        ParamDef::optional("verbose", BaseType::BOOL,
+            "Log each control name and value as it is copied (default: false)",
+            RuntimeValue(false)),
+    };
+    _example =
+        "# Sync /dev/video9 to match /dev/video3 (works with MIPI sub-device controls):\n"
+        "video_sync(\"/dev/video3\", \"/dev/video9\")\n\n"
+        "# With verbose logging:\n"
+        "video_sync(\"/dev/video3\", \"/dev/video9\", verbose=true)";
+    _returnType = "int";
+    _tags = {"v4l2", "camera", "sync", "multi-camera", "control"};
+}
+
+ExecutionResult VideoSyncItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx)
+{
+    if (args.size() < 2) {
+        return ExecutionResult::fail("video_sync: requires master and target arguments");
+    }
+
+    const std::string masterPath = resolveSource(args[0]);
+    const std::string targetPath = resolveSource(args[1]);
+    const bool localVerbose = (args.size() > 2 && !args[2].isVoid())
+                               ? args[2].asBool() : ctx.verbose;
+
+    if (masterPath == targetPath) {
+        return ExecutionResult::fail("video_sync: master and target are the same device");
+    }
+
+    // Use the subdev-aware V4L2DeviceManager methods for all reads/writes.
+    // This is what makes video_sync work correctly for MIPI cameras where
+    // controls like "exposure" and "analogue_gain" live on sub-devices
+    // (/dev/v4l-subdev*), not on the main /dev/video* node.
+    V4L2DeviceManager& v4l2 = V4L2DeviceManager::instance();
+
+    const std::string stateKey = masterPath + "@" + targetPath;
+
+    std::lock_guard<std::mutex> stateLk(_stateMutex);
+    SyncState& state = _syncStates[stateKey];
+
+    int synced = 0;
+
+    if (!state.discovered) {
+        // -------------------------------------------------------------------
+        // DISCOVERY PHASE (first call only for this master/target pair).
+        //
+        // 1. Enumerate ALL control names visible on master: video node +
+        //    preferred subdev (if pinned) + every cached linked subdev.
+        //    This catches sensor controls (exposure, analogue_gain, etc.) on
+        //    MIPI cameras whose controls live on /dev/v4l-subdev*, not on
+        //    the main capture node.
+        // 2. For each readable control, attempt a write to target using the
+        //    subdev-aware setControl path.  Mark as writable/not-writable and
+        //    cache for future calls.
+        // -------------------------------------------------------------------
+        if (localVerbose) {
+            std::cout << "[video_sync] DISCOVERY  master=" << masterPath
+                      << "  target=" << targetPath << "\n";
+        }
+
+        std::vector<std::string> names = v4l2.enumerateControlNames(masterPath);
+        if (localVerbose) {
+            std::cout << "[video_sync]   found " << names.size()
+                      << " candidate controls on master\n";
+        }
+
+        for (const auto& name : names) {
+            int32_t val = v4l2.getControl(masterPath, name);
+            if (val == INT_MIN) continue;   // not readable on master — skip
+
+            ControlEntry entry;
+            entry.name = name;
+
+            bool ok = v4l2.setControl(targetPath, name, val);
+            entry.writable   = ok;
+            entry.lastSynced = ok ? val : INT_MIN;
+
+            if (ok) {
+                ++synced;
+                if (localVerbose)
+                    std::cout << "[video_sync]   SYNC  " << name << " = " << val << "\n";
+            } else if (localVerbose) {
+                std::cout << "[video_sync]   SKIP  " << name
+                          << " (target rejected)\n";
+            }
+            state.controls.push_back(std::move(entry));
+        }
+
+        state.discovered = true;
+
+        if (localVerbose || ctx.verbose) {
+            std::cout << "[video_sync] discovery done: " << synced
+                      << " controls synced ("
+                      << state.controls.size() << " discovered, "
+                      << (state.controls.size() - synced) << " skipped)\n";
+        }
+    } else {
+        // -------------------------------------------------------------------
+        // UPDATE PHASE (every subsequent call).
+        //
+        // Only push controls whose value on master has changed since the last
+        // sync — avoids redundant ioctls and the associated lock contention.
+        // -------------------------------------------------------------------
+        for (auto& entry : state.controls) {
+            if (!entry.writable) continue;
+
+            int32_t cur = v4l2.getControl(masterPath, entry.name);
+            if (cur == INT_MIN || cur == entry.lastSynced) continue;
+
+            bool ok = v4l2.setControl(targetPath, entry.name, cur);
+            if (ok) {
+                if (localVerbose) {
+                    std::cout << "[video_sync]   DELTA " << entry.name
+                              << "  " << entry.lastSynced << " -> " << cur << "\n";
+                }
+                entry.lastSynced = cur;
+                ++synced;
+            }
+        }
+
+        if ((localVerbose || ctx.verbose) && synced > 0) {
+            std::cout << "[video_sync] update: " << synced
+                      << " control(s) changed and synced\n";
+        }
+    }
+
+    return ExecutionResult::ok(RuntimeValue(static_cast<double>(synced)));
 }
 
 } // namespace visionpipe
