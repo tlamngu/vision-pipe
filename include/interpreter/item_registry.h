@@ -147,6 +147,7 @@ struct ExecutionContext {
     std::string lastSourceId;               // Source ID of the most recent video_cap call (used by debayer("auto"))
     
     bool verbose = false;                   // Enable verbose DNN/performance output
+    bool debugDump = false;                 // Enable verbose debug dump (debug_start / debug_end)
     bool shouldBreak = false;
     bool shouldContinue = false;
     bool shouldReturn = false;

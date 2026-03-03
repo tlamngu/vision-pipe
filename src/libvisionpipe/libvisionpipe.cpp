@@ -13,6 +13,27 @@
 #include <cstdio>
 
 // ============================================================================
+// TCP socket helpers for param client
+// ============================================================================
+#if defined(_WIN32)
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  using SocketFd = SOCKET;
+  #define CLOSE_SOCK closesocket
+  #define INVALID_SOCKFD INVALID_SOCKET
+  using ssize_t = SSIZE_T;
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  using SocketFd = int;
+  #define CLOSE_SOCK ::close
+  #define INVALID_SOCKFD (-1)
+#endif
+
+// ============================================================================
 // Platform includes
 // ============================================================================
 #if defined(_WIN32)
@@ -44,12 +65,30 @@ Session::Session(const std::string& sessionId, HANDLE hProcess, HANDLE hThread,
 Session::Session(const std::string& sessionId, pid_t pid, const VisionPipeConfig& config)
     : _sessionId(sessionId), _pid(pid), _config(config) {
     _state.store(SessionState::RUNNING, std::memory_order_release);
+    startParamPortProbe();
 }
 
 #endif
 
 Session::~Session() {
     stop(2000);
+    // Stop all param watchers
+    {
+        std::lock_guard<std::mutex> lk(_watcherMutex);
+        for (auto& w : _watchers) {
+            w->stop.store(true);
+            if (w->sockFd >= 0) {
+                CLOSE_SOCK(static_cast<SocketFd>(w->sockFd));
+                w->sockFd = -1;
+            }
+        }
+        for (auto& w : _watchers) {
+            if (w->thread.joinable()) w->thread.join();
+        }
+        _watchers.clear();
+    }
+    // Stop port probe thread
+    if (_paramPortThread.joinable()) _paramPortThread.join();
     // Clean up temp script file if created via runString()
     if (!_tempScriptPath.empty()) {
         std::remove(_tempScriptPath.c_str());
@@ -718,6 +757,278 @@ std::string VisionPipe::generateSessionId() const {
     std::ostringstream oss;
     oss << std::hex << pid << "_" << r;
     return oss.str();
+}
+
+// ============================================================================
+// Session — runtime parameter client
+// ============================================================================
+
+// Poll /tmp/visionpipe-params-<pid>.port until it exists or timeout
+static int readParamPortFile(int pid, int timeoutMs) {
+    std::string path = "/tmp/visionpipe-params-" + std::to_string(pid) + ".port";
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::ifstream f(path);
+        if (f.is_open()) {
+            int port = 0;
+            f >> port;
+            if (port > 0) return port;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return -1;
+}
+
+void Session::startParamPortProbe() {
+    int pid = static_cast<int>(_pid);
+    _paramPortThread = std::thread([this, pid]() {
+        int port = readParamPortFile(pid, 10000); // up to 10 s
+        if (port > 0) _paramPort.store(port, std::memory_order_release);
+    });
+    // detach so destructor doesn't need to join (but we also join in ~Session)
+    // actually don't detach — we join in ~Session
+}
+
+// Open a TCP connection to 127.0.0.1:_paramPort, send one command line,
+// read one JSON response line, then close.
+bool Session::sendParamCommand(const std::string& cmd, std::string& response, int timeoutMs) {
+    int port = _paramPort.load(std::memory_order_acquire);
+    if (port <= 0) return false;
+
+    SocketFd fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKFD) return false;
+
+    // Set receive / send timeout
+#if defined(_WIN32)
+    DWORD tv = static_cast<DWORD>(timeoutMs);
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec  = timeoutMs / 1000;
+    tv.tv_usec = (timeoutMs % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(static_cast<uint16_t>(port));
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        CLOSE_SOCK(fd);
+        return false;
+    }
+
+    // Send command
+    std::string line = cmd + "\n";
+    if (::send(fd, line.c_str(), static_cast<int>(line.size()), 0)
+            != static_cast<ssize_t>(line.size())) {
+        CLOSE_SOCK(fd);
+        return false;
+    }
+
+    // Read one response line
+    response.clear();
+    char ch;
+    while (true) {
+        ssize_t n = ::recv(fd, &ch, 1, 0);
+        if (n <= 0) break;
+        if (ch == '\n') break;
+        response += ch;
+    }
+
+    CLOSE_SOCK(fd);
+    return !response.empty();
+}
+
+bool Session::setParam(const std::string& name, const std::string& value) {
+    std::string resp;
+    return sendParamCommand("SET " + name + " " + value, resp);
+}
+
+bool Session::getParam(const std::string& name, std::string& outValue) {
+    std::string resp;
+    if (!sendParamCommand("GET " + name, resp)) return false;
+    // Response: {"ok":true,"name":"brightness","value":75}
+    // Simple extraction: find "value": and grab the rest up to }
+    auto pos = resp.find("\"value\":");
+    if (pos == std::string::npos) return false;
+    pos += 8; // skip "value":
+    while (pos < resp.size() && resp[pos] == ' ') ++pos;
+    // value is either a quoted string or a bare token
+    std::string raw;
+    if (pos < resp.size() && resp[pos] == '"') {
+        ++pos;
+        while (pos < resp.size() && resp[pos] != '"') raw += resp[pos++];
+    } else {
+        while (pos < resp.size() && resp[pos] != '}' && resp[pos] != ',') raw += resp[pos++];
+        // trim trailing whitespace
+        while (!raw.empty() && (raw.back() == ' ' || raw.back() == '\t')) raw.pop_back();
+    }
+    outValue = raw;
+    return true;
+}
+
+std::map<std::string, std::string> Session::listParams() {
+    std::string resp;
+    std::map<std::string, std::string> result;
+    if (!sendParamCommand("LIST", resp)) return result;
+    // Parse simple JSON: {"ok":true,"params":{"name":value,...}}
+    auto start = resp.find("\"params\":");
+    if (start == std::string::npos) return result;
+    start = resp.find('{', start + 9);
+    if (start == std::string::npos) return result;
+    // Iterate key-value pairs in this object crudely
+    std::size_t pos = start + 1;
+    while (pos < resp.size()) {
+        // skip whitespace and commas
+        while (pos < resp.size() && (resp[pos] == ' ' || resp[pos] == ',')) ++pos;
+        if (pos >= resp.size() || resp[pos] == '}') break;
+        // parse key
+        if (resp[pos] != '"') { ++pos; continue; }
+        ++pos;
+        std::string key;
+        while (pos < resp.size() && resp[pos] != '"') key += resp[pos++];
+        if (pos < resp.size()) ++pos; // skip closing "
+        // skip :
+        while (pos < resp.size() && (resp[pos] == ' ' || resp[pos] == ':')) ++pos;
+        // parse value (just the "value" field from inner object or bare token)
+        // inner object {"value":..., ...}
+        if (pos < resp.size() && resp[pos] == '{') {
+            // find "value": inside
+            auto vPos = resp.find("\"value\":", pos);
+            std::string val;
+            if (vPos != std::string::npos) {
+                vPos += 8;
+                while (vPos < resp.size() && resp[vPos] == ' ') ++vPos;
+                if (vPos < resp.size() && resp[vPos] == '"') {
+                    ++vPos;
+                    while (vPos < resp.size() && resp[vPos] != '"') val += resp[vPos++];
+                } else {
+                    while (vPos < resp.size() && resp[vPos] != ',' && resp[vPos] != '}')
+                        val += resp[vPos++];
+                    while (!val.empty() && val.back() == ' ') val.pop_back();
+                }
+            }
+            result[key] = val;
+            // skip to closing } of inner object
+            int depth = 1;
+            ++pos;
+            while (pos < resp.size() && depth > 0) {
+                if (resp[pos] == '{') ++depth;
+                else if (resp[pos] == '}') --depth;
+                ++pos;
+            }
+        } else {
+            std::string val;
+            if (resp[pos] == '"') {
+                ++pos;
+                while (pos < resp.size() && resp[pos] != '"') val += resp[pos++];
+                if (pos < resp.size()) ++pos;
+            } else {
+                while (pos < resp.size() && resp[pos] != ',' && resp[pos] != '}') val += resp[pos++];
+                while (!val.empty() && val.back() == ' ') val.pop_back();
+            }
+            result[key] = val;
+        }
+    }
+    return result;
+}
+
+uint64_t Session::watchParam(const std::string& name,
+                              std::function<void(const std::string&, const std::string&)> callback) {
+    int port = _paramPort.load(std::memory_order_acquire);
+    if (port <= 0) return 0;
+
+    auto sub = std::make_shared<WatchSubscription>();
+    sub->id       = _nextWatchId.fetch_add(1, std::memory_order_relaxed);
+    sub->sockFd   = -1;
+    sub->stop.store(false);
+    sub->callback = std::move(callback);
+
+    // Connect
+    SocketFd fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == INVALID_SOCKFD) return 0;
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(static_cast<uint16_t>(port));
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        CLOSE_SOCK(fd);
+        return 0;
+    }
+    sub->sockFd = static_cast<int>(fd);
+
+    // Send WATCH command
+    std::string cmd = "WATCH " + name + "\n";
+    ::send(fd, cmd.c_str(), static_cast<int>(cmd.size()), 0);
+    // Read ACK line
+    { std::string ack; char ch;
+      while (::recv(fd, &ch, 1, 0) == 1 && ch != '\n') ack += ch; }
+
+    // Start push-event reader thread
+    uint64_t subId = sub->id;
+    sub->thread = std::thread([sub, fd]() {
+        std::string line;
+        char ch;
+        while (!sub->stop.load()) {
+            ssize_t n = ::recv(static_cast<SocketFd>(fd), &ch, 1, 0);
+            if (n <= 0) break;
+            if (ch == '\n') {
+                // Parse: {"event":"changed","name":"brightness","old":50,"new":75}
+                // Extract "name" and "new" fields
+                auto extractStr = [&](const std::string& key) -> std::string {
+                    auto pos = line.find("\"" + key + "\":");
+                    if (pos == std::string::npos) return "";
+                    pos += key.size() + 3;
+                    while (pos < line.size() && line[pos] == ' ') ++pos;
+                    std::string val;
+                    if (pos < line.size() && line[pos] == '"') {
+                        ++pos;
+                        while (pos < line.size() && line[pos] != '"') val += line[pos++];
+                    } else {
+                        while (pos < line.size() && line[pos] != ',' && line[pos] != '}')
+                            val += line[pos++];
+                        while (!val.empty() && val.back() == ' ') val.pop_back();
+                    }
+                    return val;
+                };
+                if (line.find("\"event\":\"changed\"") != std::string::npos) {
+                    std::string pName = extractStr("name");
+                    std::string pVal  = extractStr("new");
+                    if (!sub->stop.load()) sub->callback(pName, pVal);
+                }
+                line.clear();
+            } else {
+                line += ch;
+            }
+        }
+    });
+
+    {
+        std::lock_guard<std::mutex> lk(_watcherMutex);
+        _watchers.push_back(sub);
+    }
+    return subId;
+}
+
+void Session::unwatchParam(uint64_t subscriptionId) {
+    std::lock_guard<std::mutex> lk(_watcherMutex);
+    for (auto it = _watchers.begin(); it != _watchers.end(); ++it) {
+        if ((*it)->id == subscriptionId) {
+            auto& w = *it;
+            w->stop.store(true);
+            if (w->sockFd >= 0) {
+                CLOSE_SOCK(static_cast<SocketFd>(w->sockFd));
+                w->sockFd = -1;
+            }
+            if (w->thread.joinable()) w->thread.join();
+            _watchers.erase(it);
+            return;
+        }
+    }
 }
 
 } // namespace visionpipe

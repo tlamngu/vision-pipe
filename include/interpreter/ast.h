@@ -80,12 +80,20 @@ enum class ASTNodeType {
     CACHE_ACCESS_EXPR,
     CACHE_LOAD_EXPR,    // "cache_id" -> item() pattern
     ARRAY_EXPR,
+    PARAM_REF_EXPR,     // @param_name – live runtime parameter reference
     
     // Statements
     EXPRESSION_STMT,
     EXEC_SEQ_STMT,
     EXEC_MULTI_STMT,
     EXEC_LOOP_STMT,
+    EXEC_INTERVAL_STMT,
+    NO_INTERVAL_STMT,
+    EXEC_INTERVAL_MULTI_STMT,
+    EXEC_RT_SEQ_STMT,
+    EXEC_RT_MULTI_STMT,
+    DEBUG_START_STMT,
+    DEBUG_END_STMT,
     USE_STMT,
     CACHE_STMT,
     IF_STMT,
@@ -95,6 +103,8 @@ enum class ASTNodeType {
     CONTINUE_STMT,
     IMPORT_STMT,
     GLOBAL_STMT,
+    PARAM_DECL_STMT,     // params [ name:type = default, ... ]
+    ON_PARAMS_STMT,      // on_params @name ... end
     
     // Declarations
     PIPELINE_DECL,
@@ -161,6 +171,9 @@ struct IdentifierExpr : Expression {
 struct FunctionCallExpr : Expression {
     std::string functionName;
     std::vector<std::shared_ptr<Expression>> arguments;
+    // Named (keyword) arguments: func(param=value)
+    // These are ordered as written; resolved to positional in the interpreter.
+    std::vector<std::pair<std::string, std::shared_ptr<Expression>>> namedArguments;
     std::optional<CacheOutput> cacheOutput;  // -> "cache_id"
     
     FunctionCallExpr() : Expression(ASTNodeType::FUNCTION_CALL_EXPR) {}
@@ -213,6 +226,22 @@ struct ArrayExpr : Expression {
     
     ArrayExpr() : Expression(ASTNodeType::ARRAY_EXPR) {}
     
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief Runtime parameter reference (@param_name)
+ *
+ * Reads the current value from the runtime ParameterStore.  Unlike a
+ * variable, this is a live read – every evaluation fetches the latest value.
+ */
+struct ParamRefExpr : Expression {
+    std::string paramName;  ///< Name without the '@' prefix
+
+    ParamRefExpr() : Expression(ASTNodeType::PARAM_REF_EXPR) {}
+    explicit ParamRefExpr(const std::string& n)
+        : Expression(ASTNodeType::PARAM_REF_EXPR), paramName(n) {}
+
     std::string toString(int ind = 0) const override;
 };
 
@@ -283,6 +312,95 @@ struct ExecLoopStmt : Statement {
     
     ExecLoopStmt() : Statement(ASTNodeType::EXEC_LOOP_STMT) {}
     
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief exec_interval statement - execute pipeline repeatedly on a timer
+ *
+ * exec_interval <pipeline> <time_ms>
+ * Schedules the pipeline to execute every time_ms milliseconds in a
+ * background thread.  The interval continues until no_interval is called.
+ */
+struct ExecIntervalStmt : Statement {
+    std::shared_ptr<Expression> pipelineRef;
+    std::shared_ptr<Expression> intervalMs;  // float: interval in milliseconds
+
+    ExecIntervalStmt() : Statement(ASTNodeType::EXEC_INTERVAL_STMT) {}
+
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief no_interval statement - stop a recurring pipeline interval
+ *
+ * no_interval <pipeline>
+ */
+struct NoIntervalStmt : Statement {
+    std::shared_ptr<Expression> pipelineRef;
+
+    NoIntervalStmt() : Statement(ASTNodeType::NO_INTERVAL_STMT) {}
+
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief exec_interval_multi statement - run multiple pipelines in parallel on a timer
+ *
+ * exec_interval_multi [pipeline1, pipeline2, ...] <time_ms>
+ */
+struct ExecIntervalMultiStmt : Statement {
+    std::vector<std::shared_ptr<Expression>> pipelineRefs;
+    std::shared_ptr<Expression> intervalMs;
+
+    ExecIntervalMultiStmt() : Statement(ASTNodeType::EXEC_INTERVAL_MULTI_STMT) {}
+
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief exec_rt_seq statement - real-time sequential execution with timeout
+ *
+ * exec_rt_seq <pipeline> <timeout_ms>
+ * Executes the pipeline.  If execution exceeds timeout_ms the pipeline is
+ * considered late; a warning is emitted and the call returns without its result.
+ */
+struct ExecRtSeqStmt : Statement {
+    std::shared_ptr<Expression> pipelineRef;
+    std::shared_ptr<Expression> timeoutMs;
+
+    ExecRtSeqStmt() : Statement(ASTNodeType::EXEC_RT_SEQ_STMT) {}
+
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief exec_rt_multi statement - real-time parallel execution with shared timeout
+ *
+ * exec_rt_multi [pipeline1, pipeline2, ...] <timeout_ms>
+ */
+struct ExecRtMultiStmt : Statement {
+    std::vector<std::shared_ptr<Expression>> pipelineRefs;
+    std::shared_ptr<Expression> timeoutMs;
+
+    ExecRtMultiStmt() : Statement(ASTNodeType::EXEC_RT_MULTI_STMT) {}
+
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief debug_start statement - begin a verbose debug logging block
+ */
+struct DebugStartStmt : Statement {
+    DebugStartStmt() : Statement(ASTNodeType::DEBUG_START_STMT) {}
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief debug_end statement - end a verbose debug logging block
+ */
+struct DebugEndStmt : Statement {
+    DebugEndStmt() : Statement(ASTNodeType::DEBUG_END_STMT) {}
     std::string toString(int ind = 0) const override;
 };
 
@@ -391,6 +509,46 @@ struct GlobalStmt : Statement {
 };
 
 // ============================================================================
+// Runtime parameter declarations
+// ============================================================================
+
+/**
+ * @brief One entry in a `params [...]` declaration
+ */
+struct ParamEntry {
+    std::string                              name;
+    std::string                              typeName;   ///< "int", "float", "string", "bool"
+    std::optional<std::shared_ptr<Expression>> defaultValue;
+    SourceLocation                           location;
+};
+
+/**
+ * @brief params [ brightness:int=50, gain:float=1.0, ... ]
+ *
+ * Top-level statement that declares parameters readable from the TCP server.
+ */
+struct ParamDeclStmt : Statement {
+    std::vector<ParamEntry> entries;
+
+    ParamDeclStmt() : Statement(ASTNodeType::PARAM_DECL_STMT) {}
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief on_params @name\n  ...body...  end
+ *
+ * Registers a body of statements to execute whenever the named parameter
+ * (or '*' for any parameter) changes.  Runs on the pipeline loop thread.
+ */
+struct OnParamsStmt : Statement {
+    std::string                              paramName;  ///< param name (without @), or "*"
+    std::vector<std::shared_ptr<Statement>>  body;
+
+    OnParamsStmt() : Statement(ASTNodeType::ON_PARAMS_STMT) {}
+    std::string toString(int ind = 0) const override;
+};
+
+// ============================================================================
 // Declarations
 // ============================================================================
 
@@ -441,6 +599,8 @@ struct Program : ASTNode {
     std::vector<std::shared_ptr<GlobalStmt>> globals;
     std::vector<std::shared_ptr<ConfigDecl>> configs;
     std::vector<std::shared_ptr<PipelineDecl>> pipelines;
+    std::vector<std::shared_ptr<ParamDeclStmt>> paramDecls;    ///< params [...] declarations
+    std::vector<std::shared_ptr<OnParamsStmt>>  onParamsHandlers; ///< on_params @x ... end
     std::vector<std::shared_ptr<Statement>> topLevelStatements;  // exec_loop etc.
     
     std::string sourceFile;
@@ -497,6 +657,13 @@ public:
     virtual void visit(ExecSeqStmt& node) = 0;
     virtual void visit(ExecMultiStmt& node) = 0;
     virtual void visit(ExecLoopStmt& node) = 0;
+    virtual void visit(ExecIntervalStmt& node) = 0;
+    virtual void visit(NoIntervalStmt& node) = 0;
+    virtual void visit(ExecIntervalMultiStmt& node) = 0;
+    virtual void visit(ExecRtSeqStmt& node) = 0;
+    virtual void visit(ExecRtMultiStmt& node) = 0;
+    virtual void visit(DebugStartStmt& node) = 0;
+    virtual void visit(DebugEndStmt& node) = 0;
     virtual void visit(UseStmt& node) = 0;
     virtual void visit(CacheStmt& node) = 0;
     virtual void visit(IfStmt& node) = 0;
@@ -506,6 +673,9 @@ public:
     virtual void visit(ContinueStmt& node) = 0;
     virtual void visit(ImportStmt& node) = 0;
     virtual void visit(GlobalStmt& node) = 0;
+    virtual void visit(ParamDeclStmt& node) = 0;
+    virtual void visit(OnParamsStmt& node) = 0;
+    virtual void visit(ParamRefExpr& node) = 0;
     
     // Declarations
     virtual void visit(PipelineDecl& node) = 0;

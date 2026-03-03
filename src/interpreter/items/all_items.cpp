@@ -25,11 +25,23 @@ void registerAllItems(ItemRegistry& registry) {
     // Auto Exposure
     registerAutoExposureItems(registry);
 
+    // Adaptive Auto Brightness (PID multi-axis)
+    registerAdaptiveBrightnessItems(registry);
+
     // GPU-accelerated debayering
     registerGpuDebayerItems(registry);
 
+    // GPU-accelerated colour transform and matrix multiplication
+    registerGpuTransformItems(registry);
+
     // Frame sink (shared memory IPC for libvisionpipe)
     registerFrameSinkItems(registry);
+
+    // Horizon lock / video stabilization
+    registerStabilizationItems(registry);
+
+    // GPU-accelerated stabilization (OpenCL warp kernel)
+    registerGpuStabilizationItems(registry);
 
     // Optional: Register IP Stream items when feature is enabled
     // This function is a no-op when VISIONPIPE_IP_STREAM_ENABLED is not defined

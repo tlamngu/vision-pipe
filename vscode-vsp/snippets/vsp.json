@@ -177,5 +177,60 @@
       "exec_loop stereo_process"
     ],
     "description": "Create a stereo vision pipeline template"
+  },
+  "Runtime Params Declaration": {
+    "prefix": "params",
+    "body": [
+      "params [",
+      "    ${1:param_name}:${2|int,float,bool,string|}=${3:0}$0",
+      "]"
+    ],
+    "description": "Declare runtime parameters that can be set externally while the pipeline runs"
+  },
+  "Runtime Param Entry": {
+    "prefix": "param",
+    "body": [
+      "${1:name}:${2|int,float,bool,string|}=${3:0}"
+    ],
+    "description": "Single runtime parameter entry (use inside a params [...] block)"
+  },
+  "On Params Handler": {
+    "prefix": "onparams",
+    "body": [
+      "on_params @${1:param_name}",
+      "    $0",
+      "end"
+    ],
+    "description": "Event handler triggered when a runtime parameter changes"
+  },
+  "Param Reference": {
+    "prefix": "@",
+    "body": [
+      "@${1:param_name}"
+    ],
+    "description": "Reference a runtime parameter value inline"
+  },
+  "Pipeline with Params Template": {
+    "prefix": "paramspipe",
+    "body": [
+      "# Runtime parameter declarations",
+      "params [",
+      "    ${1:brightness}:int=${2:50},",
+      "    ${3:gain}:float=${4:1.0}",
+      "]",
+      "",
+      "pipeline ${5:main}",
+      "    video_cap source=@${6:device_id}",
+      "    $0",
+      "    display title=\"${7:Output}\"",
+      "end",
+      "",
+      "on_params @${1:brightness}",
+      "    log \"${1:brightness} changed to {${1:brightness}}\"",
+      "end",
+      "",
+      "exec_loop ${5:main}"
+    ],
+    "description": "Pipeline template with runtime parameters and change handler"
   }
 }

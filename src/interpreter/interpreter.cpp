@@ -1,11 +1,13 @@
 #include "interpreter/interpreter.h"
 #include "interpreter/parser.h"
+#include "interpreter/param_store.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_threaded_group.h"
 #include <iostream>
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <future>
 
 namespace visionpipe {
 
@@ -86,6 +88,27 @@ void Interpreter::executeStatement(std::shared_ptr<Statement> stmt) {
             break;
         case ASTNodeType::EXEC_LOOP_STMT:
             execExecLoop(static_cast<ExecLoopStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_INTERVAL_STMT:
+            execExecInterval(static_cast<ExecIntervalStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::NO_INTERVAL_STMT:
+            execNoInterval(static_cast<NoIntervalStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_INTERVAL_MULTI_STMT:
+            execExecIntervalMulti(static_cast<ExecIntervalMultiStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_RT_SEQ_STMT:
+            execExecRtSeq(static_cast<ExecRtSeqStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_RT_MULTI_STMT:
+            execExecRtMulti(static_cast<ExecRtMultiStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::DEBUG_START_STMT:
+            execDebugStart(static_cast<DebugStartStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::DEBUG_END_STMT:
+            execDebugEnd(static_cast<DebugEndStmt*>(stmt.get()));
             break;
         case ASTNodeType::USE_STMT:
             execUse(static_cast<UseStmt*>(stmt.get()));
@@ -200,6 +223,42 @@ void Interpreter::reset() {
     _recursionDepth = 0;
     _framesProcessed = 0;
     _context.reset();
+    // Invalidate cached workers; they reference stale _pipelines/_registry.
+    _multiWorkers.clear();
+    _multiWorkerTopology.clear();
+    // Stop all interval workers.
+    {
+        std::lock_guard<std::mutex> lk(_intervalMutex);
+        for (auto& [name, worker] : _intervalWorkers) {
+            worker->stop.store(true);
+        }
+        for (auto& [name, worker] : _intervalWorkers) {
+            if (worker->workerThread.joinable()) {
+                worker->workerThread.join();
+            }
+        }
+        _intervalWorkers.clear();
+    }
+    // Unsubscribe on_params handlers from the store
+    if (_paramStore) {
+        for (const auto& h : _onParamsHandlers) {
+            _paramStore->unsubscribe(h.subscriptionId);
+        }
+    }
+    _onParamsHandlers.clear();
+    {
+        std::lock_guard<std::mutex> lk(_pendingParamMutex);
+        while (!_pendingParamHandlers.empty()) _pendingParamHandlers.pop();
+    }
+    _debugDump = false;
+}
+
+// ============================================================================
+// Runtime parameter store
+// ============================================================================
+
+void Interpreter::setParamStore(std::shared_ptr<ParameterStore> store) {
+    _paramStore = std::move(store);
 }
 
 // ============================================================================
@@ -255,6 +314,49 @@ void Interpreter::registerPipelines(std::shared_ptr<Program> program) {
         }
         setVariable(global->cacheId, value);
     }
+
+    // Register runtime parameter declarations
+    if (_paramStore) {
+        for (const auto& paramDecl : program->paramDecls) {
+            for (const auto& entry : paramDecl->entries) {
+                ParamType ptype = paramTypeFromString(entry.typeName);
+                ParamValue defVal;
+                if (entry.defaultValue.has_value()) {
+                    RuntimeValue rv = evaluate(*entry.defaultValue);
+                    switch (ptype) {
+                        case ParamType::INT:    defVal = ParamValue(rv.asInt()); break;
+                        case ParamType::FLOAT:  defVal = ParamValue(rv.asNumber()); break;
+                        case ParamType::BOOL:   defVal = ParamValue(rv.asBool()); break;
+                        default:                defVal = ParamValue(rv.asString()); break;
+                    }
+                }
+                _paramStore->declare(entry.name, ptype, defVal);
+            }
+        }
+
+        // Register on_params handlers (subscribe them to the store)
+        for (const auto& handler : program->onParamsHandlers) {
+            OnParamsHandler h;
+            h.paramName = handler->paramName;
+            h.body      = handler->body;
+
+            auto body   = handler->body;
+            auto pname  = handler->paramName;
+            auto* self  = this;
+
+            h.subscriptionId = (pname == "*")
+                ? _paramStore->subscribeAll([self, body](const ParamChangeEvent&) {
+                      std::lock_guard<std::mutex> lk(self->_pendingParamMutex);
+                      self->_pendingParamHandlers.push({body});
+                  })
+                : _paramStore->subscribe(pname, [self, body](const ParamChangeEvent&) {
+                      std::lock_guard<std::mutex> lk(self->_pendingParamMutex);
+                      self->_pendingParamHandlers.push({body});
+                  });
+
+            _onParamsHandlers.push_back(std::move(h));
+        }
+    }
 }
 
 void Interpreter::executeTopLevel(std::shared_ptr<Program> program) {
@@ -295,35 +397,160 @@ void Interpreter::execExecSeq(ExecSeqStmt* stmt) {
     }
 }
 
+void Interpreter::initMultiWorkers(const std::vector<std::string>& names,
+                                    std::shared_ptr<GlobalCacheData> sharedGlobal) {
+    _multiWorkers.clear();
+    _multiWorkers.reserve(names.size());
+    _multiWorkerTopology = names;
+
+    for (const auto& name : names) {
+        MultiWorker w;
+        w.pipelineName = name;
+        w.interp = std::make_unique<Interpreter>(_config);
+
+        // Share read-only AST nodes and item instances with the parent.
+        // Both maps hold shared_ptrs so this is a shallow pointer copy — the
+        // underlying PipelineDecl / InterpreterItem objects are shared, not
+        // duplicated.  They are effectively immutable after the program is
+        // parsed, so no locking is required.
+        w.interp->_pipelines = _pipelines;
+        w.interp->_registry  = _registry;
+
+        // Share param store so workers can read @param references.
+        if (_paramStore) {
+            w.interp->_paramStore = _paramStore;
+        }
+
+        // Wire the shared global cache.
+        w.interp->_cacheManager.replaceGlobalData(sharedGlobal);
+        w.interp->_context.cacheManager = &w.interp->_cacheManager;
+
+        _multiWorkers.push_back(std::move(w));
+    }
+}
+
+void Interpreter::resetWorkerState(Interpreter& worker, const cv::Mat& inputMat,
+                                    std::shared_ptr<GlobalCacheData> sharedGlobal) {
+    // Re-sync global cache pointer (callers may have swapped it between runs,
+    // e.g. if the parent's global store was rebuilt).
+    worker._cacheManager.replaceGlobalData(sharedGlobal);
+    worker._context.cacheManager = &worker._cacheManager;
+
+    // Keep variable scopes but clear any local state from the previous frame.
+    worker._scopes.clear();
+    worker._scopes.emplace_back();      // fresh global scope
+
+    // Reset local cache scope stack.
+    worker._cacheManager.resetLocalScopes();
+
+    // Clear execution control flags.
+    worker._context.reset();
+    worker._context.currentMat = inputMat;  // caller supplies a per-worker copy
+
+    // Reset verbose/debug flags so debug_start in frame N does not bleed into
+    // frame N+1 when the same worker Interpreter is reused across frames.
+    worker._context.verbose   = worker._config.verbose;
+    worker._context.debugDump = false;
+    worker._debugDump         = false;
+
+    worker._recursionDepth = 0;
+    worker._hasError = false;
+    worker._lastError.clear();
+}
+
 void Interpreter::execExecMulti(ExecMultiStmt* stmt) {
-    // Execute pipelines in parallel using threads
+    // -------------------------------------------------------------------------
+    // Step 1: Resolve pipeline names and evaluate all arguments on the MAIN
+    //         thread, before spawning any worker threads.
+    // -------------------------------------------------------------------------
+    struct Invocation {
+        std::string name;
+        std::vector<RuntimeValue> args;
+    };
+    std::vector<Invocation> invocations;
+    invocations.reserve(stmt->pipelineRefs.size());
+
+    for (auto& ref : stmt->pipelineRefs) {
+        Invocation inv;
+        if (auto* call = dynamic_cast<FunctionCallExpr*>(ref.get())) {
+            inv.name = call->functionName;
+            for (const auto& arg : call->arguments) {
+                inv.args.push_back(evalExpression(arg.get()));
+            }
+        } else if (auto* ident = dynamic_cast<IdentifierExpr*>(ref.get())) {
+            inv.name = ident->name;
+        } else {
+            continue;
+        }
+        invocations.push_back(std::move(inv));
+    }
+
+    if (invocations.empty()) return;
+
+    // -------------------------------------------------------------------------
+    // Step 2: Build the topology key and (re)create workers if needed.
+    //
+    // Workers are reused every frame — only their per-frame state is reset.
+    // Rebuilding only happens on first call or if pipeline topology changed.
+    // -------------------------------------------------------------------------
+    auto sharedGlobal = _cacheManager.getGlobalData();
+
+    // Collect names for topology comparison.
+    std::vector<std::string> names;
+    names.reserve(invocations.size());
+    for (const auto& inv : invocations) names.push_back(inv.name);
+
+    if (_multiWorkerTopology != names) {
+        // First call or topology change — allocate fresh workers.
+        initMultiWorkers(names, sharedGlobal);
+    } else {
+        // Likely same global store, but replaceGlobalData is cheap.
+        for (auto& w : _multiWorkers) {
+            w.interp->_cacheManager.replaceGlobalData(sharedGlobal);
+            w.interp->_context.cacheManager = &w.interp->_cacheManager;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 3: Prepare per-worker input mats and launch threads.
+    //
+    // Each worker gets its own clone of currentMat so threads never share a
+    // buffer.  The global-cache store is the only truly shared resource and is
+    // protected by shared_mutex internally.
+    // -------------------------------------------------------------------------
+    cv::Mat inputMat = _context.currentMat.empty()
+                       ? cv::Mat()
+                       : _context.currentMat.clone();
+
     std::vector<std::thread> threads;
-    std::vector<cv::Mat> results(stmt->pipelineRefs.size());
-    
-    for (size_t i = 0; i < stmt->pipelineRefs.size(); ++i) {
-        auto& ref = stmt->pipelineRefs[i];
-        
-        threads.emplace_back([this, &ref, &results, i]() {
+    threads.reserve(invocations.size());
+    std::vector<std::string> errors(invocations.size());
+
+    for (size_t i = 0; i < invocations.size(); ++i) {
+        // Each thread gets its own clone so no two threads share a buffer.
+        cv::Mat workerInput = (i == 0) ? inputMat : inputMat.clone();
+
+        resetWorkerState(*_multiWorkers[i].interp, workerInput, sharedGlobal);
+
+        threads.emplace_back([this, &invocations, &errors, i]() {
             try {
-                if (auto* call = dynamic_cast<FunctionCallExpr*>(ref.get())) {
-                    std::vector<RuntimeValue> args;
-                    for (const auto& arg : call->arguments) {
-                        args.push_back(evalExpression(arg.get()));
-                    }
-                    results[i] = executePipeline(call->functionName, args, _context.currentMat);
-                } else if (auto* ident = dynamic_cast<IdentifierExpr*>(ref.get())) {
-                    results[i] = executePipeline(ident->name, {}, _context.currentMat);
-                }
+                Interpreter& child = *_multiWorkers[i].interp;
+                child.executePipeline(invocations[i].name, invocations[i].args,
+                                      child._context.currentMat);
             } catch (const std::exception& e) {
-                std::cerr << "Error in parallel pipeline: " << e.what() << std::endl;
+                errors[i] = e.what();
             }
         });
     }
-    
-    // Wait for all threads to complete
-    for (auto& thread : threads) {
-        if (thread.joinable()) {
-            thread.join();
+
+    for (auto& t : threads) {
+        if (t.joinable()) t.join();
+    }
+
+    for (size_t i = 0; i < errors.size(); ++i) {
+        if (!errors[i].empty()) {
+            std::cerr << "[exec_multi] Error in pipeline '"
+                      << invocations[i].name << "': " << errors[i] << "\n";
         }
     }
 }
@@ -332,6 +559,12 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
     _loopRunning = true;
     
     while (!_stopRequested) {
+        // Reset verbose/debug flags at each frame boundary so debug_start in a
+        // previous iteration does not bleed through to the next frame.
+        _context.verbose   = _config.verbose;
+        _context.debugDump = false;
+        _debugDump         = false;
+
         // Check condition if present
         if (stmt->condition.has_value()) {
             RuntimeValue condResult = evalExpression(stmt->condition->get());
@@ -356,6 +589,23 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
             ++_framesProcessed;
         }
         
+        // Drain pending on_params handlers (run on runtime loop thread)
+        {
+            std::queue<ParamHandlerBody> pending;
+            {
+                std::lock_guard<std::mutex> lk(_pendingParamMutex);
+                std::swap(pending, _pendingParamHandlers);
+            }
+            while (!pending.empty()) {
+                auto& handler = pending.front();
+                for (const auto& s : handler.statements) {
+                    executeStatement(s);
+                    if (_context.shouldBreak || _context.shouldReturn || _stopRequested) break;
+                }
+                pending.pop();
+            }
+        }
+
         if (_context.shouldBreak) {
             _context.shouldBreak = false;
             break;
@@ -367,6 +617,305 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
     }
     
     _loopRunning = false;
+}
+
+// ============================================================================
+// exec_interval / no_interval / exec_interval_multi
+// ============================================================================
+
+// Helper: extract pipeline name + args from an expression pointer.
+static std::pair<std::string, std::vector<RuntimeValue>>
+resolvePipelineRef(Expression* ref, Interpreter&) {
+    if (auto* call = dynamic_cast<FunctionCallExpr*>(ref)) {
+        // Arguments are evaluated on the calling thread before we spawn; we
+        // cannot re-evaluate them inside the worker because the parent
+        // interpreter state may have changed.  For simplicity we pass an empty
+        // arg list here – interval pipelines that need args should use global
+        // cache for communication.
+        return {call->functionName, {}};
+    }
+    if (auto* ident = dynamic_cast<IdentifierExpr*>(ref)) {
+        return {ident->name, {}};
+    }
+    return {"", {}};
+}
+
+void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
+    auto [name, args] = resolvePipelineRef(stmt->pipelineRef.get(), *this);
+    if (name.empty()) {
+        reportError("exec_interval: could not resolve pipeline name", stmt->location);
+        return;
+    }
+
+    RuntimeValue intervalVal = evalExpression(stmt->intervalMs.get());
+    double intervalMs = intervalVal.asNumber();
+
+    // Construct (or replace) the worker for this pipeline key.
+    auto workerKey = name;
+
+    // Stop any existing interval for the same key.
+    {
+        std::lock_guard<std::mutex> lk(_intervalMutex);
+        auto it = _intervalWorkers.find(workerKey);
+        if (it != _intervalWorkers.end()) {
+            it->second->stop.store(true);
+            if (it->second->workerThread.joinable()) it->second->workerThread.join();
+            _intervalWorkers.erase(it);
+        }
+    }
+
+    // Create child interpreter that shares pipelines and registry.
+    auto worker = std::make_shared<IntervalWorker>();
+    worker->interp = std::make_unique<Interpreter>(_config);
+    worker->interp->_pipelines = _pipelines;
+    worker->interp->_registry  = _registry;
+    if (_paramStore) worker->interp->_paramStore = _paramStore;
+    auto sharedGlobal = _cacheManager.getGlobalData();
+    worker->interp->_cacheManager.replaceGlobalData(sharedGlobal);
+    worker->interp->_context.cacheManager = &worker->interp->_cacheManager;
+
+    auto* workerPtr   = worker.get();
+    auto* interpPtr   = worker->interp.get();
+    std::string pname = name;
+
+    worker->workerThread = std::thread([workerPtr, interpPtr, pname, args, intervalMs]() {
+        using namespace std::chrono;
+        while (!workerPtr->stop.load()) {
+            auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
+
+            try {
+                interpPtr->_context.reset();
+                interpPtr->_scopes.clear();
+                interpPtr->_scopes.emplace_back();
+                interpPtr->executePipeline(pname, args, interpPtr->_context.currentMat);
+            } catch (const std::exception& e) {
+                std::cerr << "[exec_interval] Error in pipeline '"
+                          << pname << "': " << e.what() << "\n";
+            }
+
+            // Sleep until the next tick, but check stop frequently.
+            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+                std::this_thread::sleep_for(milliseconds(1));
+            }
+        }
+    });
+
+    std::lock_guard<std::mutex> lk(_intervalMutex);
+    _intervalWorkers[workerKey] = std::move(worker);
+}
+
+void Interpreter::execNoInterval(NoIntervalStmt* stmt) {
+    std::string name = resolvePipelineRef(stmt->pipelineRef.get(), *this).first;
+    if (name.empty()) {
+        reportError("no_interval: could not resolve pipeline name", stmt->location);
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(_intervalMutex);
+    auto it = _intervalWorkers.find(name);
+    if (it != _intervalWorkers.end()) {
+        it->second->stop.store(true);
+        if (it->second->workerThread.joinable()) it->second->workerThread.join();
+        _intervalWorkers.erase(it);
+    } else {
+        std::cerr << "[no_interval] No active interval for pipeline '" << name << "'\n";
+    }
+}
+
+void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
+    // Collect pipeline names.
+    std::vector<std::string> names;
+    for (auto& ref : stmt->pipelineRefs) {
+        names.push_back(resolvePipelineRef(ref.get(), *this).first);
+    }
+
+    RuntimeValue intervalVal = evalExpression(stmt->intervalMs.get());
+    double intervalMs = intervalVal.asNumber();
+
+    // Use composite key = all names joined.
+    std::string workerKey;
+    for (const auto& n : names) workerKey += n + "|";
+
+    {
+        std::lock_guard<std::mutex> lk(_intervalMutex);
+        auto it = _intervalWorkers.find(workerKey);
+        if (it != _intervalWorkers.end()) {
+            it->second->stop.store(true);
+            if (it->second->workerThread.joinable()) it->second->workerThread.join();
+            _intervalWorkers.erase(it);
+        }
+    }
+
+    auto worker = std::make_shared<IntervalWorker>();
+    // We give the multi-interval a single coordinator thread that launches
+    // worker sub-threads on each tick (mirrors execExecMulti behaviour).
+    auto sharedGlobal = _cacheManager.getGlobalData();
+
+    // Snapshot pipelines / registry for child workers.
+    auto pipelinesCopy = _pipelines;
+    auto registryCopy  = _registry;
+
+    auto* workerPtr = worker.get();
+
+    worker->workerThread = std::thread([workerPtr, names, pipelinesCopy, registryCopy,
+                                  sharedGlobal, intervalMs, cfg = _config]() mutable {
+        using namespace std::chrono;
+        while (!workerPtr->stop.load()) {
+            auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
+
+            // Launch one child interpreter per pipeline in parallel.
+            std::vector<std::thread> threads;
+            threads.reserve(names.size());
+            for (const auto& pname : names) {
+                threads.emplace_back([&pname, &pipelinesCopy, &registryCopy,
+                                      &sharedGlobal, &cfg]() {
+                    Interpreter child(cfg);
+                    child._pipelines = pipelinesCopy;
+                    child._registry  = registryCopy;
+                    child._cacheManager.replaceGlobalData(sharedGlobal);
+                    child._context.cacheManager = &child._cacheManager;
+                    try {
+                        child.executePipeline(pname, {}, {});
+                    } catch (const std::exception& e) {
+                        std::cerr << "[exec_interval_multi] Error in pipeline '"
+                                  << pname << "': " << e.what() << "\n";
+                    }
+                });
+            }
+            for (auto& t : threads) if (t.joinable()) t.join();
+
+            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+                std::this_thread::sleep_for(milliseconds(1));
+            }
+        }
+    });
+
+    std::lock_guard<std::mutex> lk(_intervalMutex);
+    _intervalWorkers[workerKey] = std::move(worker);
+}
+
+// ============================================================================
+// exec_rt_seq / exec_rt_multi  (real-time execution with deadline)
+// ============================================================================
+
+void Interpreter::execExecRtSeq(ExecRtSeqStmt* stmt) {
+    // Resolve pipeline ref.
+    std::string pname;
+    std::vector<RuntimeValue> args;
+    if (auto* call = dynamic_cast<FunctionCallExpr*>(stmt->pipelineRef.get())) {
+        pname = call->functionName;
+        for (const auto& arg : call->arguments) args.push_back(evalExpression(arg.get()));
+    } else if (auto* ident = dynamic_cast<IdentifierExpr*>(stmt->pipelineRef.get())) {
+        pname = ident->name;
+    }
+
+    if (pname.empty()) {
+        reportError("exec_rt_seq: could not resolve pipeline name", stmt->location);
+        return;
+    }
+
+    double timeoutMs = evalExpression(stmt->timeoutMs.get()).asNumber();
+
+    // Capture shared global cache so the child can write to it.
+    auto sharedGlobal = _cacheManager.getGlobalData();
+    cv::Mat inputMat  = _context.currentMat.empty() ? cv::Mat() : _context.currentMat.clone();
+
+    auto pipelines   = _pipelines;
+    auto registry    = _registry;
+    auto cfg         = _config;
+
+    // Run in async; wait up to timeoutMs.
+    auto fut = std::async(std::launch::async,
+        [pname, args, inputMat, pipelines, registry, sharedGlobal, cfg]() mutable {
+            Interpreter child(cfg);
+            child._pipelines = std::move(pipelines);
+            child._registry  = std::move(registry);
+            child._cacheManager.replaceGlobalData(sharedGlobal);
+            child._context.cacheManager = &child._cacheManager;
+            child.executePipeline(pname, args, inputMat);
+        });
+
+    auto status = fut.wait_for(std::chrono::duration<double, std::milli>(timeoutMs));
+    if (status == std::future_status::timeout) {
+        std::cerr << "[exec_rt_seq] Deadline exceeded (" << timeoutMs
+                  << " ms) for pipeline '" << pname << "'\n";
+        // We cannot forcibly kill the thread; let it finish in the background.
+        // The future keeps the thread alive until it completes.
+        fut.wait();
+    }
+}
+
+void Interpreter::execExecRtMulti(ExecRtMultiStmt* stmt) {
+    struct Invocation { std::string name; std::vector<RuntimeValue> args; };
+    std::vector<Invocation> invocations;
+    for (auto& ref : stmt->pipelineRefs) {
+        Invocation inv;
+        if (auto* call = dynamic_cast<FunctionCallExpr*>(ref.get())) {
+            inv.name = call->functionName;
+            for (const auto& arg : call->arguments) inv.args.push_back(evalExpression(arg.get()));
+        } else if (auto* ident = dynamic_cast<IdentifierExpr*>(ref.get())) {
+            inv.name = ident->name;
+        }
+        if (!inv.name.empty()) invocations.push_back(std::move(inv));
+    }
+
+    if (invocations.empty()) return;
+
+    double timeoutMs  = evalExpression(stmt->timeoutMs.get()).asNumber();
+    auto sharedGlobal = _cacheManager.getGlobalData();
+    cv::Mat inputMat  = _context.currentMat.empty() ? cv::Mat() : _context.currentMat.clone();
+    auto pipelines    = _pipelines;
+    auto registry     = _registry;
+    auto cfg          = _config;
+
+    auto fut = std::async(std::launch::async,
+        [invocations, inputMat, pipelines, registry, sharedGlobal, cfg]() mutable {
+            std::vector<std::thread> threads;
+            threads.reserve(invocations.size());
+            for (size_t i = 0; i < invocations.size(); ++i) {
+                cv::Mat workerMat = (i == 0) ? inputMat : inputMat.clone();
+                threads.emplace_back([&inv = invocations[i], workerMat, &pipelines,
+                                      &registry, &sharedGlobal, &cfg]() {
+                    Interpreter child(cfg);
+                    child._pipelines = pipelines;
+                    child._registry  = registry;
+                    child._cacheManager.replaceGlobalData(sharedGlobal);
+                    child._context.cacheManager = &child._cacheManager;
+                    try {
+                        child.executePipeline(inv.name, inv.args, workerMat);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[exec_rt_multi] Error in pipeline '"
+                                  << inv.name << "': " << e.what() << "\n";
+                    }
+                });
+            }
+            for (auto& t : threads) if (t.joinable()) t.join();
+        });
+
+    auto status = fut.wait_for(std::chrono::duration<double, std::milli>(timeoutMs));
+    if (status == std::future_status::timeout) {
+        std::cerr << "[exec_rt_multi] Deadline exceeded (" << timeoutMs
+                  << " ms) for " << invocations.size() << " pipelines\n";
+        fut.wait();
+    }
+}
+
+// ============================================================================
+// debug_start / debug_end
+// ============================================================================
+
+void Interpreter::execDebugStart(DebugStartStmt* /*stmt*/) {
+    _debugDump = true;
+    _context.debugDump = true;
+    _context.verbose   = true;
+    std::cerr << "[debug] debug_start – verbose logging enabled\n";
+}
+
+void Interpreter::execDebugEnd(DebugEndStmt* /*stmt*/) {
+    _debugDump = false;
+    _context.debugDump = false;
+    _context.verbose   = _config.verbose;  // restore original verbose setting
+    std::cerr << "[debug] debug_end – verbose logging disabled\n";
 }
 
 void Interpreter::execUse(UseStmt* stmt) {
@@ -507,6 +1056,8 @@ RuntimeValue Interpreter::evalExpression(Expression* expr) {
             return evalCacheLoad(static_cast<CacheLoadExpr*>(expr));
         case ASTNodeType::ARRAY_EXPR:
             return evalArray(static_cast<ArrayExpr*>(expr));
+        case ASTNodeType::PARAM_REF_EXPR:
+            return evalParamRef(static_cast<ParamRefExpr*>(expr));
         default:
             throw std::runtime_error("Unknown expression type");
     }
@@ -552,7 +1103,37 @@ RuntimeValue Interpreter::evalFunctionCall(FunctionCallExpr* expr) {
         for (const auto& arg : expr->arguments) {
             args.push_back(evalExpression(arg.get()));
         }
-        
+        // Resolve named args against pipeline parameter names
+        if (!expr->namedArguments.empty()) {
+            auto pipeline = getPipeline(expr->functionName);
+            const auto& params = pipeline->parameters;
+            // Extend args vector to accommodate all possibly-named params
+            for (size_t i = args.size(); i < params.size(); ++i) {
+                RuntimeValue def;
+                if (params[i].defaultValue.has_value()) {
+                    def = evaluate(*params[i].defaultValue);
+                }
+                args.push_back(def);
+            }
+            for (const auto& [paramName, valExpr] : expr->namedArguments) {
+                RuntimeValue val = evalExpression(valExpr.get());
+                bool found = false;
+                for (size_t pi = 0; pi < params.size(); ++pi) {
+                    if (params[pi].name == paramName) {
+                        if (pi >= args.size()) args.resize(pi + 1);
+                        args[pi] = std::move(val);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    reportError("Pipeline '" + expr->functionName +
+                                "' has no parameter '" + paramName + "'",
+                                expr->location);
+                }
+            }
+        }
+
         cv::Mat result = executePipeline(expr->functionName, args, _context.currentMat);
         
         // Handle cache output
@@ -566,12 +1147,58 @@ RuntimeValue Interpreter::evalFunctionCall(FunctionCallExpr* expr) {
     // Check if it's a registered item
     auto item = _registry.getItem(expr->functionName);
     if (item) {
-        // Evaluate arguments
+        // Evaluate positional arguments
         std::vector<RuntimeValue> args;
         for (const auto& arg : expr->arguments) {
             args.push_back(evalExpression(arg.get()));
         }
-        
+
+        // ----------------------------------------------------------------
+        // Resolve named (keyword) arguments
+        //
+        // func(p1, p2, key=val) is equivalent to:
+        //   positional = [p1, p2]
+        //   named      = {key: val}
+        //
+        // Algorithm:
+        //  1) For each named arg, find its index i in item->params()
+        //  2) If i >= args.size(), extend args with defaults up to i
+        //     and insert the named value at position i
+        //  3) Overwrite if position already filled (explicit named wins)
+        // ----------------------------------------------------------------
+        if (!expr->namedArguments.empty()) {
+            const auto& paramDefs = item->params();
+            // Pre-fill defaults for all parameters up to the max needed
+            if (args.size() < paramDefs.size()) {
+                for (size_t i = args.size(); i < paramDefs.size(); ++i) {
+                    if (paramDefs[i].defaultValue.has_value()) {
+                        args.push_back(*paramDefs[i].defaultValue);
+                    } else {
+                        args.push_back(RuntimeValue());  // placeholder
+                    }
+                }
+            }
+
+            for (const auto& [paramName, valExpr] : expr->namedArguments) {
+                RuntimeValue val = evalExpression(valExpr.get());
+                bool found = false;
+                for (size_t pi = 0; pi < paramDefs.size(); ++pi) {
+                    if (paramDefs[pi].name == paramName) {
+                        if (pi >= args.size()) args.resize(pi + 1);
+                        args[pi] = std::move(val);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    reportError("Function '" + expr->functionName +
+                                "' has no parameter '" + paramName + "'",
+                                expr->location);
+                    return RuntimeValue();
+                }
+            }
+        }
+
         // Validate arguments
         auto validationError = item->validateArgs(args);
         if (validationError.has_value()) {
@@ -812,6 +1439,29 @@ RuntimeValue Interpreter::evalArray(ArrayExpr* expr) {
     }
     
     return RuntimeValue(std::move(elements));
+}
+
+RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
+    if (!_paramStore) {
+        // No store attached – warn and return empty value
+        reportError("@" + expr->paramName
+                    + " referenced but no params [] block was declared",
+                    expr->location);
+        return RuntimeValue();
+    }
+
+    ParamValue pv = _paramStore->get(expr->paramName);
+    if (pv.isNull()) {
+        // Not set yet – could be optional, return empty
+        return RuntimeValue();
+    }
+    switch (pv.type) {
+        case ParamType::INT:    return RuntimeValue(static_cast<double>(pv.asInt()));
+        case ParamType::FLOAT:  return RuntimeValue(pv.asFloat());
+        case ParamType::STRING: return RuntimeValue(pv.asString());
+        case ParamType::BOOL:   return RuntimeValue(pv.asBool());
+        default:                return RuntimeValue(pv.asString());
+    }
 }
 
 // ============================================================================

@@ -1,8 +1,8 @@
 {
   "name": "visionpipe-vsp",
   "displayName": "VisionPipe VSP Language",
-  "description": "Syntax highlighting and language support for VisionPipe Script (.vsp) files",
-  "version": "1.0.0",
+  "description": "Syntax highlighting, snippets, and language support for VisionPipe Script (.vsp) files — including runtime params, on_params event handlers, and @param references",
+  "version": "1.1.0",
   "publisher": "visionpipe",
   "engines": {
     "vscode": "^1.75.0"

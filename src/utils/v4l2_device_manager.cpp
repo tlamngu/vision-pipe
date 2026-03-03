@@ -25,6 +25,7 @@
 #include <functional>
 #include <queue>
 #include <set>
+#include <unordered_set>
 
 namespace visionpipe {
 
@@ -152,9 +153,37 @@ bool V4L2DeviceManager::prepareDevice(const std::string& devicePath, const V4L2N
     }
 
     _sessions[devicePath] = std::move(session);
-    if (_verbose) std::cout << "[DEBUG] V4L2: prepareDevice succeeded for " << devicePath << std::endl;
+
+    // Discover and cache linked sub-devices once at setup time so every
+    // subsequent setControl / getControl call is free of BFS overhead.
+    auto& cached = _sessions[devicePath].cachedSubDevs;
+    cached = findLinkedSubDevices(devicePath);
+    if (_verbose) {
+        std::cout << "[DEBUG] V4L2: prepareDevice succeeded for " << devicePath
+                  << " — cached " << cached.size() << " linked subdev(s)";
+        for (auto& sd : cached) std::cout << "  " << sd;
+        std::cout << std::endl;
+    }
     SystemLogger::info(LOG_COMPONENT, "Prepared device: " + devicePath);
     return true;
+}
+
+// ============================================================================
+// cachedLinkedSubDevs — return cached BFS result, or live BFS for ephemeral
+// ============================================================================
+std::vector<std::string>
+V4L2DeviceManager::cachedLinkedSubDevs(const std::string& videoDevPath) const
+{
+    // Lock is already held by all callers (setControl / getControl / listControls
+    // all grab the recursive mutex before reaching here).
+    auto it = _sessions.find(videoDevPath);
+    if (it != _sessions.end()) {
+        // Session exists: return the pre-built cache.  May be empty on a
+        // device with no upstream sub-devs (e.g. USB UVC), which is fine.
+        return it->second.cachedSubDevs;
+    }
+    // Ephemeral access (no active session): fall back to live BFS.
+    return findLinkedSubDevices(videoDevPath);
 }
 
 // ============================================================================
@@ -433,7 +462,12 @@ static cv::Mat unpackRAW12(const uint8_t* packed, int width, int height, uint32_
 // acquireFrame
 // ============================================================================
 bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& frame) {
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
+    // Use unique_lock so we can release the mutex during the blocking poll() call.
+    // This allows concurrent setControl / getControl calls (e.g. from the async
+    // V4L2 writer thread spawned by adaptive_auto_brightness) to proceed while
+    // the capture thread is waiting for the next frame — eliminating the
+    // 60 → 50 fps throughput drop caused by mutex contention.
+    std::unique_lock<std::recursive_mutex> lock(_mutex);
 
     auto it = _sessions.find(devicePath);
     if (it == _sessions.end()) {
@@ -446,11 +480,27 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
         return false;
     }
 
-    // 1. poll
+    // Capture the fd before releasing the lock — it is stable for the lifetime
+    // of the session (only closed in releaseDevice which takes the same mutex).
+    const int captFd = session.fd;
+
+    // 1. poll — release the global lock so concurrent control writes can proceed.
     struct pollfd pfd{};
-    pfd.fd = session.fd;
+    pfd.fd     = captFd;
     pfd.events = POLLIN;
+
+    lock.unlock();
     int ret = poll(&pfd, 1, 2000);
+    lock.lock();
+
+    // Re-validate: another thread could have called releaseDevice() while we polled.
+    it = _sessions.find(devicePath);
+    if (it == _sessions.end() || !it->second.streaming || it->second.fd != captFd) {
+        SystemLogger::error(LOG_COMPONENT, "Session invalidated during poll on " + devicePath);
+        return false;
+    }
+    V4L2Session& sess = it->second;  // rebind after revalidation
+
     if (ret <= 0) {
         SystemLogger::error(LOG_COMPONENT, "poll timeout or error on " + devicePath);
         return false;
@@ -461,24 +511,24 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     static constexpr uint32_t MAX_PLANES = 4;
     struct v4l2_plane dqPlanes[MAX_PLANES]{};
     struct v4l2_buffer buf{};
-    buf.type = session.isMplane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.type = sess.isMplane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
-    if (session.isMplane) {
+    if (sess.isMplane) {
         buf.m.planes = dqPlanes;
         buf.length = MAX_PLANES;
     }
-    if (xioctl(session.fd, VIDIOC_DQBUF, &buf) < 0) {
+    if (xioctl(captFd, VIDIOC_DQBUF, &buf) < 0) {
         SystemLogger::error(LOG_COMPONENT, "VIDIOC_DQBUF failed: " + std::string(strerror(errno)));
         return false;
     }
 
-    uint32_t bytesUsed = session.isMplane ? dqPlanes[0].bytesused : buf.bytesused;
-    const auto& mappedBuf = session.buffers[buf.index];
+    uint32_t bytesUsed = sess.isMplane ? dqPlanes[0].bytesused : buf.bytesused;
+    const auto& mappedBuf = sess.buffers[buf.index];
     const uint8_t* data = static_cast<const uint8_t*>(mappedBuf.planes[0].start);
     uint32_t numDataPlanes = static_cast<uint32_t>(mappedBuf.planes.size());
-    int w = session.negotiatedWidth;
-    int h = session.negotiatedHeight;
-    uint32_t pf = session.negotiatedPixFmt;
+    int w = sess.negotiatedWidth;
+    int h = sess.negotiatedHeight;
+    uint32_t pf = sess.negotiatedPixFmt;
     if (_verbose) {
         std::cout << "[DEBUG] V4L2: DQBUF index=" << buf.index
                   << " planes=" << numDataPlanes
@@ -490,8 +540,8 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     // 3. Convert raw buffer to cv::Mat
     // stride0/stride1 are the actual bytes-per-row for plane 0 and plane 1 respectively.
     // Passing them to cv::Mat prevents row-shear artefacts when bytesperline != width*bpp.
-    size_t stride0 = session.planeBytesPerLine.size() > 0 ? session.planeBytesPerLine[0] : static_cast<size_t>(w);
-    size_t stride1 = session.planeBytesPerLine.size() > 1 ? session.planeBytesPerLine[1] : stride0;
+    size_t stride0 = sess.planeBytesPerLine.size() > 0 ? sess.planeBytesPerLine[0] : static_cast<size_t>(w);
+    size_t stride1 = sess.planeBytesPerLine.size() > 1 ? sess.planeBytesPerLine[1] : stride0;
     bool ok = true;
     if (pf == V4L2_PIX_FMT_YUYV) {
         cv::Mat yuyv(h, w, CV_8UC2, const_cast<uint8_t*>(data), stride0);
@@ -526,8 +576,8 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
             const uint8_t* yPlane = static_cast<const uint8_t*>(mappedBuf.planes[0].start);
             const uint8_t* uPlane = static_cast<const uint8_t*>(mappedBuf.planes[1].start);
             const uint8_t* vPlane = static_cast<const uint8_t*>(mappedBuf.planes[2].start);
-            size_t strideU = session.planeBytesPerLine.size() > 1 ? session.planeBytesPerLine[1] : stride0 / 2;
-            size_t strideV = session.planeBytesPerLine.size() > 2 ? session.planeBytesPerLine[2] : stride0 / 2;
+            size_t strideU = sess.planeBytesPerLine.size() > 1 ? sess.planeBytesPerLine[1] : stride0 / 2;
+            size_t strideV = sess.planeBytesPerLine.size() > 2 ? sess.planeBytesPerLine[2] : stride0 / 2;
             cv::Mat tmp(h * 3 / 2, w, CV_8UC1);
             for (int row = 0; row < h; ++row)
                 memcpy(tmp.ptr(row), yPlane + row * stride0, static_cast<size_t>(w));
@@ -554,12 +604,12 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     // 10-bit packed Bayer → unpack to CV_16UC1
     else if (pf == V4L2_PIX_FMT_SBGGR10P || pf == V4L2_PIX_FMT_SGBRG10P ||
              pf == V4L2_PIX_FMT_SGRBG10P || pf == V4L2_PIX_FMT_SRGGB10P) {
-        frame = unpackRAW10(data, w, h, session.negotiatedBytesPerLine);
+        frame = unpackRAW10(data, w, h, sess.negotiatedBytesPerLine);
     }
     // 12-bit packed Bayer → unpack to CV_16UC1
     else if (pf == V4L2_PIX_FMT_SBGGR12P || pf == V4L2_PIX_FMT_SGBRG12P ||
              pf == V4L2_PIX_FMT_SGRBG12P || pf == V4L2_PIX_FMT_SRGGB12P) {
-        frame = unpackRAW12(data, w, h, session.negotiatedBytesPerLine);
+        frame = unpackRAW12(data, w, h, sess.negotiatedBytesPerLine);
     }
     // 16-bit Bayer — return compact CV_16UC1
     else if (pf == V4L2_PIX_FMT_SBGGR16 || pf == V4L2_PIX_FMT_SGBRG16 ||
@@ -571,11 +621,11 @@ bool V4L2DeviceManager::acquireFrame(const std::string& devicePath, cv::Mat& fra
     }
 
     // 4. Re-enqueue buffer
-    if (session.isMplane) {
+    if (sess.isMplane) {
         buf.m.planes = dqPlanes;
         buf.length = numDataPlanes;
     }
-    if (xioctl(session.fd, VIDIOC_QBUF, &buf) < 0) {
+    if (xioctl(captFd, VIDIOC_QBUF, &buf) < 0) {
         SystemLogger::warning(LOG_COMPONENT, "VIDIOC_QBUF re-enqueue failed: " + std::string(strerror(errno)));
     }
     if (_verbose) std::cout << "[DEBUG] V4L2: QBUF re-enqueued index=" << buf.index << " ok=" << ok << std::endl;
@@ -621,6 +671,9 @@ void V4L2DeviceManager::releaseDevice(const std::string& devicePath) {
     }
 
     _sessions.erase(it);
+    // Invalidate the control-ID cache for this device so a future re-open
+    // triggers a fresh scan (driver/sensor may have changed).
+    _controlIdCache.erase(devicePath);
     SystemLogger::info(LOG_COMPONENT, "Released device: " + devicePath);
 }
 
@@ -646,6 +699,70 @@ void V4L2DeviceManager::releaseAll() {
 bool V4L2DeviceManager::isOpen(const std::string& devicePath) const {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _sessions.find(devicePath) != _sessions.end();
+}
+
+// ============================================================================
+// enumerateControlNames
+// ============================================================================
+// Helper: scan all QUERYCTRL controls on 'fd' and push normalized names into out.
+static void enumerateControlNamesOnFd(int fd, std::unordered_set<std::string>& seen,
+                                      std::vector<std::string>& out)
+{
+    auto normalise = [](const char* raw) {
+        std::string s(raw);
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        std::replace(s.begin(), s.end(), ' ', '_');
+        return s;
+    };
+
+    struct v4l2_queryctrl qctrl{};
+    qctrl.id = V4L2_CTRL_FLAG_NEXT_CTRL;
+    while (xioctl(fd, VIDIOC_QUERYCTRL, &qctrl) == 0) {
+        bool skip = (qctrl.flags & V4L2_CTRL_FLAG_DISABLED) ||
+                    (qctrl.type == V4L2_CTRL_TYPE_BUTTON)   ||
+                    (qctrl.type == V4L2_CTRL_TYPE_STRING);
+        if (!skip) {
+            std::string name = normalise(reinterpret_cast<const char*>(qctrl.name));
+            if (seen.insert(name).second) out.push_back(name);
+        }
+        qctrl.id |= V4L2_CTRL_FLAG_NEXT_CTRL;
+    }
+}
+
+std::vector<std::string>
+V4L2DeviceManager::enumerateControlNames(const std::string& devicePath)
+{
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
+
+    std::unordered_set<std::string> seen;
+    std::vector<std::string>        result;
+
+    // Helper: open 'path', enumerate its controls, close if ephemeral.
+    auto addPath = [&](const std::string& path) {
+        bool tmp = false;
+        int fd = acquireFd(path, &tmp);
+        if (fd < 0) return;
+        enumerateControlNamesOnFd(fd, seen, result);
+        if (tmp) ::close(fd);
+    };
+
+    // 1. Video node itself
+    addPath(devicePath);
+
+    // 2. Pinned preferred sub-device (set by v4l2_setup subdev= or setPreferredSubDev)
+    auto prefIt = _preferredSubDevs.find(devicePath);
+    if (prefIt != _preferredSubDevs.end()) {
+        addPath(prefIt->second);
+    }
+
+    // 3. Every sub-device discovered by media-controller BFS at prepareDevice()
+    for (const auto& sdPath : cachedLinkedSubDevs(devicePath)) {
+        // Skip preferred subdev if already enumerated above.
+        if (prefIt != _preferredSubDevs.end() && sdPath == prefIt->second) continue;
+        addPath(sdPath);
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -858,6 +975,35 @@ std::vector<std::string> V4L2DeviceManager::findLinkedSubDevices(
 }
 
 // ============================================================================
+// resolveControlIdCached — check per-device cache; fall back to full scan.
+// The cache persists for the lifetime of the manager (invalidated on
+// releaseDevice).  Lock is already held by all callers.
+// ============================================================================
+uint32_t V4L2DeviceManager::resolveControlIdCached(
+    const std::string& fdDevPath, int fd, const std::string& nameOrId) const
+{
+    // Build the normalised key the same way resolveControlId does internally.
+    std::string norm = nameOrId;
+    std::transform(norm.begin(), norm.end(), norm.begin(), ::tolower);
+    std::replace(norm.begin(), norm.end(), ' ', '_');
+
+    auto& devMap = _controlIdCache[fdDevPath];
+    auto  it     = devMap.find(norm);
+    if (it != devMap.end()) {
+        if (_verbose)
+            std::cout << "[DEBUG] V4L2: CID cache hit '" << nameOrId
+                      << "' on " << fdDevPath << " -> 0x"
+                      << std::hex << it->second << std::dec << std::endl;
+        return it->second;
+    }
+
+    // Cache miss: run the full VIDIOC_QUERYCTRL scan.
+    uint32_t cid = resolveControlId(fd, nameOrId);
+    if (cid != 0) devMap[norm] = cid;   // populate cache for next call
+    return cid;
+}
+
+// ============================================================================
 // Uses V4L2_CTRL_FLAG_NEXT_CTRL to enumerate ALL control classes:
 // User, Camera, Image Source, Image Processing, etc.
 // ============================================================================
@@ -919,9 +1065,9 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath,
                   << "' = " << value << " on " << devicePath << std::endl;
 
     // Helper: try to set a control on a specific open fd.
-    // Logs errno on each failed ioctl attempt.
-    auto trySet = [&](int fd) -> bool {
-        uint32_t cid = resolveControlId(fd, controlNameOrId);
+    // Uses the CID cache to skip VIDIOC_QUERYCTRL scanning on subsequent calls.
+    auto trySet = [&](int fd, const std::string& fdPath) -> bool {
+        uint32_t cid = resolveControlIdCached(fdPath, fd, controlNameOrId);
         if (cid == 0) return false;
 
         if (_verbose)
@@ -1036,13 +1182,12 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath,
     int fd = acquireFd(devicePath, &temp);
     bool ok = false;
     if (fd >= 0) {
-        ok = trySet(fd);
+        ok = trySet(fd, devicePath);
         if (temp) ::close(fd);
     }
     if (ok) return true;
 
     // 2. Try preferred subdev if pinned (set by v4l2_setup or explicit override).
-    //    Skip full BFS when user has already identified the correct sensor subdev.
     auto prefIt = _preferredSubDevs.find(devicePath);
     if (prefIt != _preferredSubDevs.end()) {
         const std::string& prefPath = prefIt->second;
@@ -1051,9 +1196,13 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath,
         bool ptmp = false;
         int pfd = acquireFd(prefPath, &ptmp);
         if (pfd >= 0) {
-            // Use stream-pause wrapper: many sensor controls (flip, gain, exposure)
-            // can only be applied while the pipeline is NOT streaming.
-            ok = withStreamPaused(devicePath, [&] { return trySet(pfd); });
+            // Fast path: try directly while streaming — most modern sensor/ISP
+            // drivers accept gain/exposure controls without requiring STREAMOFF.
+            ok = trySet(pfd, prefPath);
+            // Slow path: if rejected, pause stream and retry (needed by some
+            // older or less capable sensor drivers, e.g. for flip/mirror controls).
+            if (!ok)
+                ok = withStreamPaused(devicePath, [&] { return trySet(pfd, prefPath); });
             if (ptmp) ::close(pfd);
             if (ok) {
                 SystemLogger::info(LOG_COMPONENT,
@@ -1063,21 +1212,23 @@ bool V4L2DeviceManager::setControl(const std::string& devicePath,
         }
     }
 
-    // 3. Auto-discover linked sub-devices via media-controller BFS and retry.
-    auto subdevs = findLinkedSubDevices(devicePath);
+    // 3. Linked sub-devices — cached from prepareDevice(); live BFS fallback.
+    auto subdevs = cachedLinkedSubDevs(devicePath);
     if (subdevs.empty() && _verbose)
         std::cout << "[DEBUG] V4L2: no linked sub-devices found for " << devicePath << std::endl;
 
     for (const auto& subPath : subdevs) {
-        // Skip if already tried as preferred
         if (prefIt != _preferredSubDevs.end() && subPath == prefIt->second) continue;
         if (_verbose)
             std::cout << "[DEBUG] V4L2: retrying control on subdev " << subPath << std::endl;
         bool stmp = false;
         int sfd = acquireFd(subPath, &stmp);
         if (sfd < 0) continue;
-        // Use stream-pause wrapper for the same reason as above
-        ok = withStreamPaused(devicePath, [&] { return trySet(sfd); });
+        // Fast path: try without pausing stream first.
+        ok = trySet(sfd, subPath);
+        // Slow path: pause and retry only if the fast path failed.
+        if (!ok)
+            ok = withStreamPaused(devicePath, [&] { return trySet(sfd, subPath); });
         if (stmp) ::close(sfd);
         if (ok) {
             SystemLogger::info(LOG_COMPONENT,
@@ -1100,8 +1251,8 @@ int V4L2DeviceManager::getControl(const std::string& devicePath,
 {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
 
-    auto tryGet = [&](int fd) -> int {
-        uint32_t cid = resolveControlId(fd, controlNameOrId);
+    auto tryGet = [&](int fd, const std::string& fdPath) -> int {
+        uint32_t cid = resolveControlIdCached(fdPath, fd, controlNameOrId);
         if (cid == 0) return INT_MIN;
         struct v4l2_control ctrl{};
         ctrl.id = cid;
@@ -1122,31 +1273,31 @@ int V4L2DeviceManager::getControl(const std::string& devicePath,
     int fd = acquireFd(devicePath, &temp);
     int val = INT_MIN;
     if (fd >= 0) {
-        val = tryGet(fd);
+        val = tryGet(fd, devicePath);
         if (temp) ::close(fd);
     }
     if (val != INT_MIN) return val;
 
-    // 2. Try preferred subdev first
+    // 2. Preferred subdev (pinned)
     auto prefIt = _preferredSubDevs.find(devicePath);
     if (prefIt != _preferredSubDevs.end()) {
         const std::string& prefPath = prefIt->second;
         bool ptmp = false;
         int pfd = acquireFd(prefPath, &ptmp);
         if (pfd >= 0) {
-            val = tryGet(pfd);
+            val = tryGet(pfd, prefPath);
             if (ptmp) ::close(pfd);
             if (val != INT_MIN) return val;
         }
     }
 
-    // 3. Linked sub-devices via BFS
-    for (const auto& subPath : findLinkedSubDevices(devicePath)) {
+    // 3. Linked sub-devices — cached from prepareDevice(); live BFS fallback.
+    for (const auto& subPath : cachedLinkedSubDevs(devicePath)) {
         if (prefIt != _preferredSubDevs.end() && subPath == prefIt->second) continue;
         bool stmp = false;
         int sfd = acquireFd(subPath, &stmp);
         if (sfd < 0) continue;
-        val = tryGet(sfd);
+        val = tryGet(sfd, subPath);
         if (stmp) ::close(sfd);
         if (val != INT_MIN) return val;
     }
@@ -1218,8 +1369,8 @@ void V4L2DeviceManager::listControls(const std::string& devicePath) {
         std::cout << "(could not open " << devicePath << ")" << std::endl;
     }
 
-    // 2. Linked sub-devices
-    auto subdevs = findLinkedSubDevices(devicePath);
+    // 2. Linked sub-devices — cached from prepareDevice(); live BFS fallback.
+    auto subdevs = cachedLinkedSubDevs(devicePath);
     for (const auto& subPath : subdevs) {
         bool stmp = false;
         int sfd = acquireFd(subPath, &stmp);

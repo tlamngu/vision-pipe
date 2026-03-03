@@ -5,6 +5,12 @@
 
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
 
+#include <climits>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 namespace visionpipe {
 
 void registerV4L2Items(ItemRegistry& registry);
@@ -102,6 +108,45 @@ class V4L2EnumDevicesItem : public InterpreterItem {
 public:
     V4L2EnumDevicesItem();
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief video_sync: Copy all V4L2 controls (and OpenCV capture properties)
+ *        from a master device to a target device so both cameras run with
+ *        identical settings.
+ *
+ * Parameters:
+ * - master : master device path (e.g. "/dev/video3") or index
+ * - target : device to synchronise (e.g. "/dev/video9") or index
+ * - verbose : (optional bool, default false) log every copied control
+ *
+ * Returns: number of controls successfully synced (INT)
+ *
+ * Example:
+ *   video_sync("/dev/video3", "/dev/video9")  # sync 9 → 3
+ */
+class VideoSyncItem : public InterpreterItem {
+public:
+    VideoSyncItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+    bool modifiesMat() const override { return false; }
+
+private:
+    // -----------------------------------------------------------------------
+    // Per (master, target) sync state – persists across calls so we only
+    // enumerate + test-write once (discovery), then only push deltas.
+    // -----------------------------------------------------------------------
+    struct ControlEntry {
+        std::string name;                   // normalized (lowercase, '_' instead of ' ')
+        int32_t     lastSynced = INT_MIN;   // last value written to target (INT_MIN = never)
+        bool        writable   = false;     // false if target rejected on discovery
+    };
+    struct SyncState {
+        bool                      discovered = false;
+        std::vector<ControlEntry> controls;
+    };
+    std::mutex                                 _stateMutex;
+    std::unordered_map<std::string, SyncState> _syncStates; // key = master+"@"+target
 };
 
 } // namespace visionpipe

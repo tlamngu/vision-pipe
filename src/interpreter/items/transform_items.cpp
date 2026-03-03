@@ -706,23 +706,52 @@ HStackItem::HStackItem() {
 ExecutionResult HStackItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string otherId = args[0].asString();
     cv::Mat other = ctx.cacheManager->get(otherId);
-    
+
+    if (ctx.currentMat.empty() && other.empty())
+        return ExecutionResult::ok(cv::Mat());
     if (ctx.currentMat.empty()) return ExecutionResult::ok(other);
-    if (other.empty()) return ExecutionResult::ok(ctx.currentMat);
-    
-    // Ensure same height
-    if (ctx.currentMat.rows != other.rows) {
-        cv::resize(other, other, cv::Size(other.cols * ctx.currentMat.rows / other.rows, ctx.currentMat.rows));
+    if (other.empty())          return ExecutionResult::ok(ctx.currentMat);
+
+    // Flatten multi-dim Mats (e.g. uninitialized cache entries with dims>2).
+    cv::Mat left  = ctx.currentMat;
+    cv::Mat right = other;
+    if (left.dims  > 2) left  = left.reshape(0, left.size[0]);
+    if (right.dims > 2) right = right.reshape(0, right.size[0]);
+
+    if (left.dims > 2 || right.dims > 2) {
+        return ExecutionResult::fail(
+            "hstack: cannot concatenate Mats with more than 2 dimensions "
+            "(left.dims=" + std::to_string(left.dims) +
+            ", right.dims=" + std::to_string(right.dims) + ")");
     }
-    
-    // Ensure same type
-    if (ctx.currentMat.type() != other.type()) {
-        other.convertTo(other, ctx.currentMat.type());
+
+    // Normalize channel count first, then depth.
+    if (left.channels() != right.channels()) {
+        if (left.channels() == 1)
+            cv::cvtColor(left,  left,  cv::COLOR_GRAY2BGR);
+        else if (right.channels() == 1)
+            cv::cvtColor(right, right, cv::COLOR_GRAY2BGR);
+        // If they still differ, convert right to match left.
+        if (left.channels() != right.channels())
+            cv::cvtColor(right, right, cv::COLOR_BGR2BGRA);
     }
-    
+    if (left.depth() != right.depth())
+        right.convertTo(right, left.type());
+
+    // Normalize height: resize right so rows == left.rows exactly.
+    if (left.rows != right.rows) {
+        int newW = std::max(1, (int)std::round(
+            (double)right.cols * left.rows / right.rows));
+        cv::resize(right, right, cv::Size(newW, left.rows));
+    }
+
     cv::Mat result;
-    cv::hconcat(ctx.currentMat, other, result);
-    
+    try {
+        cv::hconcat(left, right, result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail(
+            std::string("hstack (hconcat) failed: ") + e.what());
+    }
     return ExecutionResult::ok(result);
 }
 
@@ -745,23 +774,49 @@ VStackItem::VStackItem() {
 ExecutionResult VStackItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string otherId = args[0].asString();
     cv::Mat other = ctx.cacheManager->get(otherId);
-    
+
+    if (ctx.currentMat.empty() && other.empty())
+        return ExecutionResult::ok(cv::Mat());
     if (ctx.currentMat.empty()) return ExecutionResult::ok(other);
-    if (other.empty()) return ExecutionResult::ok(ctx.currentMat);
-    
-    // Ensure same width
-    if (ctx.currentMat.cols != other.cols) {
-        cv::resize(other, other, cv::Size(ctx.currentMat.cols, other.rows * ctx.currentMat.cols / other.cols));
+    if (other.empty())          return ExecutionResult::ok(ctx.currentMat);
+
+    cv::Mat top    = ctx.currentMat;
+    cv::Mat bottom = other;
+    if (top.dims    > 2) top    = top.reshape(0, top.size[0]);
+    if (bottom.dims > 2) bottom = bottom.reshape(0, bottom.size[0]);
+
+    if (top.dims > 2 || bottom.dims > 2) {
+        return ExecutionResult::fail(
+            "vstack: cannot concatenate Mats with more than 2 dimensions "
+            "(top.dims=" + std::to_string(top.dims) +
+            ", bottom.dims=" + std::to_string(bottom.dims) + ")");
     }
-    
-    // Ensure same type
-    if (ctx.currentMat.type() != other.type()) {
-        other.convertTo(other, ctx.currentMat.type());
+
+    if (top.channels() != bottom.channels()) {
+        if (top.channels() == 1)
+            cv::cvtColor(top,    top,    cv::COLOR_GRAY2BGR);
+        else if (bottom.channels() == 1)
+            cv::cvtColor(bottom, bottom, cv::COLOR_GRAY2BGR);
+        if (top.channels() != bottom.channels())
+            cv::cvtColor(bottom, bottom, cv::COLOR_BGR2BGRA);
     }
-    
+    if (top.depth() != bottom.depth())
+        bottom.convertTo(bottom, top.type());
+
+    // Normalize width: resize bottom so cols == top.cols exactly.
+    if (top.cols != bottom.cols) {
+        int newH = std::max(1, (int)std::round(
+            (double)bottom.rows * top.cols / bottom.cols));
+        cv::resize(bottom, bottom, cv::Size(top.cols, newH));
+    }
+
     cv::Mat result;
-    cv::vconcat(ctx.currentMat, other, result);
-    
+    try {
+        cv::vconcat(top, bottom, result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail(
+            std::string("vstack (vconcat) failed: ") + e.what());
+    }
     return ExecutionResult::ok(result);
 }
 

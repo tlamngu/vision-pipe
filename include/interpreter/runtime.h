@@ -2,6 +2,8 @@
 #define VISIONPIPE_RUNTIME_H
 
 #include "interpreter/interpreter.h"
+#include "interpreter/param_store.h"
+#include "interpreter/param_server.h"
 #include <string>
 #include <memory>
 #include <functional>
@@ -240,10 +242,85 @@ public:
      * @brief Stop documentation server
      */
     void stopDocsServer();
+
+    // =========================================================================
+    // Runtime parameter API
+    // =========================================================================
+
+    /**
+     * @brief Set a runtime parameter (accessible via @name in VSP).
+     *        Creates the parameter if not declared via params [].
+     */
+    void setParam(const std::string& name, const ParamValue& value);
+    void setParam(const std::string& name, int64_t value);
+    void setParam(const std::string& name, int value);
+    void setParam(const std::string& name, double value);
+    void setParam(const std::string& name, const std::string& value);
+    void setParam(const std::string& name, bool value);
+
+    /**
+     * @brief Get a runtime parameter value.
+     */
+    ParamValue getParam(const std::string& name) const;
+
+    /**
+     * @brief Check whether a parameter exists.
+     */
+    bool hasParam(const std::string& name) const;
+
+    /**
+     * @brief List all current parameter values.
+     */
+    std::unordered_map<std::string, ParamValue> listParams() const;
+
+    /**
+     * @brief Subscribe to parameter changes.
+     * @param name  Parameter name, or "*" for all parameters.
+     * @return Subscription ID (for unsubscription).
+     */
+    uint64_t onParamChange(const std::string& name, ParamChangeCallback cb);
+    uint64_t onAnyParamChange(ParamChangeCallback cb);
+
+    /**
+     * @brief Remove a param change subscription.
+     */
+    void removeParamSubscription(uint64_t id);
+
+    /**
+     * @brief Get the shared parameter store.
+     */
+    std::shared_ptr<ParameterStore> paramStore() const { return _paramStore; }
+
+    // =========================================================================
+    // Param server
+    // =========================================================================
+
+    /**
+     * @brief Explicitly enable the TCP parameter server.
+     *        The server is also auto-started when `params [...]` is present
+     *        in a script.  Call this to force-enable even without a params block.
+     * @param startPort First port to try (default: 8765).
+     * @return Bound port, or -1 on failure.
+     */
+    int enableParamServer(int startPort = 8765);
+
+    /**
+     * @brief Stop the TCP parameter server.
+     */
+    void disableParamServer();
+
+    /**
+     * @brief Get the port the param server is listening on (0 if not started).
+     */
+    int paramServerPort() const;
     
 private:
     RuntimeConfig _config;
     Interpreter _interpreter;
+
+    // Runtime parameter store & server
+    std::shared_ptr<ParameterStore> _paramStore;
+    std::unique_ptr<ParamServer>    _paramServer;
     
     // State
     std::atomic<bool> _running{false};

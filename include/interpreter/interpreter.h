@@ -4,12 +4,17 @@
 #include "interpreter/ast.h"
 #include "interpreter/item_registry.h"
 #include "interpreter/cache_manager.h"
+#include "interpreter/param_store.h"
 #include <string>
 #include <memory>
 #include <atomic>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <functional>
 #include <stack>
+#include <queue>
+#include <condition_variable>
 
 namespace visionpipe {
 
@@ -162,6 +167,21 @@ public:
      * @brief Check if a variable exists
      */
     bool hasVariable(const std::string& name) const;
+
+    // =========================================================================
+    // Runtime parameter store
+    // =========================================================================
+
+    /**
+     * @brief Attach a shared ParameterStore.
+     *        Must be called before execute() to have effect.
+     */
+    void setParamStore(std::shared_ptr<ParameterStore> store);
+
+    /**
+     * @brief Get the current ParameterStore (may be null).
+     */
+    std::shared_ptr<ParameterStore> paramStore() const { return _paramStore; }
     
     // =========================================================================
     // State management
@@ -202,6 +222,24 @@ private:
     ItemRegistry _registry;
     CacheManager _cacheManager;
     ExecutionContext _context;
+
+    // Runtime parameter store (shared across main + workers)
+    std::shared_ptr<ParameterStore> _paramStore;
+
+    // Pending on_params handler bodies to execute on loop thread
+    struct ParamHandlerBody {
+        std::vector<std::shared_ptr<Statement>> statements;
+    };
+    std::queue<ParamHandlerBody>  _pendingParamHandlers;
+    std::mutex                    _pendingParamMutex;
+
+    // Registered on_params handlers (paramName -> body)
+    struct OnParamsHandler {
+        std::string                              paramName;  // "*" = all
+        std::vector<std::shared_ptr<Statement>>  body;
+        uint64_t                                 subscriptionId = 0;
+    };
+    std::vector<OnParamsHandler> _onParamsHandlers;
     
     // Loaded programs and pipelines
     std::vector<std::shared_ptr<Program>> _loadedPrograms;
@@ -220,6 +258,45 @@ private:
     std::string _lastError;
     size_t _recursionDepth = 0;
     uint64_t _framesProcessed = 0;
+
+    // =========================================================================
+    // exec_multi worker pool
+    //
+    // Child Interpreter objects are expensive to construct each frame (they
+    // copy the full _pipelines and _registry maps).  We keep one pool per
+    // exec_multi usage, identified by the number of parallel pipelines.  If
+    // the topology stays constant (the common case), workers are initialised
+    // once and reused every frame; only their context / local state is reset
+    // between iterations.
+    // =========================================================================
+    struct MultiWorker {
+        std::unique_ptr<Interpreter> interp;
+        std::string pipelineName;   // which pipeline this slot runs
+    };
+    std::vector<MultiWorker> _multiWorkers;
+    // Sentinel: pipeline names at last init; used to detect topology changes.
+    std::vector<std::string> _multiWorkerTopology;
+
+    // =========================================================================
+    // exec_interval worker pool
+    //
+    // Each exec_interval spawns a background thread that loops, sleeping for
+    // the given interval, then executing the named pipeline.  no_interval
+    // sets the stop flag to terminate the thread.
+    // =========================================================================
+    struct IntervalWorker {
+        std::thread workerThread;
+        std::atomic<bool> stop{false};
+        std::unique_ptr<Interpreter> interp;  // dedicated child interpreter
+    };
+    // Key: pipeline name (or first pipeline name for multi)
+    std::unordered_map<std::string, std::shared_ptr<IntervalWorker>> _intervalWorkers;
+    std::mutex _intervalMutex;  // protect _intervalWorkers map
+
+    // =========================================================================
+    // Debug dump flag
+    // =========================================================================
+    bool _debugDump = false;  // set by debug_start, cleared by debug_end
     
     // =========================================================================
     // Internal execution methods
@@ -235,6 +312,13 @@ private:
     void execExecSeq(ExecSeqStmt* stmt);
     void execExecMulti(ExecMultiStmt* stmt);
     void execExecLoop(ExecLoopStmt* stmt);
+    void execExecInterval(ExecIntervalStmt* stmt);
+    void execNoInterval(NoIntervalStmt* stmt);
+    void execExecIntervalMulti(ExecIntervalMultiStmt* stmt);
+    void execExecRtSeq(ExecRtSeqStmt* stmt);
+    void execExecRtMulti(ExecRtMultiStmt* stmt);
+    void execDebugStart(DebugStartStmt* stmt);
+    void execDebugEnd(DebugEndStmt* stmt);
     void execUse(UseStmt* stmt);
     void execCache(CacheStmt* stmt);
     void execGlobalPromote(GlobalStmt* stmt);
@@ -254,6 +338,7 @@ private:
     RuntimeValue evalCacheAccess(CacheAccessExpr* expr);
     RuntimeValue evalCacheLoad(CacheLoadExpr* expr);
     RuntimeValue evalArray(ArrayExpr* expr);
+    RuntimeValue evalParamRef(ParamRefExpr* expr);
     
     // Pipeline execution
     cv::Mat executePipelineDecl(PipelineDecl* pipeline, 
@@ -270,6 +355,12 @@ private:
     // Utility
     void reportError(const std::string& message, const SourceLocation& loc);
     void checkRecursionLimit();
+
+    // exec_multi helpers
+    void initMultiWorkers(const std::vector<std::string>& names,
+                          std::shared_ptr<GlobalCacheData> sharedGlobal);
+    void resetWorkerState(Interpreter& worker, const cv::Mat& inputMat,
+                          std::shared_ptr<GlobalCacheData> sharedGlobal);
 };
 
 } // namespace visionpipe

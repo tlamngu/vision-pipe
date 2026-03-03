@@ -50,6 +50,10 @@ void registerBuiltinItems(ItemRegistry& registry) {
     registry.add<CacheItem>();
     registry.add<PassItem>();
     registry.add<SleepItem>();
+
+    // Mat Geometry
+    registry.add<MatSizeItem>();
+    registry.add<MatChannelsItem>();
     
     // Drawing
     registry.add<DrawTextItem>();
@@ -1092,32 +1096,52 @@ ExecutionResult HStackItem::execute(const std::vector<RuntimeValue>& args, Execu
     if (!ctx.cacheManager) {
         return ExecutionResult::fail("No cache manager");
     }
-    
-    cv::Mat left = ctx.cacheManager->get(args[0].asString());
+
+    cv::Mat left  = ctx.cacheManager->get(args[0].asString());
     cv::Mat right = ctx.cacheManager->get(args[1].asString());
-    
-    if (left.empty() || right.empty()) {
-        return ExecutionResult::fail("Could not load frames from cache");
+
+    if (left.empty() && right.empty())
+        return ExecutionResult::ok(cv::Mat());
+    if (left.empty())  return ExecutionResult::ok(right);
+    if (right.empty()) return ExecutionResult::ok(left);
+
+    // Flatten multi-dim Mats.
+    if (left.dims  > 2) left  = left.reshape(0, left.size[0]);
+    if (right.dims > 2) right = right.reshape(0, right.size[0]);
+
+    if (left.dims > 2 || right.dims > 2) {
+        return ExecutionResult::fail(
+            "hstack: cannot concatenate Mats with more than 2 dimensions "
+            "(left.dims=" + std::to_string(left.dims) +
+            ", right.dims=" + std::to_string(right.dims) + ")");
     }
-    
-    // Ensure same type
-    if (left.type() != right.type()) {
-        if (left.channels() > right.channels()) {
+
+    // Normalize channels, then depth.
+    if (left.channels() != right.channels()) {
+        if (left.channels() == 1)
+            cv::cvtColor(left,  left,  cv::COLOR_GRAY2BGR);
+        else if (right.channels() == 1)
             cv::cvtColor(right, right, cv::COLOR_GRAY2BGR);
-        } else if (right.channels() > left.channels()) {
-            cv::cvtColor(left, left, cv::COLOR_GRAY2BGR);
-        }
+        if (left.channels() != right.channels())
+            cv::cvtColor(right, right, cv::COLOR_BGR2BGRA);
     }
-    
-    // Ensure same height
+    if (left.depth() != right.depth())
+        right.convertTo(right, left.type());
+
+    // Normalize height.
     if (left.rows != right.rows) {
-        double scale = static_cast<double>(left.rows) / right.rows;
-        cv::resize(right, right, cv::Size(), scale, scale);
+        int newW = std::max(1, (int)std::round(
+            (double)right.cols * left.rows / right.rows));
+        cv::resize(right, right, cv::Size(newW, left.rows));
     }
-    
+
     cv::Mat result;
-    cv::hconcat(left, right, result);
-    
+    try {
+        cv::hconcat(left, right, result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail(
+            std::string("hstack (hconcat) failed: ") + e.what());
+    }
     return ExecutionResult::ok(result);
 }
 
@@ -1139,31 +1163,51 @@ ExecutionResult VStackItem::execute(const std::vector<RuntimeValue>& args, Execu
         return ExecutionResult::fail("No cache manager");
     }
     
-    cv::Mat top = ctx.cacheManager->get(args[0].asString());
+    cv::Mat top    = ctx.cacheManager->get(args[0].asString());
     cv::Mat bottom = ctx.cacheManager->get(args[1].asString());
-    
-    if (top.empty() || bottom.empty()) {
-        return ExecutionResult::fail("Could not load frames from cache");
+
+    if (top.empty() && bottom.empty())
+        return ExecutionResult::ok(cv::Mat());
+    if (top.empty())    return ExecutionResult::ok(bottom);
+    if (bottom.empty()) return ExecutionResult::ok(top);
+
+    // Flatten multi-dim Mats.
+    if (top.dims    > 2) top    = top.reshape(0, top.size[0]);
+    if (bottom.dims > 2) bottom = bottom.reshape(0, bottom.size[0]);
+
+    if (top.dims > 2 || bottom.dims > 2) {
+        return ExecutionResult::fail(
+            "vstack: cannot concatenate Mats with more than 2 dimensions "
+            "(top.dims=" + std::to_string(top.dims) +
+            ", bottom.dims=" + std::to_string(bottom.dims) + ")");
     }
-    
-    // Ensure same type
-    if (top.type() != bottom.type()) {
-        if (top.channels() > bottom.channels()) {
+
+    // Normalize channels, then depth.
+    if (top.channels() != bottom.channels()) {
+        if (top.channels() == 1)
+            cv::cvtColor(top,    top,    cv::COLOR_GRAY2BGR);
+        else if (bottom.channels() == 1)
             cv::cvtColor(bottom, bottom, cv::COLOR_GRAY2BGR);
-        } else if (bottom.channels() > top.channels()) {
-            cv::cvtColor(top, top, cv::COLOR_GRAY2BGR);
-        }
+        if (top.channels() != bottom.channels())
+            cv::cvtColor(bottom, bottom, cv::COLOR_BGR2BGRA);
     }
-    
-    // Ensure same width
+    if (top.depth() != bottom.depth())
+        bottom.convertTo(bottom, top.type());
+
+    // Normalize width.
     if (top.cols != bottom.cols) {
-        double scale = static_cast<double>(top.cols) / bottom.cols;
-        cv::resize(bottom, bottom, cv::Size(), scale, scale);
+        int newH = std::max(1, (int)std::round(
+            (double)bottom.rows * top.cols / bottom.cols));
+        cv::resize(bottom, bottom, cv::Size(top.cols, newH));
     }
-    
+
     cv::Mat result;
-    cv::vconcat(top, bottom, result);
-    
+    try {
+        cv::vconcat(top, bottom, result);
+    } catch (const cv::Exception& e) {
+        return ExecutionResult::fail(
+            std::string("vstack (vconcat) failed: ") + e.what());
+    }
     return ExecutionResult::ok(result);
 }
 
@@ -1244,6 +1288,63 @@ ExecutionResult FlipItem::execute(const std::vector<RuntimeValue>& args, Executi
     cv::flip(ctx.currentMat, flipped, flipCode);
     
     return ExecutionResult::ok(flipped);
+}
+
+// ============================================================================
+// Mat Geometry Utilities
+// ============================================================================
+
+MatSizeItem::MatSizeItem() {
+    _functionName = "mat_size";
+    _description  = "Returns or checks the size of the current Mat.\n"
+                    "  mat_size()        -> [width, height]\n"
+                    "  mat_size(w, h)    -> bool (true if mat is w x h)\n"
+                    "  mat_size(w, h, c) -> bool (true if mat is w x h with c channels)";
+    _category     = "control";
+    _params = {
+        ParamDef::optional("width",    BaseType::INT, "Expected width",    RuntimeValue(0)),
+        ParamDef::optional("height",   BaseType::INT, "Expected height",   RuntimeValue(0)),
+        ParamDef::optional("channels", BaseType::INT, "Expected channels", RuntimeValue(-1)),
+    };
+    _example   = "if mat_size(640, 480)";
+    _returnType = "bool or array";
+    _tags = {"mat", "size", "control", "debug"};
+}
+
+ExecutionResult MatSizeItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    const cv::Mat& mat = ctx.currentMat;
+
+    if (args.empty()) {
+        // Return [width, height] as an array.
+        std::vector<RuntimeValue> sz;
+        sz.emplace_back(static_cast<int64_t>(mat.cols));
+        sz.emplace_back(static_cast<int64_t>(mat.rows));
+        return ExecutionResult::ok(RuntimeValue(std::move(sz)));
+    }
+
+    int64_t expectedW = args[0].asInt();
+    int64_t expectedH = (args.size() > 1) ? args[1].asInt() : -1;
+    int64_t expectedC = (args.size() > 2) ? args[2].asInt() : -1;
+
+    bool match = (mat.cols == expectedW);
+    if (expectedH >= 0) match = match && (mat.rows == expectedH);
+    if (expectedC >= 0) match = match && (mat.channels() == expectedC);
+
+    return ExecutionResult::ok(RuntimeValue(match));
+}
+
+MatChannelsItem::MatChannelsItem() {
+    _functionName = "mat_channels";
+    _description  = "Returns the number of channels in the current Mat.";
+    _category     = "control";
+    _params       = {};
+    _example      = "if mat_channels() == 3";
+    _returnType   = "int";
+    _tags = {"mat", "channels", "control"};
+}
+
+ExecutionResult MatChannelsItem::execute(const std::vector<RuntimeValue>& /*args*/, ExecutionContext& ctx) {
+    return ExecutionResult::ok(RuntimeValue(static_cast<int64_t>(ctx.currentMat.channels())));
 }
 
 // ============================================================================
