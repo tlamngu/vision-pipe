@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(VisionPipe VERSION 1.2.1 LANGUAGES CXX)
+project(VisionPipe VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -281,6 +281,7 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/ip_stream_items.cpp
     src/interpreter/items/auto_exposure_items.cpp
     src/interpreter/items/gpu_debayer_items.cpp
+    src/interpreter/items/frame_sink_items.cpp
 )
 
 # IP Stream sources (optional feature)
@@ -614,6 +615,111 @@ if(VISIONPIPE_BUILD_CLI)
 endif()
 
 # ============================================================================
+# Shared Library Target - libvisionpipe (client library)
+# ============================================================================
+option(VISIONPIPE_WITH_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
+option(LIB_VISIONPIPE_EXAMPLE "Build libvisionpipe example program" OFF)
+
+if(VISIONPIPE_WITH_LIBVISIONPIPE)
+    set(LIBVISIONPIPE_SOURCES
+        src/libvisionpipe/frame_transport.cpp
+        src/libvisionpipe/libvisionpipe.cpp
+    )
+
+    add_library(visionpipe_client SHARED ${LIBVISIONPIPE_SOURCES})
+    target_include_directories(visionpipe_client PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(visionpipe_client PUBLIC
+        ${OpenCV_LIBS}
+        Threads::Threads
+    )
+    # POSIX shared memory: -lrt needed on Linux (on macOS it's in libc)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_client PUBLIC rt)
+    endif()
+    target_compile_definitions(visionpipe_client PRIVATE LIBVISIONPIPE_BUILDING)
+    set_target_properties(visionpipe_client PROPERTIES
+        OUTPUT_NAME "visionpipe"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1
+    )
+
+    # Also link frame_transport into visionpipe_core so the frame_sink item can use it
+    target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
+    target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(visionpipe_core PUBLIC rt)
+    endif()
+
+    install(TARGETS visionpipe_client
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+    install(DIRECTORY include/libvisionpipe/
+        DESTINATION include/libvisionpipe
+        FILES_MATCHING PATTERN "*.h"
+    )
+
+    message(STATUS "libvisionpipe shared library: ENABLED")
+
+    # Optional: build example program
+    if(LIB_VISIONPIPE_EXAMPLE)
+        add_executable(libvisionpipe_example examples/example_libvisionpipe.cpp)
+        target_include_directories(libvisionpipe_example PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${OpenCV_INCLUDE_DIRS}
+        )
+        target_link_libraries(libvisionpipe_example PRIVATE
+            visionpipe_client
+            ${OpenCV_LIBS}
+            Threads::Threads
+        )
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(libvisionpipe_example PRIVATE rt)
+        endif()
+        set_target_properties(libvisionpipe_example PROPERTIES
+            OUTPUT_NAME "libvisionpipe_example"
+        )
+        message(STATUS "libvisionpipe example: ENABLED")
+    endif()
+endif()
+
+# ============================================================================
+# Python Bindings - pyvisionpipe
+# ============================================================================
+option(VISIONPIPE_WITH_PYTHON "Build Python bindings (pyvisionpipe)" OFF)
+
+if(VISIONPIPE_WITH_PYTHON)
+    if(NOT VISIONPIPE_WITH_LIBVISIONPIPE)
+        message(FATAL_ERROR "VISIONPIPE_WITH_PYTHON requires VISIONPIPE_WITH_LIBVISIONPIPE=ON")
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+    find_package(pybind11 REQUIRED)
+
+    pybind11_add_module(pyvisionpipe python/pyvisionpipe.cpp)
+    target_link_libraries(pyvisionpipe PRIVATE
+        visionpipe_client
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(pyvisionpipe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+
+    # Install to Python site-packages
+    install(TARGETS pyvisionpipe
+        LIBRARY DESTINATION "${Python3_SITEARCH}"
+    )
+
+    message(STATUS "Python bindings (pyvisionpipe): ENABLED")
+    message(STATUS "  Python: ${Python3_EXECUTABLE} (${Python3_VERSION})")
+endif()
+
+# ============================================================================
 # Install Configuration
 # ============================================================================
 install(TARGETS visionpipe_core visionpipe_interpreter
@@ -672,5 +778,8 @@ message(STATUS "  SIMD:           ${VISIONPIPE_ENABLE_SIMD}")
 message(STATUS "  LTO:            ${VISIONPIPE_ENABLE_LTO}")
 message(STATUS "  LibCamera:      ${LIBCAMERA_BACKEND}")
 message(STATUS "  V4L2 Native:    ${V4L2_NATIVE_BACKEND}")
+message(STATUS "  libvisionpipe:  ${VISIONPIPE_WITH_LIBVISIONPIPE}")
+message(STATUS "  libvp example: ${LIB_VISIONPIPE_EXAMPLE}")
+message(STATUS "  Python bind:   ${VISIONPIPE_WITH_PYTHON}")
 message(STATUS "========================================")
 message(STATUS "")
