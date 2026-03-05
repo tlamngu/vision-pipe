@@ -1,0 +1,147 @@
+# stereo_multiprocess.vsp
+#
+# Dual-camera stereo with PROCESS-BASED capture (exec_fork).
+#
+# ── Process layout ──────────────────────────────────────────────────────────
+#
+#   Process 0 (parent)    exec_loop main
+#     ├─ use(global "frame_l/r")  ← auto-reads from child shared memory
+#     ├─ calc stabilization       (sequential)
+#     └─ display                  (sequential, GUI thread)
+#
+#   Process 1 (child)     exec_fork capture_left
+#     └─ v4l2_cap → debayer → global_cache   (auto-publishes via shm)
+#
+#   Process 2 (child)     exec_fork capture_right
+#     └─ v4l2_cap → debayer → global_cache   (auto-publishes via shm)
+#
+#   Background (parent)   exec_interval brightness_adjustment 100ms
+#
+# The global_cache / use(global) model works transparently across processes.
+# No manual shm_create / shm_write / shm_read needed.
+# Ctrl+C cleanly terminates child processes.
+#
+
+global movement_matrix
+
+# ────────────────────────────────────────────────────────────────────────────
+# One-shot setup (runs in parent BEFORE fork)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline setup
+
+    # Camera Left  → /dev/video9
+    v4l2_setup("/dev/video9", 1640, 1232, "SRGGB8", 60, 4)
+    v4l2_prop("/dev/video9", "vertical_flip", 1)
+    v4l2_prop("/dev/video9", "exposure",      1600)
+    v4l2_prop("/dev/video9", "analogue_gain", 232)
+    v4l2_prop("/dev/video9", "digital_gain",  700)
+
+    # Camera Right → /dev/video3
+    v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 60, 4)
+    v4l2_prop("/dev/video3", "vertical_flip", 1)
+    v4l2_prop("/dev/video3", "exposure",      1600)
+    v4l2_prop("/dev/video3", "analogue_gain", 232)
+    v4l2_prop("/dev/video3", "digital_gain",  700)
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Capture pipelines (each runs in its own CHILD PROCESS via exec_fork)
+#
+# global_cache() inside a fork child automatically publishes the frame
+# to POSIX shared memory.  The parent reads it back transparently when
+# use(global "frame_l") is called.
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline capture_left
+    video_cap("/dev/video9", "v4l2_native")
+    debayer("GRBG")
+    stabilization_apply(movement_matrix)
+    cvt_color("bgr2gray")
+    global_cache("frame_l")
+end
+
+pipeline capture_right
+    video_cap("/dev/video3", "v4l2_native")
+    debayer("GRBG")
+    stabilization_apply(movement_matrix)
+    cvt_color("bgr2gray")
+    global_cache("frame_r")
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Stabilization (runs in parent, sequential)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline calculate_stabilization
+
+    use(global "frame_l")
+    resize(480, 320)
+    movement_matrix_l = stabilization_calculate("cam_l", 0.8, 0.6)
+
+    use(global "frame_r")
+    resize(480, 320)
+    movement_matrix_r = stabilization_calculate("cam_r", 0.8, 0.6)
+
+    global movement_matrix = matrix_avg(movement_matrix_l, movement_matrix_r)
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Brightness (background, parent process)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline brightness_adjustment
+    use(global "frame_r")
+    resize(480, 320)
+    adaptive_auto_brightness("/dev/video3",
+        exposure_prop="exposure",         min_exposure=4,   max_exposure=1703,
+        analog_gain_prop="analogue_gain", min_analog_gain=0, max_analog_gain=232,
+        digital_gain_prop="digital_gain", target=100, brightness_mode="median")
+    video_sync("/dev/video3", "/dev/video9")
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Display (must be main/GUI thread)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline display
+    use(global "frame_l") -> "frame_left"
+    use(global "frame_r")
+    hstack("frame_left")
+
+    fps(true, 10, 30)
+    imshow("Stereo — multiprocess")
+
+    key = wait_key(1)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Main loop (parent — reads shm transparently via use(global))
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline main
+    exec_seq calculate_stabilization
+    exec_seq display
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Entry points
+#   1. setup                         (configure cameras)
+#   2. exec_fork capture_left/right  (launch child processes BEFORE loop)
+#   3. brightness background thread
+#   4. exec_loop main                (parent main loop)
+# ────────────────────────────────────────────────────────────────────────────
+
+exec_seq setup
+exec_fork capture_left
+exec_fork capture_right
+exec_interval brightness_adjustment 100
+exec_loop main

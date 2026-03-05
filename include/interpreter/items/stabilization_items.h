@@ -1,6 +1,8 @@
 #ifndef VISIONPIPE_STABILIZATION_ITEMS_H
 #define VISIONPIPE_STABILIZATION_ITEMS_H
 
+#include <unordered_map>
+#include <string>
 #include "interpreter/item_registry.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/video.hpp>
@@ -225,6 +227,114 @@ private:
     /// Build the 2×3 counter-transform matrix for the current accumulated state.
     cv::Mat buildCorrectionMatrix(double corrA, double corrX, double corrY,
                                   double W, double H, bool crop) const;
+};
+
+// ============================================================================
+// Split stabilization: calculate + apply
+// ============================================================================
+
+/**
+ * @brief Compute the stabilization correction transform without applying it.
+ *
+ * Tracks feature points and accumulates the camera-motion trajectory exactly
+ * like video_stabilize, but instead of warping the frame it returns the 2×3
+ * affine correction matrix as a value so it can be stored in a variable and
+ * forwarded to stabilization_apply — potentially on a different frame or
+ * camera view.
+ *
+ * The current frame passes through unchanged (outputMat = input frame).
+ * The correction matrix is the scalar return value of the call.
+ *
+ * Algorithm
+ * ---------
+ *  1. Shi-Tomasi / Lucas-Kanade PyrLK optical flow (same as video_stabilize).
+ *  2. estimateAffinePartial2D (RANSAC) → Δx, Δy, Δθ.
+ *  3. EMA noise-filter, integrate, decay.
+ *  4. Build 2×3 counter-transform matrix (rotation about frame centre + translation).
+ *  5. Return that matrix as the call's value; frame flows through unchanged.
+ *
+ * Parameters
+ * ----------
+ * - delta_smooth  FLOAT  EMA coefficient for per-frame delta noise [0,1) (default 0.5).
+ * - drift_decay   FLOAT  Per-frame decay ∈ (0,1]. 1.0 = hard lock (default 0.997).
+ * - max_points    INT    Max Shi-Tomasi corners (default 200).
+ * - quality       FLOAT  Shi-Tomasi quality level (default 0.01).
+ * - min_distance  FLOAT  Min corner distance in px (default 10).
+ * - reset         BOOL   Clear state and restart (default false).
+ *
+ * Returns
+ * -------
+ *   mat  A 2×3 CV_64F affine correction matrix (identity on the first frame).
+ *        Pass this directly to stabilization_apply().
+ *
+ * Example
+ * -------
+ *   movement_matrix = stabilization_calculate()
+ *   stabilization_apply(movement_matrix)
+ *
+ *   // Apply same matrix to a second (cached) frame:
+ *   movement_matrix = stabilization_calculate()
+ *   stabilization_apply(movement_matrix)
+ *   use("other_cam") | stabilization_apply(movement_matrix)
+ */
+class VideoStabilizeCalculateItem : public InterpreterItem {
+public:
+    VideoStabilizeCalculateItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+
+private:
+    // Per-stream state so callers for different camera streams (identified by
+    // the optional 'id' argument) don't pollute each other's optical-flow
+    // accumulator.
+    struct StreamState {
+        cv::Mat  prevGray;
+        std::vector<cv::Point2f> prevPts;
+        double accX = 0.0;
+        double accY = 0.0;
+        double accA = 0.0;
+        double smoothDx = 0.0;
+        double smoothDy = 0.0;
+        double smoothDa = 0.0;
+        bool initialised = false;
+    };
+    std::unordered_map<std::string, StreamState> _streams;
+
+    static std::vector<cv::Point2f> detectPoints(const cv::Mat& gray,
+                                                  int maxPoints,
+                                                  double quality,
+                                                  double minDist);
+};
+
+/**
+ * @brief Apply a pre-computed stabilization correction matrix to the current frame.
+ *
+ * Receives the 2×3 affine correction matrix produced by stabilization_calculate()
+ * and warps the current frame with it. Optionally scales the result to hide the
+ * black borders introduced by the warp.
+ *
+ * Parameters
+ * ----------
+ * - movement_matrix  MAT   2×3 CV_64F correction matrix from stabilization_calculate()
+ *                          (required — pass the variable returned by that call).
+ * - crop             BOOL  Scale-crop to hide warp borders (default true).
+ *
+ * Returns
+ * -------
+ *   mat  The stabilised frame.
+ *
+ * Example
+ * -------
+ *   movement_matrix = stabilization_calculate()
+ *   stabilization_apply(movement_matrix)
+ *
+ *   // Decouple: compute on left, apply to right:
+ *   movement_matrix = stabilization_calculate()
+ *   use("right_cam") | stabilization_apply(movement_matrix)
+ */
+class VideoStabilizeApplyItem : public InterpreterItem {
+public:
+    VideoStabilizeApplyItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
 } // namespace visionpipe

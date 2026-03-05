@@ -8,9 +8,13 @@
 #include <shared_mutex>
 #include <memory>
 #include <optional>
+#include <atomic>
 #include <opencv2/core/mat.hpp>
 
 namespace visionpipe {
+
+// Forward declaration — full definition in utils/shm_zero_copy.h
+struct ShmArena;
 
 /**
  * @brief Cache entry with metadata
@@ -63,6 +67,17 @@ public:
     void replaceGlobalData(std::shared_ptr<GlobalCacheData> sharedGlobal) {
         _sharedGlobal = std::move(sharedGlobal);
     }
+
+    /// Mark this CacheManager as running inside a fork() child process.
+    /// When set, setGlobal() will also write frames to the SHM arena.
+    void setForkChild(bool v) { _isForkChild = v; }
+
+    /// Mark this CacheManager as having active fork children.
+    /// When set, getGlobal() reads from the SHM arena (zero-copy).
+    void setHasForkChildren(bool v) { _hasForkChildren = v; }
+
+    /// Set the shared-memory arena (created before fork, inherited by children).
+    void setShmArena(ShmArena* arena) { _shmArena = arena; }
     
     // =========================================================================
     // Global cache operations
@@ -212,6 +227,11 @@ public:
 private:
     // Global cache (shared across all pipelines and, optionally, across threads)
     std::shared_ptr<GlobalCacheData> _sharedGlobal;
+
+    // SHM bridge flags
+    bool _isForkChild     = false;  ///< True in fork() child — setGlobal writes to arena
+    bool _hasForkChildren = false;  ///< True in parent — getGlobal reads from arena
+    ShmArena* _shmArena   = nullptr; ///< Anonymous mmap arena (set before fork)
 
     // Local cache stack — strictly owned by this CacheManager instance.
     // No mutex needed: local scopes are only accessed by the thread that owns

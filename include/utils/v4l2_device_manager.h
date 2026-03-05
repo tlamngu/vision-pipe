@@ -162,9 +162,12 @@ public:
      */
     void clearPreferredSubDev(const std::string& videoDevPath);
 
-private:
+    // Public constructor/destructor to allow owned instances (e.g. per
+    // CameraDeviceManager).  The singleton instance() is still available.
     V4L2DeviceManager() = default;
     ~V4L2DeviceManager();
+
+private:
 
     struct MappedBuffer {
         struct Plane {

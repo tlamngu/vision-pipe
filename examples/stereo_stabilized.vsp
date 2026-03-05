@@ -1,0 +1,180 @@
+# stereo_stabilized.vsp
+#
+# Dual-camera stereo with optical-flow stabilization.
+#
+# ── Thread layout ───────────────────────────────────────────────────────────
+#
+#   Main loop thread   exec_loop main
+#     └─ exec_multi [cap_l, cap_r]   ← worker threads (parallel capture)
+#     └─ exec_seq calculate_stabilization  (sequential, main thread)
+#     └─ exec_seq display                  (sequential, MUST be main thread)
+#
+#   Background thread  exec_interval brightness_adjustment 100ms
+#
+# ── Stabilization timing ────────────────────────────────────────────────────
+#
+#   Frame N:  cap_l / cap_r apply movement_matrix from frame N-1 (1-frame lag)
+#             calculate_stabilization computes movement_matrix for frame N+1
+#   Frame 0:  movement_matrix is void → stabilization_apply is a no-op pass-through
+#
+# ── Per-stream state ────────────────────────────────────────────────────────
+#
+#   stabilization_calculate("cam_l", ...) and stabilization_calculate("cam_r", ...)
+#   maintain independent optical-flow accumulators so left / right do not
+#   cross-contaminate each other's trajectory estimates.
+#
+
+global movement_matrix
+
+# ────────────────────────────────────────────────────────────────────────────
+# One-shot setup
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline setup
+
+    # Camera Left  → /dev/video9
+    v4l2_setup("/dev/video9", 1640, 1232, "SRGGB8", 30, 4)
+    v4l2_prop("/dev/video9", "vertical_flip", 1)
+    v4l2_prop("/dev/video9", "exposure",      1600)
+    v4l2_prop("/dev/video9", "analogue_gain", 232)
+    v4l2_prop("/dev/video9", "digital_gain",  700)
+
+    # Camera Right → /dev/video3
+    v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 30, 4)
+    v4l2_prop("/dev/video3", "vertical_flip", 1)
+    v4l2_prop("/dev/video3", "exposure",      1600)
+    v4l2_prop("/dev/video3", "analogue_gain", 232)
+    v4l2_prop("/dev/video3", "digital_gain",  700)
+
+    print("---- Controls after setup: /dev/video9 ----")
+    v4l2_list_controls("/dev/video9")
+    print("---- Controls after setup: /dev/video3 ----")
+    v4l2_list_controls("/dev/video3")
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Capture pipelines  (run concurrently via exec_multi)
+#
+#   raw Bayer → debayer → stabilize-warp (prev-frame matrix) → grayscale
+#   ↓                                                          ↓
+#   frame discarded                                  stored in global cache
+#
+# Each pipeline writes its result to the global cache under "frame_l" /
+# "frame_r".  These are read by calculate_stabilization and display on the
+# main thread immediately after exec_multi returns.
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline cap_l
+    video_cap("/dev/video9", "v4l2_native")
+    debayer("GRBG")
+    stabilization_apply(movement_matrix)   # void on frame 0 → no-op pass-through
+    cvt_color("bgr2gray")
+    global_cache("frame_l")
+end
+
+pipeline cap_r
+    video_cap("/dev/video3", "v4l2_native")
+    debayer("GRBG")
+    stabilization_apply(movement_matrix)   # void on frame 0 → no-op pass-through
+    cvt_color("bgr2gray")
+    global_cache("frame_r")
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Stabilization matrix calculation  (sequential, main thread)
+#
+#   Reads the freshly-captured gray frames, runs optical-flow / RANSAC on a
+#   small downscaled copy for speed, then averages both camera estimates.
+#   Writes the result to the global variable 'movement_matrix' so cap_l and
+#   cap_r can apply it when capturing the NEXT frame.
+#
+#   "cam_l" / "cam_r" IDs ensure each call maintains its own independent
+#   Shi-Tomasi feature set and accumulator so the two streams do not mix.
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline calculate_stabilization
+
+    use(global "frame_l")
+    resize(480, 320)
+    movement_matrix_l = stabilization_calculate("cam_l", 0.8, 0.6)
+
+    use(global "frame_r")
+    resize(480, 320)
+    movement_matrix_r = stabilization_calculate("cam_r", 0.8, 0.6)
+
+    global movement_matrix = matrix_avg(movement_matrix_l, movement_matrix_r)
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Auto-brightness  (background thread, every 100 ms)
+#
+#   Reads frame_r from the global cache (written by cap_r on the main loop),
+#   estimates median brightness, and adjusts V4L2 exposure / gain for
+#   /dev/video3.  video_sync then mirrors those values to /dev/video9 so
+#   both sensors track identical exposure settings.
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline brightness_adjustment
+
+    use(global "frame_r")
+    resize(480, 320)
+    adaptive_auto_brightness("/dev/video3",
+        exposure_prop="exposure",         min_exposure=4,   max_exposure=1703,
+        analog_gain_prop="analogue_gain", min_analog_gain=0, max_analog_gain=232,
+        digital_gain_prop="digital_gain", target=100, brightness_mode="median")
+    video_sync("/dev/video3", "/dev/video9")
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Display  (sequential, MUST stay on the main thread)
+#
+#   OpenCV imshow / wait_key require the GUI thread (X11 / Wayland) which is
+#   always the process's main thread.  Keep ALL window operations here.
+#
+#   layout: [frame_l | frame_r]   (left eye left, right eye right)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline display
+
+    use(global "frame_l") -> "frame_left"   # load left  → local cache + current mat
+    use(global "frame_r")                   # load right → current mat
+    hstack("frame_left")                    # [frame_l | frame_r]
+
+    fps(true, 10, 30)
+    imshow("Stereo — stabilized")
+
+    key = wait_key(1)
+    if key == 113   # 'q'
+        break
+    end
+    if key == 27    # ESC
+        break
+    end
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Main loop  (main thread)
+#
+#   Order each frame:
+#     1. cap_l + cap_r in parallel   → captures + warp-apply + gray + cache
+#     2. calculate_stabilization     → optical-flow → update movement_matrix
+#     3. display                     → compose + imshow + wait_key
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline main
+    exec_multi [cap_l, cap_r]
+    exec_seq calculate_stabilization
+    exec_seq display
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Entry points
+# ────────────────────────────────────────────────────────────────────────────
+
+exec_seq setup
+exec_interval brightness_adjustment 100
+exec_loop main

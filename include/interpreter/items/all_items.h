@@ -38,6 +38,7 @@
 #include "interpreter/items/frame_sink_items.h"
 #include "interpreter/items/stabilization_items.h"
 #include "interpreter/items/gpu_stabilization_items.h"
+#include "interpreter/items/shm_items.h"
 
 // Optional: DeepLearning/DNN items (when VISIONPIPE_WITH_DNN is enabled)
 #ifdef VISIONPIPE_WITH_DNN

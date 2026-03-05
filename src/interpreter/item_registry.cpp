@@ -288,7 +288,11 @@ std::optional<std::string> InterpreterItem::validateArgs(const std::vector<Runti
     for (size_t i = 0; i < args.size(); ++i) {
         const auto& param = _params[i];
         const auto& arg = args[i];
-        
+
+        // A void value for an optional parameter is treated as "not provided";
+        // the execute() implementation will use its built-in default instead.
+        if (arg.isVoid() && param.isOptional) continue;
+
         if (param.type != BaseType::ANY) {
             bool typeMatch = false;
             switch (param.type) {

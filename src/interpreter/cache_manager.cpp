@@ -1,4 +1,5 @@
 #include "interpreter/cache_manager.h"
+#include "utils/shm_zero_copy.h"
 #include <sstream>
 #include <chrono>
 #include <shared_mutex>
@@ -25,23 +26,48 @@ void CacheManager::setGlobal(const std::string& id, const cv::Mat& mat, const st
     std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
     CacheEntry entry;
-    entry.mat = mat.clone();  // Always clone to ensure ownership
+    entry.mat = mat;
     entry.source = source;
-    entry.timestamp = currentTimestamp();
+    entry.timestamp = 0;
     entry.accessCount = 0;
     entry.isGlobal = true;
     
     _sharedGlobal->entries[id] = std::move(entry);
+
+    // In fork child processes, write the frame into the anonymous-mmap arena
+    // so the parent (and its threads) can read it via zero-copy getGlobal().
+    if (_isForkChild && _shmArena && !mat.empty()) {
+        lock.unlock();  // don't hold lock during memcpy into arena
+        shmArenaWrite(_shmArena, id, mat);
+    }
 }
 
 cv::Mat CacheManager::getGlobal(const std::string& id) const {
+    // When fork children are running, try reading from the zero-copy arena
+    // first.  shmArenaRead returns a cv::Mat header that wraps the arena
+    // buffer directly — no pixel copy.  We intentionally do NOT write-through
+    // into the in-process cache because the Mat’s data pointer refers to the
+    // arena buffer; storing it would create a dangling reference once the
+    // writer recycles that buffer.
+    if (_hasForkChildren && _shmArena) {
+        cv::Mat shmMat;
+        if (shmArenaRead(_shmArena, id, shmMat)) {
+            return shmMat;   // zero-copy: data lives in the arena mmap
+        }
+    }
+
     std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
     auto it = _sharedGlobal->entries.find(id);
     if (it != _sharedGlobal->entries.end()) {
         const_cast<CacheEntry&>(it->second).accessCount++;
-        // Clone while holding the lock so callers get an independent buffer.
-        return it->second.mat.clone();
+        // Shallow copy: cv::Mat header is tiny (few pointers + dims) and its
+        // data refcount is atomic.  The returned Mat shares the pixel buffer
+        // with the stored entry — safe because pipeline items produce new
+        // buffers rather than modifying in-place.  If the entry is overwritten
+        // by another thread after we release the lock, the old data stays alive
+        // as long as our shallow copy (or any downstream copy) exists.
+        return it->second.mat;
     }
     return cv::Mat();
 }

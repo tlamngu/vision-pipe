@@ -318,9 +318,10 @@ private:
     RuntimeConfig _config;
     Interpreter _interpreter;
 
-    // Runtime parameter store & server
+    // Runtime parameter store & server (lazy — created on first use)
     std::shared_ptr<ParameterStore> _paramStore;
     std::unique_ptr<ParamServer>    _paramServer;
+    void ensureParamStore();  ///< create store + attach to interpreter if needed
     
     // State
     std::atomic<bool> _running{false};

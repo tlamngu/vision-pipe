@@ -137,6 +137,8 @@ private:
     std::shared_ptr<Statement> execIntervalMultiStatement();
     std::shared_ptr<Statement> execRtSeqStatement();
     std::shared_ptr<Statement> execRtMultiStatement();
+    std::shared_ptr<Statement> execNasyncStatement();  ///< exec_nasync (fire-and-forget)
+    std::shared_ptr<Statement> execForkStatement();    ///< exec_fork (child process)
     std::shared_ptr<Statement> debugStartStatement();
     std::shared_ptr<Statement> debugEndStatement();
     std::shared_ptr<Statement> useStatement();

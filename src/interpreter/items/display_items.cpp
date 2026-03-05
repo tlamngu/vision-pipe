@@ -610,9 +610,11 @@ ExecutionResult FPSItem::execute(const std::vector<RuntimeValue>& args, Executio
     int x = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 10;
     int y = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 30;
     
-    static int64 prevTick = 0;
-    static double fps = 0;
-    
+    // thread_local: each pipeline thread (cap_l, cap_r, main, …) keeps its own
+    // independent counter so FPS readings don't cross-contaminate between threads.
+    thread_local int64  prevTick = 0;
+    thread_local double fps      = 0;
+
     int64 currentTick = cv::getTickCount();
     if (prevTick > 0) {
         double elapsed = (currentTick - prevTick) / cv::getTickFrequency();

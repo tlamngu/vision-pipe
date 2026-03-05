@@ -198,6 +198,20 @@ std::string ExecRtMultiStmt::toString(int ind) const {
     return oss.str();
 }
 
+std::string ExecNasyncStmt::toString(int ind) const {
+    std::ostringstream oss;
+    if (!isInlineBlock()) {
+        oss << indent(ind) << "exec_nasync " << pipelineRef->toString(0);
+    } else {
+        oss << indent(ind) << "exec_nasync start\n";
+        for (const auto& s : body) {
+            oss << s->toString(ind + 1) << "\n";
+        }
+        oss << indent(ind) << "end";
+    }
+    return oss.str();
+}
+
 std::string DebugStartStmt::toString(int ind) const {
     return indent(ind) + "debug_start";
 }

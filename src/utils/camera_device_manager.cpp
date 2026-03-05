@@ -14,24 +14,94 @@ namespace visionpipe {
 // Component ID for logging
 static const std::string LOG_COMPONENT = "CameraDeviceManager";
 
+// --- Static multi-instance registry definitions ---
+std::mutex CameraDeviceManager::_registryMutex;
+std::map<std::string, std::unique_ptr<CameraDeviceManager>> CameraDeviceManager::_namedManagers;
+std::map<std::string, std::string> CameraDeviceManager::_sourceToManager;
+
+#ifdef VISIONPIPE_LIBCAMERA_ENABLED
+// Shared across all CameraDeviceManager instances (libcamera enforces a
+// single CameraManager per process).
+std::shared_ptr<libcamera::CameraManager> CameraDeviceManager::_sharedLibcameraManager;
+std::mutex CameraDeviceManager::_sharedLibcameraMutex;
+bool CameraDeviceManager::_sharedLibcameraStarted = false;
+#endif
+
 CameraDeviceManager& CameraDeviceManager::instance() {
     static CameraDeviceManager instance;
     return instance;
 }
 
+CameraDeviceManager& CameraDeviceManager::instance(const std::string& managerId) {
+    std::lock_guard<std::mutex> lock(_registryMutex);
+    auto it = _namedManagers.find(managerId);
+    if (it == _namedManagers.end()) {
+        auto mgr = std::unique_ptr<CameraDeviceManager>(new CameraDeviceManager());
+        auto* ptr = mgr.get();
+        _namedManagers.emplace(managerId, std::move(mgr));
+        SystemLogger::info(LOG_COMPONENT, "Created named device manager: " + managerId);
+        return *ptr;
+    }
+    return *it->second;
+}
+
+CameraDeviceManager& CameraDeviceManager::forSource(const std::string& sourceId) {
+    std::lock_guard<std::mutex> lock(_registryMutex);
+    auto it = _sourceToManager.find(sourceId);
+    if (it != _sourceToManager.end()) {
+        auto mgrIt = _namedManagers.find(it->second);
+        if (mgrIt != _namedManagers.end()) {
+            return *mgrIt->second;
+        }
+    }
+    // No binding — fall back to default singleton
+    return instance();
+}
+
+void CameraDeviceManager::bindSource(const std::string& sourceId, const std::string& managerId) {
+    std::lock_guard<std::mutex> lock(_registryMutex);
+    // Ensure named manager exists
+    if (_namedManagers.find(managerId) == _namedManagers.end()) {
+        auto mgr = std::unique_ptr<CameraDeviceManager>(new CameraDeviceManager());
+        _namedManagers.emplace(managerId, std::move(mgr));
+        SystemLogger::info(LOG_COMPONENT, "Created named device manager: " + managerId);
+    }
+    _sourceToManager[sourceId] = managerId;
+    SystemLogger::info(LOG_COMPONENT, "Bound source '" + sourceId + "' to device manager '" + managerId + "'");
+}
+
+void CameraDeviceManager::releaseAllManagers() {
+    std::lock_guard<std::mutex> lock(_registryMutex);
+    // Release all named managers
+    for (auto& [id, mgr] : _namedManagers) {
+        mgr->releaseAll();
+    }
+    _namedManagers.clear();
+    _sourceToManager.clear();
+    // Also release the default instance
+    instance().releaseAll();
+    SystemLogger::info(LOG_COMPONENT, "Released all device managers");
+}
+
 CameraDeviceManager::CameraDeviceManager() {
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
-    _libcameraManager = std::make_unique<libcamera::CameraManager>();
+    // Use a process-wide shared CameraManager (libcamera forbids multiples)
+    {
+        std::lock_guard<std::mutex> lk(_sharedLibcameraMutex);
+        if (!_sharedLibcameraManager) {
+            _sharedLibcameraManager = std::make_shared<libcamera::CameraManager>();
+        }
+    }
+#endif
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    _v4l2Manager = std::make_unique<V4L2DeviceManager>();
 #endif
 }
 
 CameraDeviceManager::~CameraDeviceManager() {
     releaseAll();
-#ifdef VISIONPIPE_LIBCAMERA_ENABLED
-    if (_libcameraManagerStarted && _libcameraManager) {
-        _libcameraManager->stop();
-    }
-#endif
+    // Note: the shared libcamera::CameraManager is ref-counted and will be
+    // stopped/destroyed when the last CameraDeviceManager instance is gone.
 }
 
 CameraBackend CameraDeviceManager::parseBackend(const std::string& backendStr) {
@@ -74,7 +144,7 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
 #endif
         } else if (it->second.backend == CameraBackend::V4L2_NATIVE) {
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-            if (!V4L2DeviceManager::instance().isOpen(sourceId)) needsOpen = true;
+            if (!_v4l2Manager->isOpen(sourceId)) needsOpen = true;
 #endif
         } else {
             if (!it->second.opencvCapture || !it->second.opencvCapture->isOpened()) {
@@ -128,12 +198,24 @@ bool CameraDeviceManager::acquireFrame(const std::string& sourceId, CameraBacken
 #endif
     } else if (session.backend == CameraBackend::V4L2_NATIVE) {
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-        return V4L2DeviceManager::instance().acquireFrame(sourceId, frame);
+        // V4L2DeviceManager is its own singleton with its own internal locking;
+        // release the global manager lock so other sessions aren't blocked.
+        std::mutex& devReadMutex = *session.readMutex;
+        lock.unlock();
+        std::lock_guard<std::mutex> readLock(devReadMutex);
+        return _v4l2Manager->acquireFrame(sourceId, frame);
 #else
         SystemLogger::error(LOG_COMPONENT, "V4L2 native backend requested but not compiled in");
         return false;
 #endif
     } else {
+        // Release global lock before the blocking VideoCapture::read() call so
+        // that two pipelines reading from different devices don't serialize each
+        // other on the single _mutex.  The per-session readMutex prevents two
+        // threads from calling read() on the SAME capture simultaneously.
+        std::mutex& devReadMutex = *session.readMutex;
+        lock.unlock();
+        std::lock_guard<std::mutex> readLock(devReadMutex);
         return readOpenCVFrame(session, frame);
     }
 }
@@ -191,7 +273,7 @@ void CameraDeviceManager::releaseCamera(const std::string& sourceId) {
 #endif
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
         if (it->second.backend == CameraBackend::V4L2_NATIVE) {
-            V4L2DeviceManager::instance().releaseDevice(sourceId);
+            _v4l2Manager->releaseDevice(sourceId);
         }
 #endif
         _sessions.erase(it);
@@ -229,7 +311,7 @@ void CameraDeviceManager::releaseAll() {
     _requestToSource.clear();
 #endif
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-    V4L2DeviceManager::instance().releaseAll();
+    _v4l2Manager->releaseAll();
 #endif
     SystemLogger::info(LOG_COMPONENT, "Released all cameras");
 }
@@ -351,9 +433,9 @@ bool CameraDeviceManager::openCamera(const std::string& sourceId, CameraBackend 
         // V4L2 native backend — delegate to V4L2DeviceManager.
         // Use the config stored from a prior v4l2_setup call; fall back to defaults only if
         // no config was ever stored (bare video_cap with v4l2_native and no v4l2_setup).
-        if (!V4L2DeviceManager::instance().isOpen(sourceId)) {
+        if (!_v4l2Manager->isOpen(sourceId)) {
             const V4L2NativeConfig& v4l2Config = finalSession.v4l2Config;
-            if (!V4L2DeviceManager::instance().prepareDevice(sourceId, v4l2Config)) {
+            if (!_v4l2Manager->prepareDevice(sourceId, v4l2Config)) {
                 SystemLogger::error(LOG_COMPONENT, "V4L2 prepareDevice failed for: " + sourceId);
                 _sessions.erase(sourceId);
                 return false;
@@ -448,16 +530,16 @@ bool CameraDeviceManager::readOpenCVFrame(CameraSession& session, cv::Mat& frame
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
 
 libcamera::CameraManager* CameraDeviceManager::getLibCameraManager() {
-    std::lock_guard<std::recursive_mutex> lock(_mutex);
-    if (!_libcameraManagerStarted && _libcameraManager) {
-        int ret = _libcameraManager->start();
+    std::lock_guard<std::mutex> lk(_sharedLibcameraMutex);
+    if (!_sharedLibcameraStarted && _sharedLibcameraManager) {
+        int ret = _sharedLibcameraManager->start();
         if (ret < 0) {
             SystemLogger::error(LOG_COMPONENT, "Failed to start libcamera manager");
             return nullptr;
         }
-        _libcameraManagerStarted = true;
+        _sharedLibcameraStarted = true;
     }
-    return _libcameraManager.get();
+    return _sharedLibcameraManager.get();
 }
 
 std::shared_ptr<libcamera::Camera> CameraDeviceManager::getLibCamera(const std::string& sourceId) {
@@ -1065,13 +1147,17 @@ void CameraDeviceManager::applyLibCameraControls(CameraSession& session, libcame
 // ============================================================================
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
 
+V4L2DeviceManager& CameraDeviceManager::getV4L2DeviceManager() {
+    return *_v4l2Manager;
+}
+
 bool CameraDeviceManager::setV4L2NativeConfig(const std::string& sourceId, const V4L2NativeConfig& config) {
     std::lock_guard<std::recursive_mutex> lock(_mutex);
     CameraSession& session = _sessions[sourceId];
     session.backend = CameraBackend::V4L2_NATIVE;
     session.v4l2Config = config;  // store so openCamera can use it if device needs re-opening
     // Prepare the device immediately with the given config
-    if (!V4L2DeviceManager::instance().prepareDevice(sourceId, config)) {
+    if (!_v4l2Manager->prepareDevice(sourceId, config)) {
         SystemLogger::error(LOG_COMPONENT, "v4l2_setup: prepareDevice failed for " + sourceId);
         return false;
     }
@@ -1079,19 +1165,19 @@ bool CameraDeviceManager::setV4L2NativeConfig(const std::string& sourceId, const
 }
 
 bool CameraDeviceManager::setV4L2Control(const std::string& sourceId, const std::string& controlName, int value) {
-    return V4L2DeviceManager::instance().setControl(sourceId, controlName, value);
+    return _v4l2Manager->setControl(sourceId, controlName, value);
 }
 
 std::string CameraDeviceManager::getV4L2BayerPattern(const std::string& sourceId) {
-    return V4L2DeviceManager::instance().getBayerPattern(sourceId);
+    return _v4l2Manager->getBayerPattern(sourceId);
 }
 
 void CameraDeviceManager::listV4L2Controls(const std::string& sourceId) {
-    V4L2DeviceManager::instance().listControls(sourceId);
+    _v4l2Manager->listControls(sourceId);
 }
 
 void CameraDeviceManager::listV4L2Formats(const std::string& sourceId) {
-    V4L2DeviceManager::instance().listFormats(sourceId);
+    _v4l2Manager->listFormats(sourceId);
 }
 
 #endif // VISIONPIPE_V4L2_NATIVE_ENABLED

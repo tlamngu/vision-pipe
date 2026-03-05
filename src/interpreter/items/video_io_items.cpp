@@ -79,7 +79,7 @@ ExecutionResult VideoCaptureItem::execute(const std::vector<RuntimeValue>& args,
     
     // Acquire frame via CameraDeviceManager
     cv::Mat frame;
-    if (!CameraDeviceManager::instance().acquireFrame(sourceId, backend, frame, format)) {
+    if (!CameraDeviceManager::forSource(sourceId).acquireFrame(sourceId, backend, frame, format)) {
         std::string failMsg = "Failed to acquire frame from: " + sourceId;
         if (backend == CameraBackend::OPENCV_GSTREAMER) {
             failMsg += "\n  Hint: If using a GStreamer pipeline string, ensure it ends with ' ! videoconvert ! video/x-raw,format=BGR ! appsink'.";
@@ -163,11 +163,11 @@ VideoCloseItem::VideoCloseItem() {
 ExecutionResult VideoCloseItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     if (args.empty() || args[0].asString().empty()) {
         // Close all
-        CameraDeviceManager::instance().releaseAll();
+        CameraDeviceManager::releaseAllManagers();
         s_writers.clear();
     } else {
         std::string id = args[0].asString();
-        CameraDeviceManager::instance().releaseCamera(id);
+        CameraDeviceManager::forSource(id).releaseCamera(id);
         s_writers.erase(id);
     }
     return ExecutionResult::ok(ctx.currentMat);
@@ -357,7 +357,7 @@ ExecutionResult GetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
     std::string sourceId = args[0].asString();
     std::string prop = args[1].asString();
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Video source not found or not using OpenCV backend: " + sourceId);
     }
@@ -415,7 +415,7 @@ ExecutionResult SetVideoPropItem::execute(const std::vector<RuntimeValue>& args,
     std::string prop = args[1].asString();
     double value = args[2].asNumber();
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Video source not found or not using OpenCV backend: " + sourceId);
     }
@@ -467,7 +467,7 @@ ExecutionResult VideoSeekItem::execute(const std::vector<RuntimeValue>& args, Ex
     double position = args[1].asNumber();
     std::string unit = args.size() > 2 ? args[2].asString() : "frames";
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Video source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -503,7 +503,7 @@ ExecutionResult SetCameraExposureItem::execute(const std::vector<RuntimeValue>& 
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     double value = args.size() > 2 ? args[2].asNumber() : 0.0;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -546,7 +546,7 @@ ExecutionResult SetCameraWhiteBalanceItem::execute(const std::vector<RuntimeValu
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int temperature = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 5500;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -594,7 +594,7 @@ ExecutionResult SetCameraFocusItem::execute(const std::vector<RuntimeValue>& arg
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int value = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 128;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -638,7 +638,7 @@ ExecutionResult SetCameraISOItem::execute(const std::vector<RuntimeValue>& args,
     std::string mode = args.size() > 1 ? args[1].asString() : "auto";
     int value = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 400;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -682,7 +682,7 @@ ExecutionResult SetCameraZoomItem::execute(const std::vector<RuntimeValue>& args
     double pan = args.size() > 2 ? args[2].asNumber() : 0.0;
     double tilt = args.size() > 3 ? args[3].asNumber() : 0.0;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -725,7 +725,7 @@ ExecutionResult SetCameraImageAdjustmentItem::execute(const std::vector<RuntimeV
     double sharpness = args.size() > 5 ? args[5].asNumber() : 50.0;
     double gamma = args.size() > 6 ? args[6].asNumber() : 100.0;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -759,7 +759,7 @@ GetCameraCapabilitiesItem::GetCameraCapabilitiesItem() {
 ExecutionResult GetCameraCapabilitiesItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId = args[0].asString();
     
-    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto capPtr = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!capPtr) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -850,7 +850,7 @@ ExecutionResult SetCameraBackendItem::execute(const std::vector<RuntimeValue>& a
     std::string backend = args.size() > 1 ? args[1].asString() : "auto";
     int bufferSize = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 4;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -889,7 +889,7 @@ ExecutionResult SetCameraTriggerItem::execute(const std::vector<RuntimeValue>& a
     int triggerDelay = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 0;
     bool strobeEnabled = args.size() > 3 ? args[3].asBool() : false;
     
-    auto cap = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto cap = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!cap) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -928,7 +928,7 @@ ExecutionResult SaveCameraProfileItem::execute(const std::vector<RuntimeValue>& 
     std::string sourceId = args[0].asString();
     std::string path = args[1].asString();
     
-    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto capPtr = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!capPtr) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }
@@ -989,7 +989,7 @@ ExecutionResult LoadCameraProfileItem::execute(const std::vector<RuntimeValue>& 
     std::string sourceId = args[0].asString();
     std::string path = args[1].asString();
     
-    auto capPtr = CameraDeviceManager::instance().getOpenCVCapture(sourceId);
+    auto capPtr = CameraDeviceManager::forSource(sourceId).getOpenCVCapture(sourceId);
     if (!capPtr) {
         return ExecutionResult::fail("Camera source not found or not controlled by OpenCV: " + sourceId);
     }

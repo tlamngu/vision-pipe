@@ -246,6 +246,8 @@ set(VISIONPIPE_CORE_SOURCES
     src/pipeline/pipeline_item.cpp
     src/pipeline/pipeline_threaded_group.cpp
     src/utils/Logger.cpp
+    src/utils/shm_frame_transport.cpp
+    src/utils/shm_zero_copy.cpp
 )
 
 set(VISIONPIPE_INTERPRETER_SOURCES
@@ -288,6 +290,7 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/frame_sink_items.cpp
     src/interpreter/items/stabilization_items.cpp
     src/interpreter/items/gpu_stabilization_items.cpp
+    src/interpreter/items/shm_items.cpp
 )
 
 # IP Stream sources (optional feature)

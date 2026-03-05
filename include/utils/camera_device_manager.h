@@ -52,9 +52,37 @@ struct LibCameraConfig {
 class CameraDeviceManager {
 public:
     /**
-     * @brief Get the singleton instance.
+     * @brief Get the default (unnamed) singleton instance.
      */
     static CameraDeviceManager& instance();
+
+    /**
+     * @brief Get or create a named device manager instance.
+     * Each named manager has its own mutex, sessions, and (if enabled) its own
+     * libcamera::CameraManager, so cameras bound to different managers can run
+     * with zero lock contention between them.
+     */
+    static CameraDeviceManager& instance(const std::string& managerId);
+
+    /**
+     * @brief Get the device manager bound to a specific camera source.
+     * Returns the default instance if no explicit binding exists.
+     * Use bindSource() to associate a source with a named manager.
+     */
+    static CameraDeviceManager& forSource(const std::string& sourceId);
+
+    /**
+     * @brief Bind a camera source to a named manager.
+     * Creates the named manager if it does not already exist.
+     * All subsequent forSource() calls for this sourceId will return that manager.
+     */
+    static void bindSource(const std::string& sourceId, const std::string& managerId);
+
+    /**
+     * @brief Release all named managers and source bindings, plus the default
+     * instance's cameras.  Call at program shutdown.
+     */
+    static void releaseAllManagers();
 
     // Delete copy/move constructors
     CameraDeviceManager(const CameraDeviceManager&) = delete;
@@ -162,6 +190,13 @@ public:
 
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
     /**
+     * @brief Get the V4L2DeviceManager owned by this CameraDeviceManager instance.
+     * Each CameraDeviceManager has its own V4L2DeviceManager, so cameras bound
+     * to separate managers have fully independent V4L2 sessions and locks.
+     */
+    V4L2DeviceManager& getV4L2DeviceManager();
+
+    /**
      * @brief Set V4L2 native configuration for a source and open/reconfigure the device.
      * Returns true if the device was successfully opened with the given config.
      */
@@ -194,12 +229,26 @@ private:
     CameraDeviceManager();
     ~CameraDeviceManager();
 
+    // Allow std::unique_ptr / std::default_delete to call the private destructor
+    // (needed for the named-manager registry stored in unique_ptr).
+    friend struct std::default_delete<CameraDeviceManager>;
+
+    // --- Static multi-instance registry ---
+    static std::mutex _registryMutex;
+    static std::map<std::string, std::unique_ptr<CameraDeviceManager>> _namedManagers;
+    static std::map<std::string, std::string> _sourceToManager; // sourceId -> managerId
+
     struct CameraSession {
         CameraSession() 
             : backend(CameraBackend::OPENCV_AUTO) {}
 
         CameraBackend backend;
         std::shared_ptr<cv::VideoCapture> opencvCapture;
+
+        // Per-session read mutex: held during frame acquisition so that
+        // different devices can read truly in parallel (the global _mutex is
+        // released before entering the actual read call; see acquireFrame).
+        std::unique_ptr<std::mutex> readMutex = std::make_unique<std::mutex>();
 #ifdef VISIONPIPE_LIBCAMERA_ENABLED
         std::shared_ptr<libcamera::Camera> libcameraDevice;
         std::unique_ptr<libcamera::CameraConfiguration> config;
@@ -243,9 +292,17 @@ private:
     
     void libcameraRequestComplete(libcamera::Request* request);
     
-    std::unique_ptr<libcamera::CameraManager> _libcameraManager;
-    bool _libcameraManagerStarted = false;
+    // Shared across all CameraDeviceManager instances (libcamera enforces a
+    // single CameraManager per process).
+    static std::shared_ptr<libcamera::CameraManager> _sharedLibcameraManager;
+    static std::mutex _sharedLibcameraMutex;
+    static bool _sharedLibcameraStarted;
+
     std::map<libcamera::Request*, std::string> _requestToSource;
+#endif
+
+#ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
+    std::unique_ptr<V4L2DeviceManager> _v4l2Manager;
 #endif
 
     mutable std::recursive_mutex _mutex;

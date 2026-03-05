@@ -163,6 +163,21 @@ void ParameterStore::declare(const std::string& name, ParamType type,
     // Set default if not yet set
     if (_values.find(name) == _values.end()) {
         _values[name] = defaultValue;
+    } else {
+        // Value already exists (e.g. from --param override set before the
+        // params [] block was parsed).  Coerce it to the declared type so
+        // that e.g. "60" (string from CLI) becomes 60 (int) when the script
+        // declares brightness:int.
+        ParamValue& existing = _values[name];
+        if (existing.type != type) {
+            switch (type) {
+                case ParamType::INT:    existing = ParamValue(existing.asInt());    break;
+                case ParamType::FLOAT:  existing = ParamValue(existing.asFloat());  break;
+                case ParamType::STRING: existing = ParamValue(existing.asString()); break;
+                case ParamType::BOOL:   existing = ParamValue(existing.asBool());   break;
+                default: break;
+            }
+        }
     }
 }
 
@@ -219,6 +234,7 @@ void ParameterStore::set(const std::string& name, ParamValue value) {
         evt.newValue = value;
     }
 
+    _gen.fetch_add(1, std::memory_order_release);
     notifyListeners(evt);
 }
 
@@ -269,6 +285,11 @@ void ParameterStore::unsubscribe(uint64_t id) {
 }
 
 void ParameterStore::notifyListeners(const ParamChangeEvent& evt) {
+    // Fast path: skip lock + copy when no listeners are registered
+    {
+        std::lock_guard<std::mutex> lock(_listenerMutex);
+        if (_listeners.empty()) return;
+    }
     std::vector<Listener> snapshot;
     {
         std::lock_guard<std::mutex> lock(_listenerMutex);

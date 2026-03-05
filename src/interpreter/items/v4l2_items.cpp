@@ -51,7 +51,12 @@ V4L2SetupItem::V4L2SetupItem() {
         ParamDef::optional("subdev", BaseType::STRING,
             "Pin a specific /dev/v4l-subdev* path for control lookup on this device. "
             "Skips media-controller BFS on complex ISP pipelines (e.g. Qualcomm MSM). "
-            "Leave empty for auto-discovery.", "")
+            "Leave empty for auto-discovery.", ""),
+        ParamDef::optional("camera_device_manager_id", BaseType::STRING,
+            "Bind this camera to a named device manager instance. "
+            "Cameras on different managers have independent mutexes, "
+            "eliminating cross-device lock contention and enabling "
+            "true parallel capture throughput.", "")
     };
     _example = "v4l2_setup(\"/dev/video0\", 1920, 1080, \"SRGGB10\", 30)\n"
                "v4l2_setup(\"/dev/video3\", 1640, 1232, \"SRGGB8\", 30, 4, \"/dev/v4l-subdev28\")";
@@ -71,6 +76,12 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
     int fps = args.size() > 4 ? static_cast<int>(args[4].asNumber()) : 30;
     int bufferCount = args.size() > 5 ? static_cast<int>(args[5].asNumber()) : 4;
     std::string subdev = args.size() > 6 ? args[6].asString() : "";
+    std::string managerId = args.size() > 7 ? args[7].asString() : "";
+
+    // Optional: bind this source to a named device manager
+    if (!managerId.empty()) {
+        CameraDeviceManager::bindSource(sourceId, managerId);
+    }
 
     if (ctx.verbose) {
         std::cout << "[DEBUG] V4L2Items: v4l2_setup source=" << sourceId
@@ -90,7 +101,7 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
     config.bufferCount = bufferCount;
 
     // Open and configure through CameraDeviceManager delegation
-    if (!CameraDeviceManager::instance().setV4L2NativeConfig(sourceId, config)) {
+    if (!CameraDeviceManager::forSource(sourceId).setV4L2NativeConfig(sourceId, config)) {
         return ExecutionResult::fail("v4l2_setup: failed to open/configure " + sourceId +
                                     " (" + std::to_string(width) + "x" + std::to_string(height) +
                                     " " + pixelFormat + " @" + std::to_string(fps) + "fps)");
@@ -98,7 +109,7 @@ ExecutionResult V4L2SetupItem::execute(const std::vector<RuntimeValue>& args, Ex
 
     // Pin preferred subdev if provided
     if (!subdev.empty()) {
-        V4L2DeviceManager::instance().setPreferredSubDev(sourceId, subdev);
+        CameraDeviceManager::forSource(sourceId).getV4L2DeviceManager().setPreferredSubDev(sourceId, subdev);
     }
 
     SystemLogger::info("V4L2Items", "v4l2_setup: Configured " + sourceId + " " +
@@ -155,7 +166,7 @@ ExecutionResult V4L2PropItem::execute(const std::vector<RuntimeValue>& args, Exe
     // If an explicit subdev is provided, target it directly
     const std::string& target = explicitSubdev.empty() ? sourceId : explicitSubdev;
 
-    if (!CameraDeviceManager::instance().setV4L2Control(target, controlName, value)) {
+    if (!CameraDeviceManager::forSource(target).setV4L2Control(target, controlName, value)) {
         return ExecutionResult::fail("Failed to set V4L2 control " + controlName + " on " + sourceId);
     }
 
@@ -191,7 +202,7 @@ ExecutionResult V4L2GetPropItem::execute(const std::vector<RuntimeValue>& args, 
                   << " control='" << controlName << "'" << std::endl;
     }
 
-    int value = V4L2DeviceManager::instance().getControl(sourceId, controlName);
+    int value = CameraDeviceManager::forSource(sourceId).getV4L2DeviceManager().getControl(sourceId, controlName);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_prop result=" << value << std::endl;
     return ExecutionResult::ok(static_cast<double>(value));
 }
@@ -217,7 +228,7 @@ V4L2ListControlsItem::V4L2ListControlsItem() {
 ExecutionResult V4L2ListControlsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_controls source=" << sourceId << std::endl;
-    CameraDeviceManager::instance().listV4L2Controls(sourceId);
+    CameraDeviceManager::forSource(sourceId).listV4L2Controls(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -240,7 +251,7 @@ V4L2ListFormatsItem::V4L2ListFormatsItem() {
 ExecutionResult V4L2ListFormatsItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_list_formats source=" << sourceId << std::endl;
-    CameraDeviceManager::instance().listV4L2Formats(sourceId);
+    CameraDeviceManager::forSource(sourceId).listV4L2Formats(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -263,7 +274,7 @@ V4L2GetBayerItem::V4L2GetBayerItem() {
 ExecutionResult V4L2GetBayerItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string sourceId = resolveSource(args[0]);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_bayer source=" << sourceId << std::endl;
-    std::string pattern = CameraDeviceManager::instance().getV4L2BayerPattern(sourceId);
+    std::string pattern = CameraDeviceManager::forSource(sourceId).getV4L2BayerPattern(sourceId);
     if (ctx.verbose) std::cout << "[DEBUG] V4L2Items: v4l2_get_bayer result='" << pattern << "'" << std::endl;
     return ExecutionResult::ok(pattern);
 }
@@ -377,7 +388,8 @@ ExecutionResult VideoSyncItem::execute(const std::vector<RuntimeValue>& args,
     // This is what makes video_sync work correctly for MIPI cameras where
     // controls like "exposure" and "analogue_gain" live on sub-devices
     // (/dev/v4l-subdev*), not on the main /dev/video* node.
-    V4L2DeviceManager& v4l2 = V4L2DeviceManager::instance();
+    // Route through the manager bound to the master source for proper isolation.
+    V4L2DeviceManager& v4l2 = CameraDeviceManager::forSource(masterPath).getV4L2DeviceManager();
 
     const std::string stateKey = masterPath + "@" + targetPath;
 

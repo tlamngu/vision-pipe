@@ -43,6 +43,9 @@ void registerAllItems(ItemRegistry& registry) {
     // GPU-accelerated stabilization (OpenCL warp kernel)
     registerGpuStabilizationItems(registry);
 
+    // Shared-memory IPC items for exec_fork multiprocessing
+    registerShmItems(registry);
+
     // Optional: Register IP Stream items when feature is enabled
     // This function is a no-op when VISIONPIPE_IP_STREAM_ENABLED is not defined
     registerIPStreamItems(registry);

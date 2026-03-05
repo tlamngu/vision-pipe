@@ -22,6 +22,8 @@ const std::unordered_map<std::string, TokenType> Lexer::_keywords = {
     {"exec_interval_multi", TokenType::KW_EXEC_INTERVAL_MULTI},
     {"exec_rt_seq", TokenType::KW_EXEC_RT_SEQ},
     {"exec_rt_multi", TokenType::KW_EXEC_RT_MULTI},
+    {"exec_nasync", TokenType::KW_EXEC_NASYNC},
+    {"exec_fork", TokenType::KW_EXEC_FORK},
     {"debug_start", TokenType::KW_DEBUG_START},
     {"debug_end",   TokenType::KW_DEBUG_END},
     {"use", TokenType::KW_USE},
@@ -106,6 +108,8 @@ std::string Token::typeToString(TokenType type) {
         case TokenType::KW_EXEC_INTERVAL_MULTI: return "EXEC_INTERVAL_MULTI";
         case TokenType::KW_EXEC_RT_SEQ: return "EXEC_RT_SEQ";
         case TokenType::KW_EXEC_RT_MULTI: return "EXEC_RT_MULTI";
+        case TokenType::KW_EXEC_NASYNC: return "EXEC_NASYNC";
+        case TokenType::KW_EXEC_FORK: return "EXEC_FORK";
         case TokenType::KW_DEBUG_START: return "DEBUG_START";
         case TokenType::KW_DEBUG_END:   return "DEBUG_END";
         case TokenType::KW_USE: return "USE";

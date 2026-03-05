@@ -690,10 +690,10 @@ ExecutionResult DebayerItem::execute(const std::vector<RuntimeValue>& args, Exec
         }
         // Try V4L2 native backend first, then libcamera
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-        pattern = CameraDeviceManager::instance().getV4L2BayerPattern(ctx.lastSourceId);
+        pattern = CameraDeviceManager::forSource(ctx.lastSourceId).getV4L2BayerPattern(ctx.lastSourceId);
 #endif
         if (pattern.empty()) {
-            pattern = CameraDeviceManager::instance().getBayerPattern(ctx.lastSourceId);
+            pattern = CameraDeviceManager::forSource(ctx.lastSourceId).getBayerPattern(ctx.lastSourceId);
         }
         if (pattern.empty()) {
             return ExecutionResult::fail("debayer(\"auto\"): could not detect Bayer pattern for source '" + ctx.lastSourceId + "'");

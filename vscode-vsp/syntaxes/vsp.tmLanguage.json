@@ -57,7 +57,7 @@
       "patterns": [
         {
           "name": "keyword.control.execution.vsp",
-          "match": "\\b(exec_seq|exec_multi|exec_loop)\\b"
+          "match": "\\b(exec_seq|exec_multi|exec_loop|exec_nasync)\\b"
         }
       ]
     },

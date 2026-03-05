@@ -38,11 +38,10 @@ Runtime::Runtime() : Runtime(RuntimeConfig{}) {}
 
 Runtime::Runtime(RuntimeConfig config) 
     : _config(std::move(config))
-    , _interpreter(_config.interpreterConfig)
-    , _paramStore(std::make_shared<ParameterStore>()) {
+    , _interpreter(_config.interpreterConfig) {
 
-    // Attach param store to interpreter so @name references work
-    _interpreter.setParamStore(_paramStore);
+    // NOTE: _paramStore is created lazily (on first params [] or setParam call)
+    // to avoid overhead for scripts that don't use runtime parameters.
     
     if (_config.autoRegisterBuiltins) {
         loadBuiltins();
@@ -107,27 +106,35 @@ int Runtime::run(const std::string& filename) {
             cfg.workingDirectory = filename.substr(0, lastSlash);
             _interpreter.setConfig(cfg);
         }
-        
-        load(filename);
-        
+
+        // Parse ONCE and reuse — previously load() parsed then execute() parsed
+        // again, causing double setup and double exec_seq/exec_loop execution.
+        auto program = parseFile(filename);
+
+        // Lazily create param store when the script declares params
+        if (!program->paramDecls.empty()) {
+            ensureParamStore();
+            if (!_paramServer || !_paramServer->isRunning()) {
+                enableParamServer();
+            }
+        }
+
         _running = true;
         _stopRequested = false;
         _startTime = std::chrono::steady_clock::now();
         _lastFrameTime = _startTime;
-        
-        // Execute the program (which may include exec_loop)
-        // The interpreter handles the main loop internally
-        _interpreter.execute(_interpreter.getPipeline("main") ? 
-            parseFile(filename) : parseFile(filename));
-        
+
+        // Execute exactly once (registers pipelines + runs top-level statements)
+        _interpreter.execute(program);
+
         _running = false;
-        
+
         if (_stopCallback) {
             _stopCallback();
         }
-        
+
         return _interpreter.hasError() ? 1 : 0;
-        
+
     } catch (const std::exception& e) {
         handleError(e.what());
         _running = false;
@@ -138,9 +145,12 @@ int Runtime::run(const std::string& filename) {
 void Runtime::load(const std::string& filename) {
     auto program = parseFile(filename);
 
-    // Auto-start param server if the script declares a params [] block
-    if (!program->paramDecls.empty() && (!_paramServer || !_paramServer->isRunning())) {
-        enableParamServer();
+    // Lazily create param store when the script actually declares params
+    if (!program->paramDecls.empty()) {
+        ensureParamStore();
+        if (!_paramServer || !_paramServer->isRunning()) {
+            enableParamServer();
+        }
     }
 
     _interpreter.execute(program);
@@ -262,47 +272,64 @@ void Runtime::stopDocsServer() {
 // Runtime parameter API
 // ============================================================================
 
+void Runtime::ensureParamStore() {
+    if (_paramStore) return;
+    _paramStore = std::make_shared<ParameterStore>();
+    _interpreter.setParamStore(_paramStore);
+}
+
 void Runtime::setParam(const std::string& name, const ParamValue& value) {
+    ensureParamStore();
     _paramStore->set(name, value);
 }
 void Runtime::setParam(const std::string& name, int64_t value) {
+    ensureParamStore();
     _paramStore->set(name, ParamValue(value));
 }
 void Runtime::setParam(const std::string& name, int value) {
+    ensureParamStore();
     _paramStore->set(name, ParamValue((int64_t)value));
 }
 void Runtime::setParam(const std::string& name, double value) {
+    ensureParamStore();
     _paramStore->set(name, ParamValue(value));
 }
 void Runtime::setParam(const std::string& name, const std::string& value) {
+    ensureParamStore();
     _paramStore->set(name, ParamValue(value));
 }
 void Runtime::setParam(const std::string& name, bool value) {
+    ensureParamStore();
     _paramStore->set(name, ParamValue(value));
 }
 
 ParamValue Runtime::getParam(const std::string& name) const {
+    if (!_paramStore) return ParamValue{};
     return _paramStore->get(name);
 }
 
 bool Runtime::hasParam(const std::string& name) const {
+    if (!_paramStore) return false;
     return _paramStore->has(name);
 }
 
 std::unordered_map<std::string, ParamValue> Runtime::listParams() const {
+    if (!_paramStore) return {};
     return _paramStore->list();
 }
 
 uint64_t Runtime::onParamChange(const std::string& name, ParamChangeCallback cb) {
+    const_cast<Runtime*>(this)->ensureParamStore();
     return _paramStore->subscribe(name, std::move(cb));
 }
 
 uint64_t Runtime::onAnyParamChange(ParamChangeCallback cb) {
+    const_cast<Runtime*>(this)->ensureParamStore();
     return _paramStore->subscribeAll(std::move(cb));
 }
 
 void Runtime::removeParamSubscription(uint64_t id) {
-    _paramStore->unsubscribe(id);
+    if (_paramStore) _paramStore->unsubscribe(id);
 }
 
 // ============================================================================
@@ -310,6 +337,7 @@ void Runtime::removeParamSubscription(uint64_t id) {
 // ============================================================================
 
 int Runtime::enableParamServer(int startPort) {
+    ensureParamStore();
     if (!_paramServer) {
         _paramServer = std::make_unique<ParamServer>(_paramStore);
     }

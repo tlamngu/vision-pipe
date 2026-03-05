@@ -312,6 +312,264 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+// ============================================================================
+// Matrix Math Operations (OpenCV-accelerated, operate on MAT arguments)
+//
+// All matrix items accept cv::Mat values as arguments (not currentMat) and
+// return the result mat both as the pipeline frame (outputMat) and as the
+// call's scalar value so they work with assignment:
+//
+//   result = matrix_avg(mat_a, mat_b)
+//   matrix_add(mat_a, mat_b)     // result flows as currentMat
+// ============================================================================
+
+/**
+ * @brief Element-wise average of two matrices.
+ *
+ * Computes (A + B) / 2  using cv::addWeighted (SIMD-accelerated).
+ * Both matrices must have the same size and type, or B is broadcast-compatible.
+ *
+ * Parameters
+ * ----------
+ * - mat_a  MAT   First matrix.
+ * - mat_b  MAT   Second matrix.
+ *
+ * Returns  MAT   (A + B) × 0.5
+ *
+ * Example
+ * -------
+ *   result = matrix_avg(frame_a, frame_b)
+ */
+class MatrixAvgItem : public InterpreterItem {
+public:
+    MatrixAvgItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise addition of two matrices  (cv::add, SIMD-accelerated).
+ *
+ * Parameters
+ * ----------
+ * - mat_a  MAT  First matrix.
+ * - mat_b  MAT  Second matrix (must match size & type, or be a scalar wrapped in a 1×1 mat).
+ *
+ * Returns  MAT  A + B
+ */
+class MatrixAddItem : public InterpreterItem {
+public:
+    MatrixAddItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise subtraction  A − B  (cv::subtract).
+ */
+class MatrixSubItem : public InterpreterItem {
+public:
+    MatrixSubItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise multiplication  A ⊙ B  (cv::multiply, not matrix product).
+ *
+ * For true matrix multiplication use matrix_gemm.
+ */
+class MatrixMulItem : public InterpreterItem {
+public:
+    MatrixMulItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise division  A ÷ B  (cv::divide).
+ */
+class MatrixDivItem : public InterpreterItem {
+public:
+    MatrixDivItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Multiply every element of the matrix by a scalar factor.
+ *
+ * Uses cv::multiply(mat, cv::Scalar(factor)) — SIMD-accelerated.
+ *
+ * Parameters
+ * ----------
+ * - mat     MAT    Input matrix.
+ * - factor  FLOAT  Scale factor.
+ *
+ * Returns  MAT  mat × factor
+ *
+ * Example
+ * -------
+ *   half = matrix_scale(frame, 0.5)
+ */
+class MatrixScaleItem : public InterpreterItem {
+public:
+    MatrixScaleItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise absolute difference  |A − B|  (cv::absdiff).
+ *
+ * Saturating subtraction in absolute value — useful for motion detection,
+ * background subtraction, and comparison of stabilization outputs.
+ */
+class MatrixAbsDiffItem : public InterpreterItem {
+public:
+    MatrixAbsDiffItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise minimum  min(A, B)  (cv::min).
+ */
+class MatrixMinItem : public InterpreterItem {
+public:
+    MatrixMinItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Element-wise maximum  max(A, B)  (cv::max).
+ */
+class MatrixMaxItem : public InterpreterItem {
+public:
+    MatrixMaxItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Normalize matrix values to [alpha, beta]  (cv::normalize).
+ *
+ * Parameters
+ * ----------
+ * - mat    MAT    Input matrix.
+ * - alpha  FLOAT  Lower bound (default 0).
+ * - beta   FLOAT  Upper bound (default 255).
+ * - norm_type  STRING  "minmax" (default) | "l1" | "l2" | "inf".
+ *
+ * Returns  MAT  Normalized matrix (CV_32F intermediate, converted back to input depth).
+ *
+ * Example
+ * -------
+ *   norm = matrix_normalize(depth_map)
+ *   norm = matrix_normalize(depth_map, 0, 1, "minmax")
+ */
+class MatrixNormalizeItem : public InterpreterItem {
+public:
+    MatrixNormalizeItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Weighted blend of two matrices  α·A + (1−α)·B  (cv::addWeighted).
+ *
+ * Parameters
+ * ----------
+ * - mat_a  MAT    First matrix.
+ * - mat_b  MAT    Second matrix.
+ * - alpha  FLOAT  Weight of mat_a ∈ [0, 1].  mat_b weight = 1 − alpha.
+ *
+ * Returns  MAT  α·A + (1−α)·B
+ *
+ * Example
+ * -------
+ *   blended = matrix_blend(current, stabilized, 0.7)
+ */
+class MatrixBlendItem : public InterpreterItem {
+public:
+    MatrixBlendItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Dot product of two single-channel vectors / matrices (returns scalar).
+ *
+ * Wraps cv::Mat::dot() which computes the sum of element-wise products.
+ * Both matrices must have the same total element count.
+ *
+ * Returns  FLOAT  Σ(A ⊙ B)
+ *
+ * Example
+ * -------
+ *   d = matrix_dot(vec_a, vec_b)
+ */
+class MatrixDotItem : public InterpreterItem {
+public:
+    MatrixDotItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief General matrix multiplication  α·A·B + β·C  (cv::gemm / BLAS).
+ *
+ * Uses cv::gemm which maps to an optimized BLAS/LAPACK implementation
+ * when available (e.g. OpenBLAS, MKL).
+ *
+ * Parameters
+ * ----------
+ * - mat_a  MAT    Left matrix.
+ * - mat_b  MAT    Right matrix.
+ * - alpha  FLOAT  Scale for A·B (default 1.0).
+ * - mat_c  MAT    Addend matrix (optional — pass identity or omit).
+ * - beta   FLOAT  Scale for C (default 0.0 → no addend).
+ *
+ * Returns  MAT  α·A·B + β·C
+ *
+ * Example
+ * -------
+ *   product = matrix_gemm(rot_mat, points)
+ *   product = matrix_gemm(A, B, 1.0, C, 1.0)
+ */
+class MatrixGemmItem : public InterpreterItem {
+public:
+    MatrixGemmItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Transpose a matrix  Aᵀ  (cv::transpose).
+ *
+ * Parameters
+ * ----------
+ * - mat  MAT  Input matrix.
+ *
+ * Returns  MAT  Aᵀ
+ */
+class MatrixTransposeItem : public InterpreterItem {
+public:
+    MatrixTransposeItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Invert a square matrix (cv::invert).
+ *
+ * Parameters
+ * ----------
+ * - mat     MAT     Square input matrix.
+ * - method  STRING  "lu" (default) | "svd" | "cholesky" | "pseudo".
+ *                   "pseudo" computes the Moore-Penrose pseudo-inverse
+ *                   for non-square / singular matrices.
+ *
+ * Returns  MAT  A⁻¹  (or pseudo-inverse)
+ *
+ * Example
+ * -------
+ *   inv = matrix_invert(homography)
+ *   inv = matrix_invert(cov_mat, "svd")
+ */
+class MatrixInvertItem : public InterpreterItem {
+public:
+    MatrixInvertItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
 } // namespace visionpipe
 
 #endif // VISIONPIPE_MATH_EVAL_ITEMS_H
