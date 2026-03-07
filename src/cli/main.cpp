@@ -90,6 +90,7 @@ struct CLIOptions {
     int port = 8080;       // For docs server
     bool throughputMode = false;            // Debug throughput profiling
     double throughputIntervalSec = 1.0;    // Print interval for throughput table
+    bool latencyMode = false;              // Latency percentile reporting (p50/p95/p99)
 };
 
 // ============================================================================
@@ -142,6 +143,8 @@ Run Options:
   --fps-counting           Enable frame counting (disabled by default for long-running pipelines)
   --throughput             Enable debug throughput mode (calls/s, avg/min/max ms per pipeline)
   --throughput-interval N  Refresh interval in seconds (default: 1.0, requires --throughput)
+  --latency                Enable latency percentile mode (p50/p95/p99/max per pipeline,
+                           includes exec_fork child processes via shared-memory arena)
 
 Docs Options:
   --output, -o <dir>       Output directory (default: current)
@@ -272,6 +275,8 @@ CLIOptions parseArgs(int argc, char* argv[]) {
             opts.throughputMode = true;
         } else if (arg == "--throughput-interval" && i + 1 < argc) {
             opts.throughputIntervalSec = std::stod(argv[++i]);
+        } else if (arg == "--latency") {
+            opts.latencyMode = true;
         } else if (arg == "--port" && i + 1 < argc) {
             opts.port = std::stoi(argv[++i]);
         } else if (arg[0] != '-' && opts.scriptPath.empty()) {
@@ -343,6 +348,7 @@ int cmdRun(const CLIOptions& opts) {
         config.interpreterConfig.verbose = opts.verbose;
         config.interpreterConfig.throughputMode = opts.throughputMode;
         config.interpreterConfig.throughputPrintIntervalSec = opts.throughputIntervalSec;
+        config.interpreterConfig.latencyMode = opts.latencyMode;
         
         // Create runtime
         Runtime runtime(config);

@@ -1,8 +1,41 @@
 #include "interpreter/items/shm_items.h"
 #include "utils/shm_frame_transport.h"
 #include <opencv2/core.hpp>
+#include <mutex>
+#include <unordered_map>
 
 namespace visionpipe {
+
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+// ============================================================================
+// Per-process, per-channel frame cache for iceoryx2
+//
+// Background: all interpreter threads in one process share the same iceoryx2
+// subscriber session (and therefore the same queue).  Without this cache, the
+// first caller (e.g. brightness_adjustment) drains the queue and the second
+// caller (e.g. display) finds nothing.
+//
+// The session-level fix in receive() already handles the correctness problem
+// by returning the cached lastReadMat when the queue is empty.  This additional
+// process-level cache is a performance optimization: it lets subsequent callers
+// skip the subscriber receive() call entirely by checking the reader-side
+// sequence number (iox2FrameGetSeq / shmFrameGetSeq).
+//
+// • Key   : channel name
+// • Value : {seqNum of last cached frame, Mat}
+// ============================================================================
+namespace {
+struct Iox2FrameCache {
+    std::mutex                                                    mtx;
+    std::unordered_map<std::string, std::pair<uint64_t, cv::Mat>> entries;
+};
+
+Iox2FrameCache& iox2TurnCache() {
+    static Iox2FrameCache c;
+    return c;
+}
+} // anonymous namespace
+#endif // VISIONPIPE_IPC_USE_ICEORYX2
 
 // ============================================================================
 // ShmCreateItem
@@ -95,11 +128,38 @@ ShmReadItem::ShmReadItem() {
 ExecutionResult ShmReadItem::execute(const std::vector<RuntimeValue>& args,
                                       ExecutionContext& ctx) {
     std::string name = args[0].asString();
+
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // Per-turn dedup: if the reader-side seq for this channel hasn't changed
+    // since another thread/pipeline already fetched it, return the cached Mat
+    // without touching the iceoryx2 subscriber queue at all.
+    uint64_t curSeq = shmFrameGetSeq(name);
+    if (curSeq > 0) {
+        std::lock_guard<std::mutex> lk(iox2TurnCache().mtx);
+        auto it = iox2TurnCache().entries.find(name);
+        if (it != iox2TurnCache().entries.end() && it->second.first == curSeq) {
+            ctx.currentMat = it->second.second;
+            return ExecutionResult::ok(ctx.currentMat);
+        }
+    }
+#endif
+
     cv::Mat frame;
     if (!shmFrameRead(name, frame)) {
         // No frame available yet – pass through (don't fail on first iteration).
         return ExecutionResult::ok(ctx.currentMat);
     }
+
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // Write-through: cache by the post-receive seq so subsequent callers
+    // in the same process turn skip the subscriber queue entirely.
+    uint64_t newSeq = shmFrameGetSeq(name);   // updated by receive() above
+    if (newSeq > 0) {
+        std::lock_guard<std::mutex> lk(iox2TurnCache().mtx);
+        iox2TurnCache().entries[name] = {newSeq, frame};
+    }
+#endif
+
     return ExecutionResult::ok(frame);
 }
 

@@ -1,43 +1,43 @@
-# stereo_multiprocess.vsp
+# stereo_test.vsp
 #
-# Dual-camera stereo with PROCESS-BASED capture (exec_fork).
+# Dual-camera stereo capture with process-based (exec_fork) isolation.
+# Designed for headless use with libvisionpipe / pyvisionpipe:
 #
-# ── Process layout ──────────────────────────────────────────────────────────
+#   session.grab_frame("frame_l")
+#   session.grab_frame("frame_r")
 #
-#   Process 0 (parent)    exec_loop main
-#     ├─ use(global "frame_l/r")  ← auto-reads from child shared memory
-#     ├─ calc stabilization       (sequential)
-#     └─ display                  (sequential, GUI thread)
+# Process layout:
 #
-#   Process 1 (child)     exec_fork capture_left
-#     └─ v4l2_cap → debayer → global_cache   (auto-publishes via shm)
+#   Process 0 (parent)      exec_loop main
+#     └─ wait_key               (keeps the parent alive)
 #
-#   Process 2 (child)     exec_fork capture_right
-#     └─ v4l2_cap → debayer → global_cache   (auto-publishes via shm)
+#   Process 1 (child)       exec_fork cap_l_loop
+#     └─ video_cap → debayer → cvt_color → global_cache
+#        → [use(global) → frame_sink("frame_l")]
 #
-#   Background (parent)   exec_interval brightness_adjustment 100ms
+#   Process 2 (child)       exec_fork cap_r_loop
+#     └─ video_cap → debayer → cvt_color → global_cache
+#        → [use(global) → frame_sink("frame_r")]
 #
-# The global_cache / use(global) model works transparently across processes.
-# No manual shm_create / shm_write / shm_read needed.
-# Ctrl+C cleanly terminates child processes.
+#   Background (parent)     exec_interval brightness_adjustment 33ms
 #
-
-global movement_matrix
+# frame_sink publishes each frame into a named IPC channel (Iceoryx2 or
+# POSIX shm, depending on the build configuration).  libvisionpipe's
+# grab_frame() reads from those channels without touching the pipelines.
+#
 
 # ────────────────────────────────────────────────────────────────────────────
-# One-shot setup (runs in parent BEFORE fork)
+# One-shot camera setup (runs in parent BEFORE fork)
 # ────────────────────────────────────────────────────────────────────────────
 
 pipeline setup
 
-    # Camera Left  → /dev/video9
     v4l2_setup("/dev/video9", 1640, 1232, "SRGGB8", 60, 4)
     v4l2_prop("/dev/video9", "vertical_flip", 1)
     v4l2_prop("/dev/video9", "exposure",      1600)
     v4l2_prop("/dev/video9", "analogue_gain", 232)
     v4l2_prop("/dev/video9", "digital_gain",  700)
 
-    # Camera Right → /dev/video3
     v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 60, 4)
     v4l2_prop("/dev/video3", "vertical_flip", 1)
     v4l2_prop("/dev/video3", "exposure",      1600)
@@ -47,49 +47,48 @@ pipeline setup
 end
 
 # ────────────────────────────────────────────────────────────────────────────
-# Capture pipelines (each runs in its own CHILD PROCESS via exec_fork)
-#
-# global_cache() inside a fork child automatically publishes the frame
-# to POSIX shared memory.  The parent reads it back transparently when
-# use(global "frame_l") is called.
+# Capture + publish pipelines (each runs in its own child process)
 # ────────────────────────────────────────────────────────────────────────────
+
+# frame_sink_publish_l: reads the global cache slot written by capture_left
+# and publishes it to the libvisionpipe IPC channel "frame_l".
+pipeline frame_sink_publish_l
+    use(global "frame_l")
+    frame_sink("frame_l")
+end
 
 pipeline capture_left
     video_cap("/dev/video9", "v4l2_native")
     debayer("GRBG")
-    stabilization_apply(movement_matrix)
     cvt_color("bgr2gray")
     global_cache("frame_l")
+    exec_seq frame_sink_publish_l
+end
+
+pipeline cap_l_loop
+    exec_loop capture_left
+end
+
+# Same pattern for the right camera.
+pipeline frame_sink_publish_r
+    use(global "frame_r")
+    frame_sink("frame_r")
 end
 
 pipeline capture_right
     video_cap("/dev/video3", "v4l2_native")
     debayer("GRBG")
-    stabilization_apply(movement_matrix)
     cvt_color("bgr2gray")
     global_cache("frame_r")
+    exec_seq frame_sink_publish_r
+end
+
+pipeline cap_r_loop
+    exec_loop capture_right
 end
 
 # ────────────────────────────────────────────────────────────────────────────
-# Stabilization (runs in parent, sequential)
-# ────────────────────────────────────────────────────────────────────────────
-
-pipeline calculate_stabilization
-
-    use(global "frame_l")
-    resize(480, 320)
-    movement_matrix_l = stabilization_calculate("cam_l", 0.8, 0.6)
-
-    use(global "frame_r")
-    resize(480, 320)
-    movement_matrix_r = stabilization_calculate("cam_r", 0.8, 0.6)
-
-    global movement_matrix = matrix_avg(movement_matrix_l, movement_matrix_r)
-
-end
-
-# ────────────────────────────────────────────────────────────────────────────
-# Brightness (background, parent process)
+# Auto-brightness (background thread in parent)
 # ────────────────────────────────────────────────────────────────────────────
 
 pipeline brightness_adjustment
@@ -103,21 +102,10 @@ pipeline brightness_adjustment
 end
 
 # ────────────────────────────────────────────────────────────────────────────
-# Display (must be main/GUI thread)
+# Main loop (parent process — just keeps the session alive)
 # ────────────────────────────────────────────────────────────────────────────
 
-pipeline display
-    use(global "frame_l")
-    resize(640, 480)
-    cache("frame_left")
-
-    use(global "frame_r")
-    resize(640, 480)
-    hstack("frame_left")
-
-    fps(true, 10, 30)
-    imshow("Stereo — multiprocess")
-
+pipeline main
     key = wait_key(1)
     if key == 113
         break
@@ -128,24 +116,11 @@ pipeline display
 end
 
 # ────────────────────────────────────────────────────────────────────────────
-# Main loop (parent — reads shm transparently via use(global))
-# ────────────────────────────────────────────────────────────────────────────
-
-pipeline main
-    exec_seq calculate_stabilization
-    exec_seq display
-end
-
-# ────────────────────────────────────────────────────────────────────────────
 # Entry points
-#   1. setup                         (configure cameras)
-#   2. exec_fork capture_left/right  (launch child processes BEFORE loop)
-#   3. brightness background thread
-#   4. exec_loop main                (parent main loop)
 # ────────────────────────────────────────────────────────────────────────────
 
 exec_seq setup
-exec_fork capture_left
-exec_fork capture_right
-exec_interval brightness_adjustment 100
+exec_fork cap_l_loop
+exec_fork cap_r_loop
+exec_interval brightness_adjustment 33
 exec_loop main

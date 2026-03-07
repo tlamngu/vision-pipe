@@ -44,6 +44,8 @@
   #include <signal.h>
   #include <unistd.h>
   #include <cerrno>
+  #include <fcntl.h>     // open()
+  #include <sys/prctl.h>  // prctl(PR_SET_PDEATHSIG)
 #endif
 
 namespace visionpipe {
@@ -149,6 +151,15 @@ void Session::onFrame(const std::string& sinkName, FrameCallback callback) {
     }
 }
 
+void Session::onFrameUpdate(const std::string& sinkName, FrameUpdateCallback callback) {
+    auto& sink = _sinks[sinkName];
+    sink.updateCallbacks.push_back(std::move(callback));
+
+    if (!sink.connected && _state.load() == SessionState::RUNNING) {
+        connectSink(sinkName);
+    }
+}
+
 bool Session::grabFrame(const std::string& sinkName, cv::Mat& frame) {
     auto it = _sinks.find(sinkName);
     if (it == _sinks.end()) {
@@ -163,6 +174,28 @@ bool Session::grabFrame(const std::string& sinkName, cv::Mat& frame) {
         if (!sink.connected) return false;
     }
 
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // The stale-seq pre-check that used iox2FrameGetSeq() before calling
+    // receive() was a bug: iox2FrameGetSeq() returns lastReadSeq (the seq of
+    // the last *drained* sample), which equals lastDispatchedSeq after the
+    // first successful grab.  Every subsequent grab would hit the
+    // "cachedSeq == lastDispatchedSeq → return false" path even if new
+    // frames were sitting in the subscriber queue, because lastReadSeq only
+    // advances inside receive().
+    //
+    // Fix: always call receive() first; reject only if the returned seq has
+    // not advanced beyond what we already dispatched.
+    cv::Mat received;
+    if (!visionpipe::iox2_transport::iox2FrameRead(sink.ioxChannelName, received)) {
+        return false;
+    }
+    uint64_t newSeq = visionpipe::iox2_transport::iox2FrameGetSeq(sink.ioxChannelName);
+    if (newSeq == sink.lastDispatchedSeq) return false;
+    // Clone so the caller owns the data (iceoryx2 sample may be recycled).
+    frame = received.clone();
+    sink.lastDispatchedSeq = newSeq;
+    return true;
+#else
     int rows, cols, type, step;
     const uint8_t* data;
     uint64_t seq;
@@ -172,6 +205,20 @@ bool Session::grabFrame(const std::string& sinkName, cv::Mat& frame) {
     }
 
     if (seq == sink.lastDispatchedSeq) {
+        // No new frame yet.  Periodically check that the producer
+        // (exec_fork child) is still alive.  If it has died the seq
+        // counter will never advance; close the consumer so the next
+        // grabFrame call reconnects to the new SHM segment created by
+        // a restarted child.
+        auto now = std::chrono::steady_clock::now();
+        if (now - sink.lastLivenessCheck > std::chrono::seconds(1)) {
+            sink.lastLivenessCheck = now;
+            if (!sink.consumer->isProducerAlive()) {
+                sink.consumer->close();
+                sink.connected       = false;
+                sink.lastDispatchedSeq = 0;
+            }
+        }
         return false; // No new frame
     }
 
@@ -180,6 +227,7 @@ bool Session::grabFrame(const std::string& sinkName, cv::Mat& frame) {
     frame = cv::Mat(rows, cols, type, const_cast<uint8_t*>(data), step);
     sink.lastDispatchedSeq = seq;
     return true;
+#endif
 }
 
 void Session::spin(int pollIntervalMs) {
@@ -249,7 +297,13 @@ void Session::stop(int timeoutMs) {
 
     // Clean up sinks
     for (auto& [name, sink] : _sinks) {
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+        if (sink.connected && !sink.ioxChannelName.empty()) {
+            visionpipe::iox2_transport::iox2FrameDestroy(sink.ioxChannelName);
+        }
+#else
         if (sink.consumer) sink.consumer->close();
+#endif
     }
     _sinks.clear();
 }
@@ -261,21 +315,34 @@ void Session::stop(int timeoutMs) {
 
     if (_pid <= 0) return;
 
-    // Send SIGINT first (graceful)
+    // visionpipe runs in its own process group (pgid == _pid, set via
+    // setpgid(0,0) at exec time).  Sending SIGINT to the process directly
+    // triggers visionpipe's signal handler which calls shutdownForkChildren()
+    // to cleanly reap all exec_fork grandchildren.
     if (kill(_pid, SIGINT) == 0) {
         if (waitForExit(timeoutMs)) {
-            return;
+            goto cleanup;
         }
-        // Force kill
-        kill(_pid, SIGKILL);
-        waitForExit(1000);
     }
 
+    // Graceful shutdown timed out — kill the entire process group to take
+    // down any exec_fork children that visionpipe may not have reaped yet.
+    ::killpg(_pid, SIGKILL);
+    waitForExit(1000);
+
+cleanup:
     // Clean up sinks
     for (auto& [name, sink] : _sinks) {
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+        if (sink.connected && !sink.ioxChannelName.empty()) {
+            visionpipe::iox2_transport::iox2FrameDestroy(sink.ioxChannelName);
+        }
+#else
         if (sink.consumer) sink.consumer->close();
+#endif
     }
     _sinks.clear();
+    _pid = -1;
 }
 
 #endif
@@ -363,6 +430,22 @@ void Session::connectSink(const std::string& sinkName) {
     auto& sink = _sinks[sinkName];
     if (sink.connected) return;
 
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // Build the channel name that matches the frame_sink publisher.
+    // Iceoryx2 service: "/vp_<sessionId>_<sinkName>"
+    sink.ioxChannelName = buildIox2ChannelName(_sessionId, sinkName);
+    // Pre-register the subscriber with a placeholder geometry; the actual
+    // cv::Mat dimensions are resolved on the first received sample.
+    if (visionpipe::iox2_transport::iox2FrameCreate(
+            sink.ioxChannelName, 0, 0, CV_8UC3)) {
+        sink.connected = true;
+        std::cout << "[libvisionpipe] Iceoryx2 subscriber ready for '" << sinkName
+                  << "' (channel: " << sink.ioxChannelName << ")\n";
+    } else {
+        std::cerr << "[libvisionpipe] Failed to open iceoryx2 subscriber for '" << sinkName
+                  << "' (channel: " << sink.ioxChannelName << ")\n";
+    }
+#else
     if (!sink.consumer) {
         sink.consumer = std::make_unique<FrameShmConsumer>();
     }
@@ -371,9 +454,31 @@ void Session::connectSink(const std::string& sinkName) {
     if (sink.consumer->open(shmName, _config.sinkTimeoutMs)) {
         sink.connected = true;
     }
+#endif
 }
 
 int Session::dispatchSink(const std::string& /*sinkName*/, SinkConnection& sink) {
+    if (!sink.connected) return 0;
+
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // Same fix as grabFrame: do NOT use iox2FrameGetSeq() as a pre-check.
+    // lastReadSeq only updates inside receive(), so checking it before the
+    // call would always short-circuit after the first dispatched frame.
+    cv::Mat frame;
+    if (!visionpipe::iox2_transport::iox2FrameRead(sink.ioxChannelName, frame)) return 0;
+
+    uint64_t newSeq = visionpipe::iox2_transport::iox2FrameGetSeq(sink.ioxChannelName);
+    if (newSeq == sink.lastDispatchedSeq) return 0;
+
+    for (auto& cb : sink.callbacks) {
+        cb(frame, newSeq);
+    }
+    for (auto& cb : sink.updateCallbacks) {
+        cb(newSeq);
+    }
+    sink.lastDispatchedSeq = newSeq;
+    return 1;
+#else
     if (!sink.consumer || !sink.connected) return 0;
     if (!sink.consumer->hasNewFrame()) return 0;
 
@@ -392,9 +497,13 @@ int Session::dispatchSink(const std::string& /*sinkName*/, SinkConnection& sink)
     for (auto& cb : sink.callbacks) {
         cb(frame, seq);
     }
+    for (auto& cb : sink.updateCallbacks) {
+        cb(seq);
+    }
 
     sink.lastDispatchedSeq = seq;
     return 1;
+#endif
 }
 
 // --- checkProcess() ---
@@ -550,10 +659,32 @@ std::unique_ptr<Session> VisionPipe::run(const std::string& scriptPath) {
     }
 
     if (pid == 0) {
-        // Child process
+        // Child process — put visionpipe in its own process group so that
+        // Ctrl+C in the terminal only signals the Python process, not us.
+        // libvisionpipe sends SIGINT to this PID explicitly via stop().
+        setpgid(0, 0);
+
+        // Auto-die with SIGINT if the parent (Python) exits unexpectedly
+        // (even on SIGKILL).  visionpipe's signal handler will then call
+        // shutdownForkChildren() to reap exec_fork grandchildren.
+        prctl(PR_SET_PDEATHSIG, SIGINT);
+
+        // Redirect stdout+stderr if logFile is set.
+        if (!_config.logFile.empty()) {
+            int flags = O_WRONLY | O_CREAT | O_TRUNC;
+            // /dev/null never needs truncation, but O_TRUNC is harmless.
+            int logFd = ::open(_config.logFile.c_str(), flags, 0644);
+            if (logFd >= 0) {
+                dup2(logFd, STDOUT_FILENO);
+                dup2(logFd, STDERR_FILENO);
+                ::close(logFd);
+            }
+        }
+
         setenv("VISIONPIPE_SESSION_ID", sessionId.c_str(), 1);
         execvp(argv[0], argv.data());
-        std::cerr << "[VisionPipe] exec failed: " << strerror(errno) << std::endl;
+        // exec failed — write to stderr even if redirected to /dev/null
+        ::write(STDERR_FILENO, "[VisionPipe] exec failed\n", 25);
         _exit(127);
     }
 

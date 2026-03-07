@@ -42,6 +42,13 @@ struct InterpreterConfig {
     // thread prints a summary table at the given interval.
     bool   throughputMode           = false;
     double throughputPrintIntervalSec = 1.0;  ///< How often to refresh the console report
+
+    // ── Latency mode ────────────────────────────────────────────────────────
+    // When enabled, tracks per-pipeline latency histograms and prints a
+    // latency percentile table (p50 / p95 / p99 / max) alongside (or instead
+    // of) the throughput table.  Works for both in-process pipelines and
+    // exec_fork child processes (via the shared ShmArena).
+    bool   latencyMode              = false;
 };
 
 /**
@@ -398,12 +405,20 @@ private:
     // only during initial entry insertion (once per pipeline name per run).
     // =========================================================================
     struct ThroughputTable {
+        // ── 8-bucket log2 latency histogram ──────────────────────────────
+        // Buckets (pipeline execution time):
+        //   [0] < 1 ms   [1] 1-2 ms   [2] 2-4 ms   [3] 4-8 ms
+        //   [4] 8-16 ms  [5] 16-32 ms [6] 32-64 ms  [7] >= 64 ms
+        static constexpr int kBuckets = 8;
+
         struct Entry {
             std::atomic<uint64_t> callCount{0};
             std::atomic<uint64_t> totalNs{0};
             std::atomic<uint64_t> minNs{UINT64_MAX};
             std::atomic<uint64_t> maxNs{0};
-            uint64_t snapCount{0};  // only touched by the printer thread
+            uint64_t snapCount{0};           // only touched by the printer thread
+            std::atomic<uint32_t> latBuckets[kBuckets];  // histogram
+            Entry() { for (auto& b : latBuckets) b.store(0); }
         };
         std::unordered_map<std::string, std::unique_ptr<Entry>> entries;
         std::mutex mutex;  ///< protects entries (insertions only)
@@ -413,8 +428,13 @@ private:
         std::condition_variable cv;
         std::mutex             cvMtx;
 
-        // Fork-child throughput (read from ShmArena by the printer thread)
-        ShmArena* forkArena{nullptr};
+        // Printer display flags (set before startPrinter())
+        bool latencyMode{false};
+
+        // Fork-child throughput (read from ShmArena by the printer thread).
+        // Atomic so the main thread can set it after fork() without a data
+        // race against the already-running printer thread.
+        std::atomic<ShmArena*> forkArena{nullptr};
         std::unordered_map<std::string, uint64_t> forkSnapCounts;
 
         void record(const std::string& name, uint64_t durationNs);

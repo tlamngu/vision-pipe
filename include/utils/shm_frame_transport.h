@@ -1,6 +1,53 @@
 #ifndef VISIONPIPE_SHM_FRAME_TRANSPORT_H
 #define VISIONPIPE_SHM_FRAME_TRANSPORT_H
 
+// ── Iceoryx2 backend redirect ────────────────────────────────────────────────
+// When -DVISIONPIPE_IPC_USE_ICEORYX2 is set, all shmFrameXxx() symbols are
+// provided as inlines by iceoryx_frame_transport.h.  The POSIX shm
+// declarations below are skipped so there is no symbol conflict.
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+#  include "extensions/iceoryx/iceoryx_frame_transport.h"
+
+// Alias the iceoryx2 transport functions under the shm_ names so existing
+// code (shm_items.cpp, interpreter.cpp, etc.) compiles unchanged.
+namespace visionpipe {
+
+inline bool shmFrameCreate(const std::string& n, int w, int h, int t) {
+    return iox2_transport::iox2FrameCreate(n, w, h, t);
+}
+inline bool shmFrameWrite(const std::string& n, const cv::Mat& f) {
+    return iox2_transport::iox2FrameWrite(n, f);
+}
+inline bool shmFrameRead(const std::string& n, cv::Mat& out) {
+    return iox2_transport::iox2FrameRead(n, out);
+}
+inline void shmFrameSetShutdown(const std::string& n) {
+    iox2_transport::iox2FrameSetShutdown(n);
+}
+inline bool shmFrameIsShutdown(const std::string& n) {
+    return iox2_transport::iox2FrameIsShutdown(n);
+}
+inline void shmFrameDestroy(const std::string& n) {
+    iox2_transport::iox2FrameDestroy(n);
+}
+inline void shmFrameDestroyAll() {
+    iox2_transport::iox2FrameDestroyAll();
+}
+inline std::vector<std::string> shmFrameListRegions() {
+    return iox2_transport::iox2FrameListChannels();
+}
+/// Expose the reader-side sequence number for per-turn dedup in ShmReadItem.
+/// Returns iox2FrameGetSeq(): seq of the last frame received from this channel.
+/// Returns 0 if no frame has been received yet.
+inline uint64_t shmFrameGetSeq(const std::string& n) {
+    return iox2_transport::iox2FrameGetSeq(n);
+}
+
+} // namespace visionpipe
+
+#else  // VISIONPIPE_IPC_USE_ICEORYX2 — default POSIX shm backend
+// ────────────────────────────────────────────────────────────────────────────
+
 /**
  * @file shm_frame_transport.h
  * @brief POSIX shared-memory frame transport for inter-process cv::Mat exchange.
@@ -142,4 +189,5 @@ std::vector<std::string> shmFrameListRegions();
 
 } // namespace visionpipe
 
+#endif // VISIONPIPE_IPC_USE_ICEORYX2 (else-branch end)
 #endif // VISIONPIPE_SHM_FRAME_TRANSPORT_H

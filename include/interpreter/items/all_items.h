@@ -60,6 +60,11 @@
 #include "interpreter/items/fastcv_items.h"
 #endif
 
+// Optional: Iceoryx2 explicit publish/subscribe items
+#ifdef VISIONPIPE_ICEORYX2_ENABLED
+#include "extensions/iceoryx/publish_frame_item.h"
+#endif
+
 namespace visionpipe {
 
 /**

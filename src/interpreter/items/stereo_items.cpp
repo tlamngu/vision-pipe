@@ -1,6 +1,8 @@
 #include "interpreter/items/stereo_items.h"
 #include "interpreter/cache_manager.h"
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 
 namespace visionpipe {
 
@@ -11,6 +13,7 @@ void registerStereoItems(ItemRegistry& registry) {
     registry.add<FindChessboardCornersItem>();
     registry.add<FindCirclesGridItem>();
     registry.add<DrawChessboardCornersItem>();
+    registry.add<ChessboardDetectedSaveItem>();
     registry.add<CalibrateCameraItem>();
     registry.add<StereoCalibrateItem>();
     registry.add<StereoRectifyItem>();
@@ -347,6 +350,82 @@ ExecutionResult DrawChessboardCornersItem::execute(const std::vector<RuntimeValu
     cv::drawChessboardCorners(result, cv::Size(patternW, patternH), corners, found);
     
     return ExecutionResult::ok(result);
+}
+
+// ============================================================================
+// ChessboardDetectedSaveItem
+// ============================================================================
+
+ChessboardDetectedSaveItem::ChessboardDetectedSaveItem() {
+    _functionName = "chessboard_detected_save";
+    _description = "Saves detected chessboard corners to a JSON file in the given directory (only when found)";
+    _category = "stereo";
+    _params = {
+        ParamDef::required("file_dir", BaseType::STRING, "Directory to save JSON files into"),
+        ParamDef::optional("corners_cache", BaseType::STRING, "Cache ID for detected corners", "corners"),
+        ParamDef::optional("pattern_width", BaseType::INT, "Pattern inner-corner columns (for metadata)", 0),
+        ParamDef::optional("pattern_height", BaseType::INT, "Pattern inner-corner rows (for metadata)", 0)
+    };
+    _example = "chessboard_detected_save(\"/tmp/calib\") | chessboard_detected_save(\"/tmp/calib\", \"corners\", 9, 6)";
+    _returnType = "mat";
+    _tags = {"calibration", "chessboard", "save", "json"};
+}
+
+ExecutionResult ChessboardDetectedSaveItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    std::string fileDir   = args[0].asString();
+    std::string cacheId   = args.size() > 1 ? args[1].asString() : "corners";
+    int patternW          = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 0;
+    int patternH          = args.size() > 3 ? static_cast<int>(args[3].asNumber()) : 0;
+
+    // Only save when the chessboard was successfully detected.
+    cv::Mat foundMat = ctx.cacheManager->get(cacheId + "_found");
+    bool found = !foundMat.empty() && foundMat.at<uchar>(0, 0) > 0;
+    if (!found) {
+        return ExecutionResult::ok(ctx.currentMat);
+    }
+
+    cv::Mat cornersMat = ctx.cacheManager->get(cacheId);
+    if (cornersMat.empty()) {
+        return ExecutionResult::fail("Corners not found in cache: " + cacheId);
+    }
+
+    // Auto-increment save counter per directory.
+    const std::string counterKey = "__chessboard_save_count:" + fileDir;
+    cv::Mat counterMat = ctx.cacheManager->get(counterKey);
+    int count = 0;
+    if (!counterMat.empty()) {
+        count = counterMat.at<int>(0, 0);
+    }
+    ctx.cacheManager->set(counterKey, cv::Mat(1, 1, CV_32S, cv::Scalar(count + 1)));
+
+    // Ensure the output directory exists.
+    std::system(("mkdir -p \"" + fileDir + "\"").c_str());
+
+    // Build numbered file path.
+    char fname[64];
+    std::snprintf(fname, sizeof(fname), "chessboard_%04d.json", count);
+    std::string filePath = fileDir + "/" + fname;
+
+    // Write JSON via cv::FileStorage.
+    cv::FileStorage fs(filePath, cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
+    if (!fs.isOpened()) {
+        return ExecutionResult::fail("Failed to open file for writing: " + filePath);
+    }
+
+    fs << "found" << true;
+    if (patternW > 0) fs << "pattern_width"  << patternW;
+    if (patternH > 0) fs << "pattern_height" << patternH;
+    fs << "corner_count" << cornersMat.rows;
+    fs << "corners" << "[";
+    for (int i = 0; i < cornersMat.rows; i++) {
+        cv::Point2f pt = cornersMat.at<cv::Point2f>(i);
+        fs << "{:" << "x" << pt.x << "y" << pt.y << "}";
+    }
+    fs << "]";
+    fs.release();
+
+    std::cout << "Chessboard detection saved to: " << filePath << std::endl;
+    return ExecutionResult::ok(ctx.currentMat);
 }
 
 // ============================================================================

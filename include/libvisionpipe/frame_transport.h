@@ -80,6 +80,22 @@ constexpr size_t shmTotalSize() {
 std::string buildShmName(const std::string& sessionId, const std::string& sinkName);
 
 /**
+ * @brief Build the Iceoryx2 channel name for a given session + sink.
+ *
+ * Returns "<sessionId>_<sinkName>".  The iox2 transport layer prepends
+ * "/vp_" to form the actual Iceoryx2 service name, e.g.
+ * "/vp_<sessionId>_<sinkName>".
+ *
+ * Both the publisher (frame_sink with VISIONPIPE_IPC_USE_ICEORYX2) and the
+ * subscriber (libvisionpipe client) must use this function to derive matching
+ * channel names.
+ *
+ * @param sessionId Unique session identifier
+ * @param sinkName  Sink name from frame_sink("name")
+ */
+std::string buildIox2ChannelName(const std::string& sessionId, const std::string& sinkName);
+
+/**
  * @brief Producer side: create and map shared memory for writing frames
  */
 class FrameShmProducer {
@@ -174,6 +190,19 @@ public:
     void close();
 
     bool isOpen() const { return _mapped != nullptr; }
+
+    /**
+     * @brief Check whether the producer process is still alive.
+     *
+     * Uses kill(pid, 0) against the producerPid stored in the SHM header.
+     * Returns true if the process is alive or if liveness cannot be
+     * determined (e.g. producerPid is 0 or EPERM).  Returns false only when
+     * the OS confirms the PID no longer exists (ESRCH).
+     *
+     * Call this periodically (e.g. once per second) to detect dead producers
+     * so the consumer can disconnect and reconnect to a new SHM segment.
+     */
+    bool isProducerAlive() const;
 
 private:
 #if defined(_WIN32)

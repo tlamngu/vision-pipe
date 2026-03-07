@@ -8,6 +8,10 @@
   #include <unistd.h>    // getpid
 #endif
 
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+#include "extensions/iceoryx/iceoryx_frame_transport.h"
+#endif
+
 namespace visionpipe {
 
 // ============================================================================
@@ -85,6 +89,23 @@ FrameSinkItem::FrameSinkItem() {
     _tags = {"sink", "ipc", "shared_memory", "libvisionpipe"};
 }
 
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+// Resolve the session ID once per process (reads VISIONPIPE_SESSION_ID or falls back to PID).
+static const std::string& iox2SessionId() {
+    static std::string id = []() -> std::string {
+#if defined(_WIN32)
+        char buf[256] = {};
+        DWORD len = GetEnvironmentVariableA("VISIONPIPE_SESSION_ID", buf, sizeof(buf));
+        return (len > 0) ? std::string(buf, len) : std::to_string(_getpid());
+#else
+        const char* env = std::getenv("VISIONPIPE_SESSION_ID");
+        return (env && env[0]) ? std::string(env) : std::to_string(::getpid());
+#endif
+    }();
+    return id;
+}
+#endif // VISIONPIPE_IPC_USE_ICEORYX2
+
 ExecutionResult FrameSinkItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     if (ctx.currentMat.empty()) {
         return ExecutionResult::fail("frame_sink: no frame available (currentMat is empty)");
@@ -92,9 +113,27 @@ ExecutionResult FrameSinkItem::execute(const std::vector<RuntimeValue>& args, Ex
 
     std::string sinkName = args[0].asString();
 
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+    // ── Iceoryx2 zero-copy publish path ──────────────────────────────────────
+    // Channel name: "<sessionId>_<sinkName>"  →  Iceoryx2 service "/vp_<...>"
+    std::string channelName = buildIox2ChannelName(iox2SessionId(), sinkName);
+
+    // iox2FrameWrite auto-creates the channel on first call using the
+    // frame's actual geometry, so no explicit iox2FrameCreate() is needed.
+    cv::Mat cont = ctx.currentMat.isContinuous()
+                   ? ctx.currentMat
+                   : ctx.currentMat.clone();
+
+    if (!visionpipe::iox2_transport::iox2FrameWrite(channelName, cont)) {
+        return ExecutionResult::fail(
+            "frame_sink: iceoryx2 write failed for '" + sinkName + "'");
+    }
+#else
+    // ── POSIX shared-memory publish path ─────────────────────────────────────
     auto producer = FrameSinkRegistry::instance().getProducer(sinkName);
     if (!producer) {
-        return ExecutionResult::fail("frame_sink: failed to create producer for '" + sinkName + "'");
+        return ExecutionResult::fail(
+            "frame_sink: failed to create producer for '" + sinkName + "'");
     }
 
     // Ensure continuous memory layout
@@ -112,6 +151,7 @@ ExecutionResult FrameSinkItem::execute(const std::vector<RuntimeValue>& args, Ex
         continuous.type(),
         static_cast<int>(continuous.step[0])
     );
+#endif // VISIONPIPE_IPC_USE_ICEORYX2
 
     // Pass-through: frame_sink does not modify the current mat
     return ExecutionResult::ok(ctx.currentMat);

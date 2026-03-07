@@ -117,6 +117,23 @@ public:
 };
 
 /**
+ * @brief Saves detected chessboard corners to a JSON file in the specified directory.
+ * Only saves when the chessboard was successfully found. Files are auto-numbered
+ * (chessboard_0000.json, chessboard_0001.json, …) inside file_dir.
+ *
+ * Parameters:
+ * - file_dir: Directory path where JSON files will be written
+ * - corners_cache: Cache ID for corners (default: "corners")
+ * - pattern_width: Inner corner columns for metadata (default: 0 = omit)
+ * - pattern_height: Inner corner rows for metadata (default: 0 = omit)
+ */
+class ChessboardDetectedSaveItem : public InterpreterItem {
+public:
+    ChessboardDetectedSaveItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
  * @brief Calibrates camera from chessboard images
  * 
  * Parameters:

@@ -75,6 +75,11 @@ void shmArenaSetShutdown(ShmArena* arena);
 /// Check if the arena has been shut down.
 bool shmArenaIsShutdown(ShmArena* arena);
 
+/// Return the current monotonic write-sequence number for a named slot.
+/// Returns 0 if the slot does not exist yet.  Cheap: single atomic load after
+/// a linear scan over at most 8 slot headers.
+uint64_t shmArenaGetSeq(ShmArena* arena, const std::string& name);
+
 // ============================================================================
 // Fork-child throughput tracking (shared via arena)
 // ============================================================================
@@ -92,10 +97,20 @@ struct ShmThroughputData {
     uint64_t totalNs;
     uint64_t minNs;
     uint64_t maxNs;
+    // 8-bucket latency histogram matching ShmThroughputSlot::latBuckets:
+    //   [0]<1ms  [1]1-2ms  [2]2-4ms  [3]4-8ms
+    //   [4]8-16ms  [5]16-32ms  [6]32-64ms  [7]>=64ms
+    uint32_t latBuckets[8];
 };
 
 /// Read all active throughput entries from the arena.
 /// The parent's throughput printer calls this to merge fork-child stats.
 std::vector<ShmThroughputData> shmArenaReadThroughput(ShmArena* arena);
+
+/// Compute the write-to-read latency for a named frame slot and record it as a
+/// throughput sample named "ipc:<name>" in the arena's throughput table.
+/// Call this from the reader side (parent) after a successful shmArenaRead.
+/// The IPC latency rows appear in the throughput/latency table as fork:ipc:<name>.
+void shmArenaRecordReadLatency(ShmArena* arena, const std::string& name);
 
 } // namespace visionpipe

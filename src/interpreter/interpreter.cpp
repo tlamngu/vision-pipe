@@ -107,8 +107,9 @@ void Interpreter::execute(std::shared_ptr<Program> program) {
     }
     
     // Create and start the throughput table for the root execution.
-    if (_config.throughputMode && !_throughputTable) {
+    if ((_config.throughputMode || _config.latencyMode) && !_throughputTable) {
         _throughputTable = std::make_shared<ThroughputTable>();
+        _throughputTable->latencyMode = _config.latencyMode;
         _throughputTable->startPrinter(_config.throughputPrintIntervalSec);
     }
 
@@ -744,6 +745,7 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
         _context.verbose   = _config.verbose;
         _context.debugDump = false;
         _debugDump         = false;
+        _context.frameNotReady = false;
 
         // Check condition if present
         if (stmt->condition.has_value()) {
@@ -762,6 +764,15 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
             executePipeline(call->functionName, args, _context.currentMat);
         } else if (auto* ident = dynamic_cast<IdentifierExpr*>(stmt->pipelineRef.get())) {
             executePipeline(ident->name, {}, _context.currentMat);
+        }
+
+        // When a fork-child frame wasn't ready, yield briefly instead of
+        // tight-spinning.  This avoids burning CPU on fruitless retries
+        // and reduces thermal throttling on ARM SoCs.
+        if (_context.frameNotReady) {
+            _context.frameNotReady = false;
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            continue;  // skip frame counter increment — no real work done
         }
         
         // Increment frame counter after each loop iteration (only if enabled)
@@ -1352,6 +1363,17 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
         // setGlobal() automatically writes to the shared-memory arena.
         _cacheManager.setForkChild(true);
 
+        // Fork children do NOT have fork children of their own.
+        // Inheriting _hasForkChildren=true from the parent would cause:
+        //   1. getGlobal() to go through the (slower) arena read-back path
+        //      even though the child is the writer – in-process cache is
+        //      cheaper and correct.
+        //   2. execUse() to trigger frameNotReady when use(global) returns
+        //      an empty mat inside the child's own exec_loop, which breaks
+        //      the inner exec_loop and prevents frame_sink from publishing.
+        _hasForkChildren = false;
+        _cacheManager.setHasForkChildren(false);
+
         // Install a signal handler that sets the static stop flag.
         s_forkChildStopped.store(false);
         struct sigaction sa;
@@ -1386,14 +1408,9 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
 
                 auto t0 = clock::now();
                 executePipeline(pname, args, cv::Mat());
-                auto t1 = clock::now();
-
-                // Record throughput into the arena (parent reads it).
-                if (_shmArena) {
-                    uint64_t ns = static_cast<uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
-                    shmArenaRecordThroughput(_shmArena, pname, ns);
-                }
+                // Per-pipeline timing is now handled inside executePipelineDecl
+                // for fork children (via the _shmArena path). No redundant
+                // recording needed here.
             } catch (const std::exception& e) {
                 std::cerr << "[exec_fork:" << pname << "] Error: " << e.what() << "\n";
                 // On first iteration failure, exit (likely config error).
@@ -1413,7 +1430,7 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
 
     // Let the throughput printer read fork-child stats from the arena.
     if (_throughputTable && _shmArena) {
-        _throughputTable->forkArena = _shmArena;
+        _throughputTable->forkArena.store(_shmArena, std::memory_order_release);
     }
 
     ForkChild child;
@@ -1493,9 +1510,11 @@ void Interpreter::execUse(UseStmt* stmt) {
     // When fork children are active and the frame hasn't arrived yet,
     // skip this pipeline iteration gracefully instead of passing an empty
     // mat to downstream items (resize, debayer, etc.) that would crash.
+    // Set frameNotReady so the exec_loop can yield instead of tight-spinning.
     if (mat.empty() && _hasForkChildren && stmt->isGlobal) {
         _context.currentMat = mat;
         _context.shouldReturn = true;
+        _context.frameNotReady = true;
         return;
     }
     
@@ -2035,7 +2054,16 @@ RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
     // Use local cache to avoid shared_mutex on every read
     refreshParamCache();
     auto it = _paramCache.find(expr->paramName);
-    if (it == _paramCache.end() || it->second.isNull()) {
+    if (it == _paramCache.end()) {
+        reportError("@" + expr->paramName
+                    + " is not declared in params [] block",
+                    expr->location);
+        return RuntimeValue();
+    }
+    if (it->second.isNull()) {
+        reportError("@" + expr->paramName
+                    + " has no value and no default was declared",
+                    expr->location);
         return RuntimeValue();
     }
     const ParamValue& pv = it->second;
@@ -2055,11 +2083,13 @@ RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
 cv::Mat Interpreter::executePipelineDecl(PipelineDecl* pipeline, 
                                           const std::vector<RuntimeValue>& args,
                                           const cv::Mat& input) {
-    // ── Optional throughput timing (zero-cost when disabled) ────────────────────
+    // ── Optional throughput timing ────────────────────────────────────────────
     using clock = std::chrono::steady_clock;
     clock::time_point t0;
     const bool isTopLevel = (_recursionDepth == 0);
-    if (_throughputTable) {
+    // Time execution when the in-process table is active OR we are a fork
+    // child writing directly into the shared arena.
+    if (_throughputTable || _shmArena) {
         t0 = clock::now();
     }
     checkRecursionLimit();
@@ -2133,6 +2163,14 @@ cv::Mat Interpreter::executePipelineDecl(PipelineDecl* pipeline,
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 clock::now() - t0).count());
         _throughputTable->record(pipeline->name, durationNs);
+    } else if (_shmArena) {
+        // Fork-child path: _throughputTable is null; record ALL pipeline depths
+        // into the shared arena so the printer can show per-iteration stats for
+        // inner pipelines like "capture_left" inside exec_loop inside cap_l_loop.
+        uint64_t durationNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - t0).count());
+        shmArenaRecordThroughput(_shmArena, pipeline->name, durationNs);
     }
     
     return result;
@@ -2203,6 +2241,37 @@ void Interpreter::checkRecursionLimit() {
 // Debug throughput helpers  (ThroughputTable methods)
 // ============================================================================
 
+/// Map a duration in nanoseconds to a latency histogram bucket:
+///   [0]<1ms  [1]1-2ms  [2]2-4ms  [3]4-8ms
+///   [4]8-16ms  [5]16-32ms  [6]32-64ms  [7]>=64ms
+static int latencyBucket(uint64_t ns) {
+    if (ns <  1'000'000ULL) return 0;
+    if (ns <  2'000'000ULL) return 1;
+    if (ns <  4'000'000ULL) return 2;
+    if (ns <  8'000'000ULL) return 3;
+    if (ns < 16'000'000ULL) return 4;
+    if (ns < 32'000'000ULL) return 5;
+    if (ns < 64'000'000ULL) return 6;
+    return 7;
+}
+
+/// Estimate the p-th percentile (0-100) from the 8-bucket histogram.
+/// Returns a midpoint approximation of the containing bucket in milliseconds.
+static double percentileMs(const uint64_t buckets[8], uint64_t total, double p) {
+    if (total == 0) return 0.0;
+    static const double bounds[9] = {0.0, 1.0, 2.0, 4.0, 8.0,
+                                     16.0, 32.0, 64.0, 128.0};
+    uint64_t target = static_cast<uint64_t>(p / 100.0 * static_cast<double>(total));
+    if (target == 0) target = 1;
+    uint64_t acc = 0;
+    for (int i = 0; i < 8; i++) {
+        acc += buckets[i];
+        if (acc >= target)
+            return (bounds[i] + bounds[i + 1]) / 2.0;
+    }
+    return bounds[8];
+}
+
 void Interpreter::ThroughputTable::record(const std::string& name, uint64_t durationNs) {
     Entry* entry = nullptr;
     {
@@ -2231,6 +2300,10 @@ void Interpreter::ThroughputTable::record(const std::string& name, uint64_t dura
            !entry->maxNs.compare_exchange_weak(curMax, durationNs,
                                                std::memory_order_relaxed))
     { /* retry */ }
+
+    // Latency histogram (lock-free bucket increment)
+    entry->latBuckets[latencyBucket(durationNs)]
+        .fetch_add(1, std::memory_order_relaxed);
 }
 
 void Interpreter::ThroughputTable::stopPrinter() {
@@ -2246,8 +2319,14 @@ void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
         using namespace std::chrono;
         using clock = steady_clock;
 
-        std::cout << "\n[Throughput] Debug throughput mode active"
-                  << " (print interval: " << intervalSec << " s)\n" << std::flush;
+        if (latencyMode) {
+            std::cout << "\n[Latency] Latency measurement mode active"
+                      << " (print interval: " << intervalSec << " s)\n"
+                      << std::flush;
+        } else {
+            std::cout << "\n[Throughput] Debug throughput mode active"
+                      << " (print interval: " << intervalSec << " s)\n" << std::flush;
+        }
 
         auto lastPrint = clock::now();
 
@@ -2267,6 +2346,7 @@ void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
                 std::string name;
                 uint64_t total, windowCalls;
                 double avgMs, minMs, maxMs, cps;
+                uint64_t latBuckets[8];  // histogram for percentile computation
             };
             std::vector<Row> rows;
 
@@ -2286,13 +2366,25 @@ void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
                     double minMs = (minNs == UINT64_MAX) ? 0.0 : (static_cast<double>(minNs) / 1e6);
                     double maxMs = static_cast<double>(maxNs) / 1e6;
 
-                    rows.push_back({pname, total, win, avgMs, minMs, maxMs, cps});
+                    Row r;
+                    r.name        = pname;
+                    r.total       = total;
+                    r.windowCalls = win;
+                    r.avgMs       = avgMs;
+                    r.minMs       = minMs;
+                    r.maxMs       = maxMs;
+                    r.cps         = cps;
+                    for (int b = 0; b < 8; b++)
+                        r.latBuckets[b] = entry->latBuckets[b].load(
+                            std::memory_order_relaxed);
+                    rows.push_back(std::move(r));
                 }
             }
 
             // ── Merge fork-child throughput from the shared arena ──────────
-            if (forkArena && !shmArenaIsShutdown(forkArena)) {
-                auto forkData = shmArenaReadThroughput(forkArena);
+            ShmArena* fa = forkArena.load(std::memory_order_acquire);
+            if (fa && !shmArenaIsShutdown(fa)) {
+                auto forkData = shmArenaReadThroughput(fa);
                 for (const auto& fd : forkData) {
                     std::string rowName = "fork:" + fd.name;
                     uint64_t prevSnap = forkSnapCounts[rowName];
@@ -2307,7 +2399,11 @@ void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
                         ? 0.0 : (static_cast<double>(fd.minNs) / 1e6);
                     double fMaxMs = static_cast<double>(fd.maxNs) / 1e6;
 
-                    rows.push_back({rowName, fd.callCount, win, avgMs, fMinMs, fMaxMs, cps});
+                    rows.push_back({rowName, fd.callCount, win, avgMs, fMinMs, fMaxMs, cps,
+                                    {fd.latBuckets[0], fd.latBuckets[1],
+                                     fd.latBuckets[2], fd.latBuckets[3],
+                                     fd.latBuckets[4], fd.latBuckets[5],
+                                     fd.latBuckets[6], fd.latBuckets[7]}});
                 }
             }
 
@@ -2321,31 +2417,63 @@ void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
             for (const auto& r : rows) maxNameLen = std::max(maxNameLen, r.name.size());
 
             const int W = static_cast<int>(maxNameLen) + 2;
-            const int totalWidth = W + 8 + 10 + 10 + 10 + 10;
-            std::ostringstream oss;
-            oss << "\n[Throughput] " << std::string(totalWidth, '-') << '\n';
-            oss << "[Throughput]  "
-                << std::left  << std::setw(W)  << "Pipeline"
-                << std::right << std::setw(8)  << "calls"
-                << std::right << std::setw(10) << "calls/s"
-                << std::right << std::setw(10) << "avg ms"
-                << std::right << std::setw(10) << "min ms"
-                << std::right << std::setw(10) << "max ms"
-                << '\n';
-            oss << "[Throughput]  " << std::string(totalWidth, '-') << '\n';
 
-            for (const auto& r : rows) {
+            // ── Throughput table (always shown when printer is running) ───────────
+            {
+                const int totalWidth = W + 8 + 10 + 10 + 10 + 10;
+                std::ostringstream oss;
+                oss << "\n[Throughput] " << std::string(totalWidth, '-') << '\n';
                 oss << "[Throughput]  "
-                    << std::left  << std::setw(W)  << r.name
-                    << std::right << std::setw(8)  << r.total
-                    << std::right << std::setw(10) << std::fixed << std::setprecision(1) << r.cps
-                    << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.avgMs
-                    << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.minMs
-                    << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.maxMs
+                    << std::left  << std::setw(W)  << "Pipeline"
+                    << std::right << std::setw(8)  << "calls"
+                    << std::right << std::setw(10) << "calls/s"
+                    << std::right << std::setw(10) << "avg ms"
+                    << std::right << std::setw(10) << "min ms"
+                    << std::right << std::setw(10) << "max ms"
                     << '\n';
+                oss << "[Throughput]  " << std::string(totalWidth, '-') << '\n';
+                for (const auto& r : rows) {
+                    oss << "[Throughput]  "
+                        << std::left  << std::setw(W)  << r.name
+                        << std::right << std::setw(8)  << r.total
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(1) << r.cps
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.avgMs
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.minMs
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.maxMs
+                        << '\n';
+                }
+                std::cout << oss.str() << std::flush;
             }
 
-            std::cout << oss.str() << std::flush;
+            // ── Latency percentile table (shown when latencyMode is set) ────────
+            if (latencyMode) {
+                const int totalWidth = W + 8 + 10 + 10 + 10 + 10;
+                std::ostringstream oss;
+                oss << "\n[Latency] " << std::string(totalWidth, '-') << '\n';
+                oss << "[Latency]  "
+                    << std::left  << std::setw(W)  << "Pipeline"
+                    << std::right << std::setw(8)  << "calls"
+                    << std::right << std::setw(10) << "p50 ms"
+                    << std::right << std::setw(10) << "p95 ms"
+                    << std::right << std::setw(10) << "p99 ms"
+                    << std::right << std::setw(10) << "max ms"
+                    << '\n';
+                oss << "[Latency]  " << std::string(totalWidth, '-') << '\n';
+                for (const auto& r : rows) {
+                    double p50 = percentileMs(r.latBuckets, r.total, 50.0);
+                    double p95 = percentileMs(r.latBuckets, r.total, 95.0);
+                    double p99 = percentileMs(r.latBuckets, r.total, 99.0);
+                    oss << "[Latency]  "
+                        << std::left  << std::setw(W)  << r.name
+                        << std::right << std::setw(8)  << r.total
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p50
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p95
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p99
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.maxMs
+                        << '\n';
+                }
+                std::cout << oss.str() << std::flush;
+            }
         }
     });
 }

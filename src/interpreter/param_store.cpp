@@ -179,6 +179,12 @@ void ParameterStore::declare(const std::string& name, ParamType type,
             }
         }
     }
+
+    // Bump the generation counter so that any interpreter's param cache is
+    // invalidated and reloaded on the next @param access.  Without this,
+    // refreshParamCache() sees gen==0 == _paramCacheGen==0 and skips the
+    // load, leaving the cache empty and every @param returning void.
+    _gen.fetch_add(1, std::memory_order_release);
 }
 
 bool ParameterStore::isDeclared(const std::string& name) const {

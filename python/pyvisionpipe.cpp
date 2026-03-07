@@ -176,6 +176,16 @@ PYBIND11_MODULE(pyvisionpipe, m) {
             "Specific pipeline to run (--pipeline name)")
         .def_readwrite("sink_timeout_ms", &visionpipe::VisionPipeConfig::sinkTimeoutMs,
             "Timeout (ms) waiting for frame_sink shm to appear (default: 10000)")
+        .def_readwrite("log_file", &visionpipe::VisionPipeConfig::logFile,
+            R"pbdoc(
+                Redirect visionpipe stdout+stderr to this path.
+
+                ``""``          — inherit parent's stdout/stderr (logs visible, default)
+
+                ``"/dev/null"`` — suppress all visionpipe output (quiet mode)
+
+                ``"/path/to/vp.log"`` — capture to a log file
+            )pbdoc")
         .def("__repr__", [](const visionpipe::VisionPipeConfig& c) {
             return "<VisionPipeConfig executable='" + c.executablePath +
                    "' verbose=" + (c.verbose ? "True" : "False") +
@@ -230,6 +240,28 @@ PYBIND11_MODULE(pyvisionpipe, m) {
                 callback: Python callable(frame, seq)
         )pbdoc")
 
+        // on_frame_update: register a lightweight dirty-frame notification callback
+        .def("on_frame_update", [](visionpipe::Session& self, const std::string& sinkName,
+                                   py::function callback) {
+            self.onFrameUpdate(sinkName, [callback](uint64_t seq) {
+                py::gil_scoped_acquire acquire;
+                callback(seq);
+            });
+        }, py::arg("sink_name"), py::arg("callback"),
+        R"pbdoc(
+            Register a frame-update (dirty) notification for a named sink.
+
+            The callback is invoked whenever the sink produces a new frame but
+            does NOT receive the frame data itself.  Call grab_frame() from
+            inside the callback if the pixel data is needed.
+
+            The callback signature: callback(seq: int)
+
+            Args:
+                sink_name: Name matching a frame_sink("name") in the .vsp script
+                callback: Python callable(seq: int)
+        )pbdoc")
+
         // spin: blocking dispatch loop (release GIL so other threads can run)
         .def("spin", [](visionpipe::Session& self, int pollIntervalMs) {
             py::gil_scoped_release release;
@@ -270,6 +302,17 @@ PYBIND11_MODULE(pyvisionpipe, m) {
             return self.waitForExit(timeoutMs);
         }, py::arg("timeout_ms") = 0,
         "Wait for the process to exit. Returns True if exited within timeout.")
+
+        // Destructor safety net: if the Python object is GC'd without an
+        // explicit stop() call (e.g. script exits, exception unwinds), ensure
+        // the child process is cleaned up.
+        .def("__del__", [](visionpipe::Session& self) {
+            // Best-effort: GIL may or may not be held; use nogil release.
+            try {
+                py::gil_scoped_release release;
+                self.stop(2000);
+            } catch (...) {}
+        })
 
         // Context manager support
         .def("__enter__", [](visionpipe::Session& self) -> visionpipe::Session& {

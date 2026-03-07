@@ -1,3 +1,8 @@
+// When the Iceoryx2 IPC backend is selected, the shm_ symbols are provided as
+// inlines in shm_frame_transport.h.  We skip this entire compilation unit so
+// that the POSIX shm_open/mmap symbols are never defined.
+#ifndef VISIONPIPE_IPC_USE_ICEORYX2
+
 #include "utils/shm_frame_transport.h"
 
 #include <sys/mman.h>
@@ -267,3 +272,5 @@ std::vector<std::string> shmFrameListRegions() {
 }
 
 } // namespace visionpipe
+
+#endif // VISIONPIPE_IPC_USE_ICEORYX2

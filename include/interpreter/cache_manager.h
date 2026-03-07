@@ -25,8 +25,9 @@ struct CacheEntry {
     uint64_t timestamp;         // Creation timestamp
     uint32_t accessCount;       // Number of times accessed
     bool isGlobal;              // Whether this is a global cache entry
-    
-    CacheEntry() : timestamp(0), accessCount(0), isGlobal(false) {}
+    uint64_t shmSeq = 0;        // SHM writeSeq when this entry was last populated
+                                // from the arena (0 = not from SHM / stale)
+    CacheEntry() : timestamp(0), accessCount(0), isGlobal(false), shmSeq(0) {}
 };
 
 /**

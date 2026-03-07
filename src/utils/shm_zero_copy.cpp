@@ -3,6 +3,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <atomic>
@@ -34,9 +35,12 @@ struct alignas(128) ShmSlotHeader {
     int32_t  type{0};                      // cv::Mat type (e.g. CV_8UC1)
     uint32_t frameBytes{0};                // actual byte size of one frame
     char     name[48]{};                   // null-terminated cache key
-    // 8 + 4 + 4 + 4*4 + 48 = 80 → pad to 128
-    char     _pad[128 - 80];
+    std::atomic<uint64_t> lastWriteNs{0};  // steady_clock ns of last shmArenaWrite
+    // 8 + 4 + 4 + 4*4 + 48 + 8 = 88 → pad to 128
+    char     _pad[128 - 88];
 };
+static_assert(sizeof(ShmSlotHeader) == 128,
+              "ShmSlotHeader layout changed — update _pad size");
 
 /// Per-fork-child throughput counters (written by child, read by parent).
 struct alignas(128) ShmThroughputSlot {
@@ -46,9 +50,17 @@ struct alignas(128) ShmThroughputSlot {
     std::atomic<uint64_t> maxNs{0};
     std::atomic<uint32_t> active{0};       // 0=free, 1=initialising, 2=ready
     char     name[48]{};                   // pipeline name
-    // 8*4 + 4 + 48 = 84 → pad to 128
-    char     _pad[128 - 84];
+    // 8-bucket latency histogram: [<1ms][1-2ms][2-4ms][4-8ms]
+    //                             [8-16ms][16-32ms][32-64ms][>=64ms]
+    std::atomic<uint32_t> latBuckets[8];
+    // 8*4 + 4 + 48 + 8*4 = 116 → pad to 128
+    char     _pad[128 - 116];
+    ShmThroughputSlot() {
+        for (auto& b : latBuckets) b.store(0, std::memory_order_relaxed);
+    }
 };
+static_assert(sizeof(ShmThroughputSlot) == 128,
+              "ShmThroughputSlot layout changed — update _pad size");
 
 // ============================================================================
 // Arena handle (per-process bookkeeping, NOT in the shared mmap)
@@ -251,6 +263,12 @@ bool shmArenaWrite(ShmArena* arena, const std::string& name,
     // Publish: bump sequence, then update the latest buffer index.
     slot->writeSeq.fetch_add(1, std::memory_order_release);
     slot->writeIdx.store(nextBuf, std::memory_order_release);
+    // Stamp write time so the reader can measure IPC latency.
+    slot->lastWriteNs.store(
+        static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()),
+        std::memory_order_release);
     return true;
 }
 
@@ -282,9 +300,30 @@ bool shmArenaIsShutdown(ShmArena* arena) {
     return arena && arena->header()->shutdown.load(std::memory_order_acquire) != 0;
 }
 
+uint64_t shmArenaGetSeq(ShmArena* arena, const std::string& name) {
+    if (!arena) return 0;
+    auto* slot = findSlot(arena, name, /*create=*/false);
+    if (!slot) return 0;
+    return slot->writeSeq.load(std::memory_order_acquire);
+}
+
 // ============================================================================
-// Throughput
+// Throughput + Latency
 // ============================================================================
+
+/// Map a duration in nanoseconds to a histogram bucket index:
+///   [0]<1ms  [1]1-2ms  [2]2-4ms  [3]4-8ms
+///   [4]8-16ms  [5]16-32ms  [6]32-64ms  [7]>=64ms
+static int shm_latencyBucket(uint64_t ns) {
+    if (ns <  1'000'000ULL) return 0;
+    if (ns <  2'000'000ULL) return 1;
+    if (ns <  4'000'000ULL) return 2;
+    if (ns <  8'000'000ULL) return 3;
+    if (ns < 16'000'000ULL) return 4;
+    if (ns < 32'000'000ULL) return 5;
+    if (ns < 64'000'000ULL) return 6;
+    return 7;
+}
 
 void shmArenaRecordThroughput(ShmArena* arena, const std::string& name,
                                uint64_t durationNs) {
@@ -309,6 +348,10 @@ void shmArenaRecordThroughput(ShmArena* arena, const std::string& name,
            !ts->maxNs.compare_exchange_weak(curMax, durationNs,
                                             std::memory_order_relaxed))
     { /* retry */ }
+
+    // Latency histogram (lock-free bucket increment)
+    ts->latBuckets[shm_latencyBucket(durationNs)]
+        .fetch_add(1, std::memory_order_relaxed);
 }
 
 std::vector<ShmThroughputData> shmArenaReadThroughput(ShmArena* arena) {
@@ -325,9 +368,24 @@ std::vector<ShmThroughputData> shmArenaReadThroughput(ShmArena* arena) {
         d.totalNs   = ts->totalNs.load(std::memory_order_relaxed);
         d.minNs     = ts->minNs.load(std::memory_order_relaxed);
         d.maxNs     = ts->maxNs.load(std::memory_order_relaxed);
+        for (int b = 0; b < 8; b++)
+            d.latBuckets[b] = ts->latBuckets[b].load(std::memory_order_relaxed);
         result.push_back(std::move(d));
     }
     return result;
+}
+
+void shmArenaRecordReadLatency(ShmArena* arena, const std::string& name) {
+    if (!arena) return;
+    auto* slot = findSlot(arena, name, /*create=*/false);
+    if (!slot) return;
+    uint64_t writeNs = slot->lastWriteNs.load(std::memory_order_acquire);
+    if (writeNs == 0) return;  // nothing written yet
+    uint64_t nowNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (nowNs > writeNs)
+        shmArenaRecordThroughput(arena, "ipc:" + name, nowNs - writeNs);
 }
 
 } // namespace visionpipe

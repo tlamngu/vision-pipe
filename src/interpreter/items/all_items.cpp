@@ -69,6 +69,11 @@ void registerAllItems(ItemRegistry& registry) {
 #ifdef VISIONPIPE_FASTCV_ENABLED
     registerFastCVItems(registry);
 #endif
+
+    // Optional: Register Iceoryx2 explicit publish/subscribe items
+#ifdef VISIONPIPE_ICEORYX2_ENABLED
+    registerIceoryxPublishItems(registry);
+#endif
 }
 
 } // namespace visionpipe

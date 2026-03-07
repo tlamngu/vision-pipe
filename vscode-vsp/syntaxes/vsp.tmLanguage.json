@@ -5,8 +5,10 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#param-refs" },
+    { "include": "#booleans" },
     { "include": "#keywords" },
     { "include": "#execution" },
+    { "include": "#debug-blocks" },
     { "include": "#cache-operators" },
     { "include": "#builtins" },
     { "include": "#strings" },
@@ -33,11 +35,19 @@
         }
       ]
     },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.vsp",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
           "name": "keyword.control.vsp",
-          "match": "\\b(pipeline|end|if|else|while|for|break|continue|return)\\b"
+          "match": "\\b(pipeline|end|if|else|while|for|break|continue|return|loop)\\b"
         },
         {
           "name": "keyword.control.params.vsp",
@@ -48,16 +58,26 @@
           "match": "\\b(import|config|global|let|use|cache)\\b"
         },
         {
-          "name": "storage.modifier.vsp",
-          "match": "\\b(global)\\b"
+          "name": "keyword.operator.word.vsp",
+          "match": "\\b(and|or|not)\\b"
         }
       ]
     },
     "execution": {
+      "comment": "All exec_* scheduling and execution directives",
       "patterns": [
         {
           "name": "keyword.control.execution.vsp",
-          "match": "\\b(exec_seq|exec_multi|exec_loop|exec_nasync)\\b"
+          "match": "\\b(exec_seq|exec_multi|exec_loop|exec_nasync|exec_interval|exec_interval_multi|exec_rt_seq|exec_rt_multi|exec_fork|no_interval)\\b"
+        }
+      ]
+    },
+    "debug-blocks": {
+      "comment": "debug_start / debug_end delimiter blocks",
+      "patterns": [
+        {
+          "name": "keyword.control.debug.vsp",
+          "match": "\\b(debug_start|debug_end)\\b"
         }
       ]
     },
@@ -70,46 +90,117 @@
       ]
     },
     "builtins": {
+      "comment": "Auto-generated from visionpipe::ItemRegistry — do not edit by hand",
       "patterns": [
         {
-          "name": "support.function.video.vsp",
-          "match": "\\b(video_cap|video_write|save_image|load_image)\\b"
+          "comment": "Category: advanced",
+          "name": "support.function.advanced.vsp",
+          "match": "\\b(apply_background_subtractor|background_subtractor_knn|background_subtractor_mog2|calc_optical_flow_farneback|calc_optical_flow_pyr_lk|color_change|create_merge_mertens|detail_enhance|draw_optical_flow|edge_preserving_filter|fast_nl_means_denoising|fast_nl_means_denoising_colored|illumination_change|init_tracker|inpaint|merge_exposures|multi_tracker|pencil_sketch|seamless_clone|stitcher|stylization|texture_flatting|tonemap|tonemap_drago|tonemap_mantiuk|tonemap_reinhard|tracker_csrt|tracker_kcf|tracker_mil|update_tracker)\\b"
         },
         {
-          "name": "support.function.image.vsp",
-          "match": "\\b(resize|color_convert|cvt_color|gaussian_blur|median_blur|bilateral_filter|canny|canny_edge|threshold|adaptive_threshold|morphology|equalize_hist)\\b"
+          "comment": "Category: arithmetic",
+          "name": "support.function.arithmetic.vsp",
+          "match": "\\b(cart_to_polar|count_non_zero|dct|dft|eigen|exp|gemm|gpu_matrix_mul|idct|idft|invert|ln|lut|magnitude|mul_spectrums|norm|normalize|phase|polar_to_cart|pow|rand_shuffle|randn|randu|reduce|solve|sqrt|sum|svd|transform)\\b"
         },
         {
-          "name": "support.function.stereo.vsp",
-          "match": "\\b(undistort|stereo_sgbm|stereo_bm|apply_colormap)\\b"
+          "comment": "Category: camera",
+          "name": "support.function.camera.vsp",
+          "match": "\\b(adaptive_auto_brightness|adaptive_auto_brightness_reset|auto_exposure|auto_exposure_reset|video_sync)\\b"
         },
         {
-          "name": "support.function.display.vsp",
-          "match": "\\b(display|wait_key|print|debug_mat)\\b"
+          "comment": "Category: color",
+          "name": "support.function.color.vsp",
+          "match": "\\b(apply_colormap|brightness_contrast|calc_back_project|calc_hist|clahe|compare_hist|cvt_color|debayer|equalize_hist|extract_channel|gamma|gpu_debayer|gpu_transform|in_range|merge_channels|mix_channels|split_channels|weighted_gray)\\b"
         },
         {
-          "name": "support.function.cache.vsp",
-          "match": "\\b(use|cache|pass)\\b"
+          "comment": "Category: conditional",
+          "name": "support.function.conditional.vsp",
+          "match": "\\b(cache_if|display_if|is_defined|is_even|is_negative|is_odd|is_positive|is_zero|logical_and|logical_not|logical_or|logical_xor|scalar_compare|scalar_in_range|select|set_if|skip_if_false|skip_if_true|toggle_var|trigger_every|trigger_on_change|trigger_on_falling|trigger_on_rising|use_if)\\b"
         },
         {
-          "name": "support.function.drawing.vsp",
-          "match": "\\b(draw_text|draw_rect|draw_circle|draw_line)\\b"
-        },
-        {
-          "name": "support.function.frame.vsp",
-          "match": "\\b(hstack|vstack|crop|rotate|flip)\\b"
-        },
-        {
+          "comment": "Category: control",
           "name": "support.function.control.vsp",
-          "match": "\\b(sleep)\\b"
+          "match": "\\b(absdiff|add|add_weighted|bitwise_and|bitwise_not|bitwise_or|bitwise_xor|break|cache|clear_cache|clone|continue|convert_to|copy_cache|copy_to|create_mat|decrement_var|divide|eye|get_var|global_cache|if|increment_var|list_cache|load_cache|loop|multiply|ones|promote_global|reshape|return|roi|scale_add|set_to|set_var|subtract|swap_cache|zeros)\\b"
         },
         {
-          "name": "support.function.ipc.vsp",
-          "match": "\\b(publish_frame|subscribe_frame)\\b"
+          "comment": "Category: display",
+          "name": "support.function.display.vsp",
+          "match": "\\b(assert|create_trackbar|debug|destroy_all_windows|destroy_window|elapsed_time|fps|get_channels|get_depth|get_height|get_size|get_tick|get_trackbar_pos|get_type|get_width|imshow|log|move_window|named_window|poll_key|print|resize_window|set_trackbar_pos|set_window_title|start_timer|stop_timer|wait_key)\\b"
         },
         {
-          "name": "support.function.fastcv.vsp",
-          "match": "\\b(fast_gaussian_blur|fast_corner_detect|fast_pyramid)\\b"
+          "comment": "Category: dnn",
+          "name": "support.function.dnn.vsp",
+          "match": "\\b(blob_from_image|decode_yolo|draw_classification|draw_detections|letterbox|list_models|load_model|model_get_outputs|model_infer|model_info|model_output|model_output_matrix|model_output_vector|nms_boxes|normalize_mean_std|sigmoid|softmax|topk|unload_model)\\b"
+        },
+        {
+          "comment": "Category: draw",
+          "name": "support.function.draw.vsp",
+          "match": "\\b(add_border|arrowed_line|circle|color_overlay|draw_crosshair|draw_grid|draw_histogram|draw_labeled_rect|draw_marker|draw_rotated_rect|ellipse|fill_convex_poly|fill_poly|get_text_size|line|overlay_image|polylines|put_text|rectangle)\\b"
+        },
+        {
+          "comment": "Category: edge",
+          "name": "support.function.edge.vsp",
+          "match": "\\b(approx_poly_dp|arc_length|auto_canny|bounding_rect|canny|contour_area|convex_hull|convexity_defects|draw_contours|find_contours|fit_ellipse|fit_line|hough_circles|hough_lines|hough_lines_p|hu_moments|is_contour_convex|match_shapes|min_area_rect|min_enclosing_circle|min_enclosing_triangle|moments|point_polygon_test)\\b"
+        },
+        {
+          "comment": "Category: feature",
+          "name": "support.function.feature.vsp",
+          "match": "\\b(agast|akaze|bf_matcher|brisk|corner_harris|corner_min_eigen_val|corner_sub_pix|draw_keypoints|draw_matches|fast|find_homography|flann_matcher|good_features_to_track|kaze|match_template|min_max_loc|orb|perspective_transform_points|sift|simple_blob_detector)\\b"
+        },
+        {
+          "comment": "Category: filter",
+          "name": "support.function.filter.vsp",
+          "match": "\\b(bilateral_filter|blur|box_filter|fast_nl_means|fast_nl_means_colored|filter2d|gaussian_blur|laplacian|median_blur|scharr|sep_filter2d|sharpen|sobel|stack_blur)\\b"
+        },
+        {
+          "comment": "Category: gui",
+          "name": "support.function.gui.vsp",
+          "match": "\\b(button|check_button_click|checkbox|color_picker_control|control_panel|get_checkbox|get_color_from_picker|get_hsv_range|hsv_range_control|imshow_with_vars|read_control_panel|set_trackbar_from_var|sync_trackbar_var|trackbar_value|trackbar_var|update_window_title)\\b"
+        },
+        {
+          "comment": "Category: io",
+          "name": "support.function.io.vsp",
+          "match": "\\b(frame_sink|frame_sink_close)\\b"
+        },
+        {
+          "comment": "Category: ip_stream",
+          "name": "support.function.ip_stream.vsp",
+          "match": "\\b(ip_stream|ip_stream_info|ip_stream_quality|ip_stream_stop|ip_stream_url)\\b"
+        },
+        {
+          "comment": "Category: math",
+          "name": "support.function.math.vsp",
+          "match": "\\b(abs_scalar|acos|asin|atan|atan2|ceil_scalar|clamp|cos|exp_scalar|floor_scalar|lerp_scalar|ln_scalar|log10_scalar|math_add|math_const|math_div|math_mod|math_mul|math_sub|matrix_abs_diff|matrix_add|matrix_avg|matrix_blend|matrix_div|matrix_dot|matrix_gemm|matrix_invert|matrix_max|matrix_min|matrix_mul|matrix_normalize|matrix_scale|matrix_sub|matrix_transpose|max_scalar|min_scalar|pow_scalar|rand_float|rand_int|round_scalar|sin|sqrt_scalar|tan)\\b"
+        },
+        {
+          "comment": "Category: morphology",
+          "name": "support.function.morphology.vsp",
+          "match": "\\b(adaptive_threshold|connected_components|connected_components_with_stats|dilate|distance_transform|erode|fill_holes|get_structuring_element|morphology_ex|otsu_threshold|remove_small_objects|skeletonize|thinning|threshold)\\b"
+        },
+        {
+          "comment": "Category: stabilization",
+          "name": "support.function.stabilization.vsp",
+          "match": "\\b(gpu_horizon_lock|gpu_video_stabilize|horizon_lock|stabilization_apply|stabilization_calculate|stereo_stabilize|video_stabilize)\\b"
+        },
+        {
+          "comment": "Category: stereo",
+          "name": "support.function.stereo.vsp",
+          "match": "\\b(calibrate_camera|chessboard_detected_save|disparity_to_depth|disparity_wls_filter|draw_chessboard_corners|find_chessboard_corners|find_circles_grid|find_essential_mat|find_fundamental_mat|init_undistort_rectify_map|normalize_disparity|project_points|recover_pose|reproject_image_to_3d|solve_pnp|solve_pnp_ransac|stereo_bm|stereo_calibrate|stereo_rectify|stereo_sgbm|triangulate_points|undistort|undistort_points)\\b"
+        },
+        {
+          "comment": "Category: tensor",
+          "name": "support.function.tensor.vsp",
+          "match": "\\b(mat_col|mat_create|mat_det|mat_diag|mat_eye|mat_flatten|mat_get|mat_inv|mat_ones|mat_reshape|mat_row|mat_set|mat_shape|mat_transpose|mat_zeros|tensor_add|tensor_all|tensor_and|tensor_any|tensor_div|tensor_eq|tensor_ge|tensor_gt|tensor_le|tensor_lt|tensor_max|tensor_mean|tensor_min|tensor_mul|tensor_ne|tensor_not|tensor_or|tensor_print|tensor_sub|tensor_sum|to_cvmat|to_matrix|vec|vec_dot|vec_get|vec_len|vec_linspace|vec_norm|vec_normalize|vec_ones|vec_range|vec_set|vec_slice|vec_zeros)\\b"
+        },
+        {
+          "comment": "Category: transform",
+          "name": "support.function.transform.vsp",
+          "match": "\\b(build_pyramid|convert_maps|copy_make_border|crop|flip|get_affine_transform|get_perspective_transform|get_rotation_matrix_2d|hstack|invert_affine_transform|mosaic|pyr_down|pyr_up|remap|resize|rotate|rotate90|transpose|vstack|warp_affine|warp_perspective)\\b"
+        },
+        {
+          "comment": "Category: video_io",
+          "name": "support.function.video_io.vsp",
+          "match": "\\b(get_camera_capabilities|get_video_prop|iceoryx_publish|iceoryx_subscribe|imdecode|imencode|libcam_debug_config|libcam_get_bayer|libcam_list|libcam_list_controls|libcam_list_formats|libcam_prop|libcam_setup|list_cameras|load_camera_profile|load_image|save_camera_profile|save_image|set_camera_backend|set_camera_exposure|set_camera_focus|set_camera_image_adjustment|set_camera_iso|set_camera_trigger|set_camera_white_balance|set_camera_zoom|set_video_prop|shm_create|shm_read|shm_write|v4l2_enum_devices|v4l2_get_bayer|v4l2_get_prop|v4l2_list_controls|v4l2_list_formats|v4l2_prop|v4l2_setup|video_cap|video_close|video_seek|video_write)\\b"
         }
       ]
     },
@@ -142,16 +233,16 @@
     "numbers": {
       "patterns": [
         {
+          "name": "constant.numeric.hex.vsp",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
           "name": "constant.numeric.float.vsp",
           "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
         },
         {
           "name": "constant.numeric.integer.vsp",
           "match": "\\b\\d+\\b"
-        },
-        {
-          "name": "constant.numeric.hex.vsp",
-          "match": "\\b0[xX][0-9a-fA-F]+\\b"
         }
       ]
     },
@@ -168,6 +259,10 @@
         {
           "name": "keyword.operator.arithmetic.vsp",
           "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.pipe.vsp",
+          "match": "\\|(?!\\|)"
         },
         {
           "name": "keyword.operator.assignment.vsp",
