@@ -6,7 +6,9 @@ Syntax highlighting and language support for VisionPipe Script (.vsp) files in V
 
 - **Syntax Highlighting** - Full syntax highlighting for VSP language constructs
 - **Code Snippets** - Quick templates for common patterns
-- **Auto-completion** - Bracket matching and auto-closing
+- **IntelliSense** - Function/keyword completion, runtime `@param` completion, and pipeline-name completion in `exec_*`
+- **Hover Documentation** - Inline docs for functions and snippet prefixes
+- **Signature Help** - Parameter hints while typing function calls
 - **Code Folding** - Fold pipeline blocks and control structures
 
 ## VSP Language

@@ -45,7 +45,7 @@ NamedWindowItem::NamedWindowItem() {
     _category = "display";
     _params = {
         ParamDef::required("name", BaseType::STRING, "Window name"),
-        ParamDef::optional("flags", BaseType::STRING, "Flags: normal, autosize, fullscreen, freeratio, keepratio", "autosize")
+        ParamDef::optional("flags", BaseType::STRING, "Flags: normal, autosize, fullscreen, freeratio, keepratio, gui_expanded", "autosize")
     };
     _example = "named_window(\"Output\", \"normal\")";
     _returnType = "mat";
@@ -61,7 +61,7 @@ ExecutionResult NamedWindowItem::execute(const std::vector<RuntimeValue>& args, 
     else if (flags == "fullscreen") windowFlags = cv::WINDOW_FULLSCREEN;
     else if (flags == "freeratio") windowFlags = cv::WINDOW_FREERATIO;
     else if (flags == "keepratio") windowFlags = cv::WINDOW_KEEPRATIO;
-    
+    else if (flags == "gui_expanded") windowFlags = cv::WINDOW_GUI_EXPANDED;
     cv::namedWindow(name, windowFlags);
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -202,6 +202,8 @@ ImShowItem::ImShowItem() {
 
 ExecutionResult ImShowItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string name = args.size() > 0 ? args[0].asString() : "Output";
+
+    
     cv::imshow(name, ctx.currentMat);
     return ExecutionResult::ok(ctx.currentMat);
 }

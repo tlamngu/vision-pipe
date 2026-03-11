@@ -2,6 +2,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <iostream>
 
 namespace visionpipe {
 
@@ -184,7 +185,14 @@ void ParameterStore::declare(const std::string& name, ParamType type,
     // invalidated and reloaded on the next @param access.  Without this,
     // refreshParamCache() sees gen==0 == _paramCacheGen==0 and skips the
     // load, leaving the cache empty and every @param returning void.
-    _gen.fetch_add(1, std::memory_order_release);
+    uint64_t newGen = _gen.fetch_add(1, std::memory_order_release) + 1;
+
+    if (_verbose) {
+        std::cerr << "[PARAM DEBUG] declare: name='" << name
+                  << "' type=" << paramTypeToString(type)
+                  << " default=" << defaultValue.toWireString()
+                  << " gen=" << newGen << "\n";
+    }
 }
 
 bool ParameterStore::isDeclared(const std::string& name) const {
@@ -240,7 +248,12 @@ void ParameterStore::set(const std::string& name, ParamValue value) {
         evt.newValue = value;
     }
 
-    _gen.fetch_add(1, std::memory_order_release);
+    uint64_t newGen = _gen.fetch_add(1, std::memory_order_release) + 1;
+    if (_verbose) {
+        std::cerr << "[PARAM DEBUG] set: name='" << evt.name
+                  << "' value=" << evt.newValue.toWireString()
+                  << " gen=" << newGen << "\n";
+    }
     notifyListeners(evt);
 }
 

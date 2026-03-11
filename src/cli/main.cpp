@@ -55,9 +55,15 @@ static Runtime* g_runtime = nullptr;  // Set before signal registration
 void signalHandler(int signum) {
     (void)signum;
     if (g_paused.load()) {
-        // If paused, force quit
-        std::cout << "\n[VisionPipe] Force quitting..." << std::endl;
-        std::exit(1);
+        // Force-quit: kill the entire foreground process group (parent + all
+        // exec_fork children) before exiting.  This prevents children from
+        // becoming orphans when _exit() bypasses the Interpreter destructor
+        // (which would normally SIGKILL stragglers via shutdownForkChildren).
+        // kill(0, SIGKILL) sends SIGKILL to every process in the process
+        // group of the caller — async-signal-safe per POSIX.
+        ::kill(0, SIGKILL);
+        // Unreachable: SIGKILL was sent to us too.  Fallback just in case.
+        _exit(1);
     }
     g_running.store(false);
     // Tell the runtime/interpreter to stop its loops immediately

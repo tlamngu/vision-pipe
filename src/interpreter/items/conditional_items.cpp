@@ -44,6 +44,9 @@ void registerConditionalItems(ItemRegistry& registry) {
     registry.add<TriggerOnRisingItem>();
     registry.add<TriggerOnFallingItem>();
     registry.add<TriggerOnChangeItem>();
+
+    // Cache state checks
+    registry.add<CacheReadyItem>();
 }
 
 // Helper function to get numeric value from argument
@@ -728,6 +731,53 @@ ExecutionResult TriggerOnChangeItem::execute(const std::vector<RuntimeValue>& ar
     ctx.variables[stateVar] = RuntimeValue(current);
     
     return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// Cache State Checks
+// ============================================================================
+
+CacheReadyItem::CacheReadyItem() {
+    _functionName = "cache_ready";
+    _description  = "Returns true if a cache entry exists and its Mat is not empty. "
+                    "Checks local cache first, then global. Useful for guarding "
+                    "pipelines that depend on frames produced by another process.";
+    _category     = "conditional";
+    _params = {
+        ParamDef::required("cache_id", BaseType::STRING, "Cache identifier to check"),
+        ParamDef("global", BaseType::BOOL,
+                 "When true, check only the global/shared-memory cache (default: false)",
+                 RuntimeValue(false))
+    };
+    _example   = "if cache_ready(\"frame_l\")\n  use(global \"frame_l\")\nend";
+    _returnType = "bool";
+    _tags = {"conditional", "cache", "check", "exists"};
+}
+
+ExecutionResult CacheReadyItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    if (!ctx.cacheManager) {
+        ExecutionResult r = ExecutionResult::ok(ctx.currentMat);
+        r.scalarValue = RuntimeValue(false);
+        return r;
+    }
+
+    std::string cacheId = args[0].asString();
+    bool globalOnly = (args.size() > 1 && !args[1].isVoid()) ? args[1].asBool() : false;
+
+    bool ready = false;
+    if (globalOnly) {
+        if (ctx.cacheManager->hasGlobal(cacheId)) {
+            ready = !ctx.cacheManager->getGlobal(cacheId).empty();
+        }
+    } else {
+        if (ctx.cacheManager->has(cacheId)) {
+            ready = !ctx.cacheManager->get(cacheId).empty();
+        }
+    }
+
+    ExecutionResult result = ExecutionResult::ok(ctx.currentMat);
+    result.scalarValue = RuntimeValue(ready);
+    return result;
 }
 
 } // namespace visionpipe

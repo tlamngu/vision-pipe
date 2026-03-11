@@ -11,6 +11,7 @@ void registerControlItems(ItemRegistry& registry) {
     // Cache operations
     registry.add<CacheItem>();
     registry.add<GlobalCacheItem>();
+    registry.add<SetShmSizeItem>();
     registry.add<PromoteToGlobalItem>();
     registry.add<LoadCacheItem>();
     registry.add<ClearCacheItem>();
@@ -101,6 +102,53 @@ GlobalCacheItem::GlobalCacheItem() {
 ExecutionResult GlobalCacheItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string cacheId = args[0].asString();
     ctx.cacheManager->set(cacheId, ctx.currentMat.clone(), true);  // true = global
+    return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// SetShmSizeItem
+// ============================================================================
+
+SetShmSizeItem::SetShmSizeItem() {
+    _functionName = "set_shm_size";
+    _description  = "Configure the shared-memory arena size used by exec_fork.\n"
+                    "Must be called BEFORE the first exec_fork (e.g. inside 'pipeline setup').\n"
+                    "The anonymous-mmap arena is the INTERNAL inter-process transport for\n"
+                    "global_cache — it is separate from the external IPC backend\n"
+                    "(iceoryx2 / posix-shm) used by frame_sink / shm_write / shm_read.\n"
+                    "If you see '[shm_arena] Frame too large', increase this value or\n"
+                    "set VISIONPIPE_SHM_FRAME_BYTES in the environment.";
+    _category     = "control";
+    _params = {
+        ParamDef::required("max_frame_bytes", BaseType::INT,
+                           "Maximum bytes per frame slot "
+                           "(e.g. 3280*2464*3 = 24245760 → use 33554432 for 32 MB)"),
+        ParamDef::optional("max_slots", BaseType::INT,
+                           "Maximum named channels shared across forks (default 8)", 0)
+    };
+    _example    = "set_shm_size(33554432)        # 32 MB per slot\n"
+                  "set_shm_size(67108864, 16)    # 64 MB, 16 slots";
+    _returnType = "void";
+    _tags       = {"shm", "shared_memory", "fork", "ipc", "config", "multiprocess"};
+}
+
+ExecutionResult SetShmSizeItem::execute(const std::vector<RuntimeValue>& args,
+                                         ExecutionContext& ctx) {
+    size_t frameBytes = static_cast<size_t>(args[0].asNumber());
+    int    slots      = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 0;
+
+    if (frameBytes == 0) {
+        return ExecutionResult::fail("set_shm_size: max_frame_bytes must be > 0");
+    }
+
+    ctx.cacheManager->setPendingShmConfig(frameBytes, slots);
+
+    std::cout << "[set_shm_size] Fork arena configured: "
+              << (slots > 0 ? slots : 8) << " slots x "
+              << frameBytes << " bytes ("
+              << (frameBytes / (1024 * 1024)) << " MB) per slot\n"
+              << "  Note: this controls the INTERNAL fork arena, not the "
+                 "iceoryx2/posix-shm external IPC backend.\n";
     return ExecutionResult::ok(ctx.currentMat);
 }
 

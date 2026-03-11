@@ -449,6 +449,11 @@
     "body": ["cache_if(${1:is_valid}, ${2:good_frame})"],
     "description": "Caches current Mat only if condition is true\n\nParams:\n  condition (bool): Boolean condition value or variable\n  cache_id (string): Cache identifier\n\nExample: cache_if(is_valid, \"good_frame\")"
   },
+  "Cache Ready": {
+    "prefix": "cache_ready",
+    "body": ["if cache_ready(${1:frame_l\\\")\\n  use(global \\\"frame_l})"],
+    "description": "Returns true if a cache entry exists and its Mat is not empty. Checks local cache first, then global. Useful for guarding pipelines that depend on frames produced by another process.\n\nParams:\n  cache_id (string): Cache identifier to check\n  global (bool): When true, check only the global/shared-memory cache (default: false) [optional]\n\nExample: if cache_ready(\"frame_l\")\n  use(global \"frame_l\")\nend"
+  },
   "Calc Back Project": {
     "prefix": "calc_back_project",
     "body": ["calc_back_project(${1:hist})"],
@@ -488,6 +493,11 @@
     "prefix": "ceil_scalar",
     "body": ["ceil_scalar(${1:3.1}, ${2:result})"],
     "description": "Rounds up to integer\n\nParams:\n  value (float): Input value or variable name\n  output_var (string): Output variable name\n\nExample: ceil_scalar(3.1, \"result\")"
+  },
+  "Charuco Detect": {
+    "prefix": "charuco_detect",
+    "body": ["charuco_detect(${1:10}, ${2:7}, ${3:0.04}, ${4:0.02}, ${5:4x4_50})"],
+    "description": "Detects ChArUco board corners (ArUco markers embedded in a chessboard grid)\n\nParams:\n  squares_x (int): Chessboard squares in X [optional]\n  squares_y (int): Chessboard squares in Y [optional]\n  square_length (float): Square side length (any consistent unit) [optional]\n  marker_length (float): Marker side length (same unit as square_length) [optional]\n  dict (string): ArUco dictionary name [optional]\n  min_markers (int): Min adjacent markers per corner (0 = any) [optional]\n  refine (bool): Try to refine marker positions [optional]\n  corners_cache (string): Cache ID for ChArUco corners [optional]\n  ids_cache (string): Cache ID for ChArUco corner IDs [optional]\n  min_marker_perim (float): Min marker perimeter rate (0–1, default 0.03) [optional]\n  max_marker_perim (float): Max marker perimeter rate (default 4.0) [optional]\n  thresh_constant (int): Adaptive threshold constant (default 7) [optional]\n  error_correction (float): Marker bit error correction rate (0–1) [optional]\n  verbose (bool): Print marker/corner counts on each frame [optional]\n  first_marker_id (int): Starting marker ID for board layout (-1 = default) [optional]\n\nExample: charuco_detect(10, 7, 0.04, 0.02, \"4x4_50\")"
   },
   "Check Button Click": {
     "prefix": "check_button_click",
@@ -734,6 +744,11 @@
     "body": ["divide(${1:normalizer}, ${2:1.0})"],
     "description": "Element-wise division\n\nParams:\n  operand (string): Cache ID or scalar value\n  scale (float): Scale factor [optional]\n\nExample: divide(\"normalizer\", 1.0)"
   },
+  "Draw Charuco": {
+    "prefix": "draw_charuco",
+    "body": ["draw_charuco(${1:charuco_corners}, ${2:charuco_ids})"],
+    "description": "Draws detected ChArUco corners on the image\n\nParams:\n  corners_cache (string): Cache ID for ChArUco corners [optional]\n  ids_cache (string): Cache ID for ChArUco IDs [optional]\n  color_r (int): Red channel of corner color [optional]\n  color_g (int): Green channel of corner color [optional]\n  color_b (int): Blue channel of corner color [optional]\n\nExample: draw_charuco(\"charuco_corners\", \"charuco_ids\")"
+  },
   "Draw Chessboard Corners": {
     "prefix": "draw_chessboard_corners",
     "body": ["draw_chessboard_corners(${1:9}, ${2:6}, ${3:corners})"],
@@ -896,8 +911,8 @@
   },
   "Find Chessboard Corners": {
     "prefix": "find_chessboard_corners",
-    "body": ["find_chessboard_corners(${1:9}, ${2:6}, ${3:adaptive_thresh+normalize_image}, ${4:corners})"],
-    "description": "Finds chessboard corners for calibration\n\nParams:\n  pattern_width (int): Number of inner corners per row\n  pattern_height (int): Number of inner corners per column\n  flags (string): Flags: adaptive_thresh, normalize_image, filter_quads, fast_check [optional]\n  cache_id (string): Cache ID for corners [optional]\n\nExample: find_chessboard_corners(9, 6, \"adaptive_thresh+normalize_image\", \"corners\")"
+    "body": ["find_chessboard_corners(${1:9}, ${2:6})"],
+    "description": "Finds chessboard corners for calibration. Uses the robust saddle-point-based detector (findChessboardCornersSB) by default.\n\nParams:\n  pattern_width (int): Number of inner corners per row\n  pattern_height (int): Number of inner corners per column\n  flags (string): Flags for classic detector: adaptive_thresh, normalize_image, filter_quads, fast_check [optional]\n  cache_id (string): Cache ID for corners [optional]\n  use_sb (bool): Use robust saddle-point detector (findChessboardCornersSB) [optional]\n  sb_marker_size (float): SB: marker size relative to square (0.1–0.9) [optional]\n  sb_exhaustive (bool): SB: exhaustive search (slower but more robust) [optional]\n  subpix_win (int): Sub-pixel refinement window half-size (classic mode) [optional]\n\nExample: find_chessboard_corners(9, 6)"
   },
   "Find Circles Grid": {
     "prefix": "find_circles_grid",
@@ -2058,6 +2073,11 @@
     "prefix": "set_if",
     "body": ["set_if(${1:is_valid}, ${2:threshold}, ${3:128})"],
     "description": "Sets variable only if condition is true\n\nParams:\n  condition (bool): Boolean condition value or variable\n  var_name (string): Variable name to set\n  value (any): Value to set\n\nExample: set_if(is_valid, \"threshold\", 128)"
+  },
+  "Set Shm Size": {
+    "prefix": "set_shm_size",
+    "body": ["set_shm_size(${1:33554432)        # 32 MB per slot\\nset_shm_size(67108864}, ${2:16})"],
+    "description": "Configure the shared-memory arena size used by exec_fork.\nMust be called BEFORE the first exec_fork (e.g. inside 'pipeline setup').\nThe anonymous-mmap arena is the INTERNAL inter-process transport for\nglobal_cache — it is separate from the external IPC backend\n(iceoryx2 / posix-shm) used by frame_sink / shm_write / shm_read.\nIf you see '[shm_arena] Frame too large', increase this value or\nset VISIONPIPE_SHM_FRAME_BYTES in the environment.\n\nParams:\n  max_frame_bytes (int): Maximum bytes per frame slot (e.g. 3280*2464*3 = 24245760 → use 33554432 for 32 MB)\n  max_slots (int): Maximum named channels shared across forks (default 8) [optional]\n\nExample: set_shm_size(33554432)        # 32 MB per slot\nset_shm_size(67108864, 16)    # 64 MB, 16 slots"
   },
   "Set To": {
     "prefix": "set_to",

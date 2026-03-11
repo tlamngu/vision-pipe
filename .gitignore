@@ -5,3 +5,4 @@ examples/DNN/models/*
 /.idea
 v4l12_native_plan.md
 *.sh
+rust-client/target/

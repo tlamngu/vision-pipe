@@ -98,6 +98,7 @@ find_package(OpenCV COMPONENTS
     stitching
     # xphoto
     video
+    objdetect
 )
 
 if(NOT OpenCV_FOUND)

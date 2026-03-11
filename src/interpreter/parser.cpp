@@ -675,8 +675,12 @@ std::shared_ptr<Statement> Parser::ifStatement() {
         stmt->thenBranch.push_back(statement());
     }
     
-    // Optional else branch
+    // Optional else / else-if branch
     if (match(TokenType::KW_ELSE)) {
+        if (check(TokenType::KW_IF)) {
+            stmt->elseBranch.push_back(ifStatement());
+            return stmt;
+        }
         while (!check(TokenType::KW_END) && !isAtEnd()) {
             stmt->elseBranch.push_back(statement());
         }

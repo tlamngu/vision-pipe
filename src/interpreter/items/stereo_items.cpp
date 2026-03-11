@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstdio>
 #include <cstdlib>
+#include <opencv2/objdetect/charuco_detector.hpp>
 
 namespace visionpipe {
 
@@ -14,6 +15,8 @@ void registerStereoItems(ItemRegistry& registry) {
     registry.add<FindCirclesGridItem>();
     registry.add<DrawChessboardCornersItem>();
     registry.add<ChessboardDetectedSaveItem>();
+    registry.add<CharucoDetectItem>();
+    registry.add<DrawCharucoItem>();
     registry.add<CalibrateCameraItem>();
     registry.add<StereoCalibrateItem>();
     registry.add<StereoRectifyItem>();
@@ -217,48 +220,100 @@ ExecutionResult ReprojectImageTo3DItem::execute(const std::vector<RuntimeValue>&
 
 FindChessboardCornersItem::FindChessboardCornersItem() {
     _functionName = "find_chessboard_corners";
-    _description = "Finds chessboard corners for calibration";
+    _description = "Finds chessboard corners for calibration. Uses the robust saddle-point-based detector (findChessboardCornersSB) by default.";
     _category = "stereo";
     _params = {
-        ParamDef::required("pattern_width", BaseType::INT, "Number of inner corners per row"),
-        ParamDef::required("pattern_height", BaseType::INT, "Number of inner corners per column"),
-        ParamDef::optional("flags", BaseType::STRING, "Flags: adaptive_thresh, normalize_image, filter_quads, fast_check", "adaptive_thresh+normalize_image"),
-        ParamDef::optional("cache_id", BaseType::STRING, "Cache ID for corners", "corners")
+        ParamDef::required("pattern_width",  BaseType::INT,    "Number of inner corners per row"),
+        ParamDef::required("pattern_height", BaseType::INT,    "Number of inner corners per column"),
+        ParamDef::optional("flags",          BaseType::STRING, "Flags for classic detector: adaptive_thresh, normalize_image, filter_quads, fast_check", "adaptive_thresh+normalize_image"),
+        ParamDef::optional("cache_id",       BaseType::STRING, "Cache ID for corners", "corners"),
+        ParamDef::optional("use_sb",         BaseType::BOOL,   "Use robust saddle-point detector (findChessboardCornersSB)", true),
+        ParamDef::optional("sb_marker_size", BaseType::FLOAT,  "SB: marker size relative to square (0.1–0.9)", 0.5),
+        ParamDef::optional("sb_exhaustive",  BaseType::BOOL,   "SB: exhaustive search (slower but more robust)", false),
+        ParamDef::optional("subpix_win",     BaseType::INT,    "Sub-pixel refinement window half-size (classic mode)", 11)
     };
-    _example = "find_chessboard_corners(9, 6, \"adaptive_thresh+normalize_image\", \"corners\")";
+    _example = "find_chessboard_corners(9, 6)";
     _returnType = "mat";
     _tags = {"calibration", "chessboard", "corners"};
 }
 
 ExecutionResult FindChessboardCornersItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
-    int patternW = static_cast<int>(args[0].asNumber());
-    int patternH = static_cast<int>(args[1].asNumber());
+    int patternW      = static_cast<int>(args[0].asNumber());
+    int patternH      = static_cast<int>(args[1].asNumber());
     std::string flagsStr = args.size() > 2 ? args[2].asString() : "adaptive_thresh+normalize_image";
-    std::string cacheId = args.size() > 3 ? args[3].asString() : "corners";
-    
-    int flags = 0;
-    if (flagsStr.find("adaptive_thresh") != std::string::npos) flags |= cv::CALIB_CB_ADAPTIVE_THRESH;
-    if (flagsStr.find("normalize_image") != std::string::npos) flags |= cv::CALIB_CB_NORMALIZE_IMAGE;
-    if (flagsStr.find("filter_quads") != std::string::npos) flags |= cv::CALIB_CB_FILTER_QUADS;
-    if (flagsStr.find("fast_check") != std::string::npos) flags |= cv::CALIB_CB_FAST_CHECK;
-    
+    std::string cacheId  = args.size() > 3 ? args[3].asString() : "corners";
+    bool useSB        = args.size() > 4 ? args[4].asBool()   : true;
+    (void)             (args.size() > 5 ? args[5].asNumber() : 0.5); // sb_marker_size reserved
+    bool sbExhaustive = args.size() > 6 ? args[6].asBool()   : false;
+    int subpixWin     = args.size() > 7 ? static_cast<int>(args[7].asNumber()) : 11;
+
     cv::Mat gray = ctx.currentMat;
     if (gray.channels() > 1) {
         cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
     }
-    
+
     std::vector<cv::Point2f> corners;
-    bool found = cv::findChessboardCorners(gray, cv::Size(patternW, patternH), corners, flags);
-    
-    if (found) {
-        cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
-                         cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.001));
-        cv::Mat cornersMat(corners);
-        ctx.cacheManager->set(cacheId, cornersMat);
+    bool found = false;
+
+    if (useSB) {
+        int sbFlags = cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_EXHAUSTIVE * (sbExhaustive ? 1 : 0);
+        found = cv::findChessboardCornersSB(gray, cv::Size(patternW, patternH), corners, sbFlags);
+        if (!found && !sbExhaustive) {
+            // Retry with exhaustive search as fallback
+            found = cv::findChessboardCornersSB(gray, cv::Size(patternW, patternH), corners,
+                                                cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_EXHAUSTIVE);
+        }
+    } else {
+        int flags = 0;
+        if (flagsStr.find("adaptive_thresh")  != std::string::npos) flags |= cv::CALIB_CB_ADAPTIVE_THRESH;
+        if (flagsStr.find("normalize_image")  != std::string::npos) flags |= cv::CALIB_CB_NORMALIZE_IMAGE;
+        if (flagsStr.find("filter_quads")     != std::string::npos) flags |= cv::CALIB_CB_FILTER_QUADS;
+        if (flagsStr.find("fast_check")       != std::string::npos) flags |= cv::CALIB_CB_FAST_CHECK;
+        found = cv::findChessboardCorners(gray, cv::Size(patternW, patternH), corners, flags);
+        if (found) {
+            // Measure minimum spacing from the actual detected corners
+            if(ctx.verbose){
+                std::cout << "[FindChessboardCornersItem] Detected corners:" << "\n";
+                std::cout << std::string(50, '-') << "\n";
+                std::cout << "| Index | X Coordinate | Y Coordinate |" << "\n";
+                std::cout << std::string(50, '-') << "\n";
+                for (size_t i = 0; i < corners.size(); i++) {
+                    printf("| %5zu | %12.2f | %12.2f |\n", i, corners[i].x, corners[i].y);
+                }
+                std::cout << std::string(50, '-') << "\n";
+                std::cout << "[FindChessboardCornersItem] Calculating sub-pixel corners with window half-size " << subpixWin << std::endl;
+            }
+            float minDist = cv::norm(corners[1] - corners[0]);
+            for (size_t i = 1; i < corners.size(); i++)
+                minDist = std::min(minDist, (float)cv::norm(corners[i] - corners[i-1]));
+
+            int hw = std::min(std::max(3, subpixWin), std::max(3, (int)(minDist * 0.45f)));
+            cv::cornerSubPix(gray, corners, cv::Size(hw, hw), cv::Size(-1, -1),
+                            cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 40, 0.0001));
+            if(ctx.verbose){
+                std::cout << "[FindChessboardCornersItem] Subpixel refined corners:" << "\n";
+                std::cout << std::string(50, '-') << "\n";
+                std::cout << "| Index | X Coordinate | Y Coordinate |" << "\n";
+                std::cout << std::string(50, '-') << "\n";
+                for (size_t i = 0; i < corners.size(); i++) {
+                    printf("| %5zu | %12.2f | %12.2f |\n", i, corners[i].x, corners[i].y);
+                }
+                std::cout << std::string(50, '-') << std::endl;
+            }
+        }
     }
-    
+
+    if (found) {
+        cv::Mat cornersMat;
+        cv::Mat(corners).copyTo(cornersMat);
+        ctx.cacheManager->set(cacheId, cornersMat);
+    } else {
+        // Clear stale cache so draw_chessboard_corners shows nothing
+        ctx.cacheManager->set(cacheId, cv::Mat());
+    }
+
     ctx.cacheManager->set(cacheId + "_found", cv::Mat(1, 1, CV_8U, cv::Scalar(found ? 1 : 0)));
-    
+
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -293,7 +348,8 @@ ExecutionResult FindCirclesGridItem::execute(const std::vector<RuntimeValue>& ar
     bool found = cv::findCirclesGrid(ctx.currentMat, cv::Size(patternW, patternH), centers, flags);
     
     if (found) {
-        cv::Mat centersMat(centers);
+        cv::Mat centersMat;
+        cv::Mat(centers).copyTo(centersMat);
         ctx.cacheManager->set(cacheId, centersMat);
     }
     
@@ -327,11 +383,12 @@ ExecutionResult DrawChessboardCornersItem::execute(const std::vector<RuntimeValu
     
     cv::Mat cornersOpt = ctx.cacheManager->get(cornersCache);
     cv::Mat foundOpt = ctx.cacheManager->get(cornersCache + "_found");
-    
+
+    // Nothing to draw if corners were cleared (detection failed)
     if (cornersOpt.empty()) {
-        return ExecutionResult::fail("Corners not found: " + cornersCache);
+        return ExecutionResult::ok(ctx.currentMat);
     }
-    
+
     bool found = true;
     if (!foundOpt.empty()) {
         found = foundOpt.at<uchar>(0, 0) > 0;
@@ -345,6 +402,17 @@ ExecutionResult DrawChessboardCornersItem::execute(const std::vector<RuntimeValu
     std::vector<cv::Point2f> corners;
     for (int i = 0; i < cornersOpt.rows; i++) {
         corners.push_back(cornersOpt.at<cv::Point2f>(i));
+    }
+    
+    if(ctx.verbose){
+        std::cout << "[DrawChessboardCornersItem] Drawing corners (found=" << found << "):" << std::endl;
+        std::cout << std::string(50, '-') << std::endl;
+        std::cout << "| Index | X Coordinate | Y Coordinate |" << std::endl;
+        std::cout << std::string(50, '-') << std::endl;
+        for (size_t i = 0; i < corners.size(); i++) {
+            printf("| %5zu | %12.2f | %12.2f |\n", i, corners[i].x, corners[i].y);
+        }
+        std::cout << std::string(50, '-') << std::endl;
     }
     
     cv::drawChessboardCorners(result, cv::Size(patternW, patternH), corners, found);
@@ -1052,10 +1120,251 @@ ExecutionResult ProjectPointsItem::execute(const std::vector<RuntimeValue>& args
     std::vector<cv::Point2f> imagePoints;
     cv::projectPoints(objPtsOpt, rvecOpt, tvecOpt, camMatOpt, distOpt, imagePoints);
     
-    cv::Mat pointsMat(imagePoints);
+    cv::Mat pointsMat;
+    cv::Mat(imagePoints).copyTo(pointsMat);
     ctx.cacheManager->set(cacheId, pointsMat);
     
     return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// CharucoDetectItem
+// ============================================================================
+
+CharucoDetectItem::CharucoDetectItem() {
+    _functionName = "charuco_detect";
+    _description = "Detects ChArUco board corners (ArUco markers embedded in a chessboard grid)";
+    _category = "stereo";
+    _params = {
+        ParamDef::optional("squares_x",          BaseType::INT,    "Chessboard squares in X",                         10),
+        ParamDef::optional("squares_y",          BaseType::INT,    "Chessboard squares in Y",                         7),
+        ParamDef::optional("square_length",      BaseType::FLOAT,  "Square side length (any consistent unit)",         0.04),
+        ParamDef::optional("marker_length",      BaseType::FLOAT,  "Marker side length (same unit as square_length)", 0.02),
+        ParamDef::optional("dict",               BaseType::STRING, "ArUco dictionary name",                           "4x4_50"),
+        ParamDef::optional("min_markers",        BaseType::INT,    "Min adjacent markers per corner (0 = any)",        1),
+        ParamDef::optional("refine",             BaseType::BOOL,   "Try to refine marker positions",                  false),
+        ParamDef::optional("corners_cache",      BaseType::STRING, "Cache ID for ChArUco corners",                    "charuco_corners"),
+        ParamDef::optional("ids_cache",          BaseType::STRING, "Cache ID for ChArUco corner IDs",                 "charuco_ids"),
+        // ArUco detector tuning (useful for fisheye / low-res images)
+        ParamDef::optional("min_marker_perim",   BaseType::FLOAT,  "Min marker perimeter rate (0–1, default 0.03)",    0.03),
+        ParamDef::optional("max_marker_perim",   BaseType::FLOAT,  "Max marker perimeter rate (default 4.0)",          4.0),
+        ParamDef::optional("thresh_constant",    BaseType::INT,    "Adaptive threshold constant (default 7)",          7),
+        ParamDef::optional("error_correction",   BaseType::FLOAT,  "Marker bit error correction rate (0–1)",           0.6),
+        ParamDef::optional("verbose",            BaseType::BOOL,   "Print marker/corner counts on each frame",         false),
+        ParamDef::optional("first_marker_id",    BaseType::INT,    "Starting marker ID for board layout (-1 = default)",-1)
+    };
+    _example = "charuco_detect(10, 7, 0.04, 0.02, \"4x4_50\")";
+    _returnType = "mat";
+    _tags = {"calibration", "charuco", "aruco", "chessboard", "detection"};
+}
+
+static cv::aruco::PredefinedDictionaryType parseDictType(const std::string& name) {
+    if (name == "4x4_50")       return cv::aruco::DICT_4X4_50;
+    if (name == "4x4_100")      return cv::aruco::DICT_4X4_100;
+    if (name == "4x4_250")      return cv::aruco::DICT_4X4_250;
+    if (name == "4x4_1000")     return cv::aruco::DICT_4X4_1000;
+    if (name == "5x5_50")       return cv::aruco::DICT_5X5_50;
+    if (name == "5x5_100")      return cv::aruco::DICT_5X5_100;
+    if (name == "5x5_250")      return cv::aruco::DICT_5X5_250;
+    if (name == "5x5_1000")     return cv::aruco::DICT_5X5_1000;
+    if (name == "6x6_50")       return cv::aruco::DICT_6X6_50;
+    if (name == "6x6_100")      return cv::aruco::DICT_6X6_100;
+    if (name == "6x6_250")      return cv::aruco::DICT_6X6_250;
+    if (name == "6x6_1000")     return cv::aruco::DICT_6X6_1000;
+    if (name == "7x7_50")       return cv::aruco::DICT_7X7_50;
+    if (name == "7x7_100")      return cv::aruco::DICT_7X7_100;
+    if (name == "7x7_250")      return cv::aruco::DICT_7X7_250;
+    if (name == "7x7_1000")     return cv::aruco::DICT_7X7_1000;
+    if (name == "aruco_original") return cv::aruco::DICT_ARUCO_ORIGINAL;
+    return cv::aruco::DICT_4X4_50; // default
+}
+
+ExecutionResult CharucoDetectItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    int squaresX        = args.size() > 0 ? static_cast<int>(args[0].asNumber()) : 10;
+    int squaresY        = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 7;
+    float squareLength  = args.size() > 2 ? static_cast<float>(args[2].asNumber()) : 0.04f;
+    float markerLength  = args.size() > 3 ? static_cast<float>(args[3].asNumber()) : 0.02f;
+    std::string dictName      = args.size() > 4 ? args[4].asString() : "4x4_50";
+    int minMarkers            = args.size() > 5 ? static_cast<int>(args[5].asNumber()) : 1;
+    bool refine               = args.size() > 6 ? args[6].asBool() : false;
+    std::string cornersCache  = args.size() > 7 ? args[7].asString() : "charuco_corners";
+    std::string idsCache      = args.size() > 8 ? args[8].asString() : "charuco_ids";
+    double minMarkerPerim     = args.size() > 9  ? args[9].asNumber()  : 0.03;
+    double maxMarkerPerim     = args.size() > 10 ? args[10].asNumber() : 4.0;
+    int threshConstant        = args.size() > 11 ? static_cast<int>(args[11].asNumber()) : 7;
+    double errorCorrection    = args.size() > 12 ? args[12].asNumber() : 0.6;
+    bool verbose              = args.size() > 13 ? args[13].asBool() : false;
+    int firstMarkerId         = args.size() > 14 ? static_cast<int>(args[14].asNumber()) : -1;
+
+    // Validate image
+    if (ctx.currentMat.empty()) {
+        return ExecutionResult::ok(ctx.currentMat);
+    }
+    // Ensure 8-bit (CharucoDetector can handle gray or BGR, but not float/double)
+    cv::Mat img = ctx.currentMat;
+    if (img.depth() != CV_8U) {
+        img.convertTo(img, CV_8U, img.depth() == CV_16U ? 1.0/256.0 : 255.0);
+    }
+
+    // Build dictionary and board
+    cv::aruco::Dictionary dict = cv::aruco::getPredefinedDictionary(parseDictType(dictName));
+    cv::aruco::CharucoBoard board(cv::Size(squaresX, squaresY), squareLength, markerLength, dict);
+    if (firstMarkerId >= 0) {
+        const auto markerCount = static_cast<int>(board.getIds().size());
+        const int dictCapacity = dict.bytesList.rows;
+        const long long endExclusive = static_cast<long long>(firstMarkerId) + markerCount;
+        if (firstMarkerId < 0 || firstMarkerId >= dictCapacity || endExclusive > dictCapacity) {
+            return ExecutionResult::fail(
+                "charuco_detect: first_marker_id out of dictionary range. "
+                "dict='" + dictName + "' supports IDs [0.." + std::to_string(dictCapacity - 1) +
+                "], board needs " + std::to_string(markerCount) + " contiguous IDs starting from " +
+                std::to_string(firstMarkerId) + ".");
+        }
+
+        std::vector<int> customIds;
+        customIds.reserve(markerCount);
+        for (int i = 0; i < markerCount; ++i) {
+            customIds.push_back(firstMarkerId + i);
+        }
+        board = cv::aruco::CharucoBoard(cv::Size(squaresX, squaresY), squareLength, markerLength, dict, customIds);
+    }
+
+    // Configure ArUco detector parameters
+    cv::aruco::DetectorParameters detParams;
+    detParams.minMarkerPerimeterRate  = static_cast<float>(minMarkerPerim);
+    detParams.maxMarkerPerimeterRate  = static_cast<float>(maxMarkerPerim);
+    detParams.adaptiveThreshConstant  = threshConstant;
+    detParams.errorCorrectionRate     = static_cast<float>(errorCorrection);
+
+    // Configure charuco parameters
+    cv::aruco::CharucoParameters charucoParams;
+    charucoParams.minMarkers       = minMarkers;
+    charucoParams.tryRefineMarkers = refine;
+
+    cv::aruco::CharucoDetector detector(board, charucoParams, detParams);
+
+    // Detect — also capture intermediate ArUco marker detections for diagnostics
+    std::vector<cv::Point2f> charucoCorners;
+    std::vector<int>         charucoIds;
+    std::vector<std::vector<cv::Point2f>> markerCorners;
+    std::vector<int>                      markerIds;
+    detector.detectBoard(img, charucoCorners, charucoIds, markerCorners, markerIds);
+
+    // Auto-retry: if markers were found but none of them produced corners
+    // (e.g. because the board is partially visible and minMarkers > 1),
+    // retry with minMarkers=1 before giving up.
+    if (!markerIds.empty() && charucoCorners.empty() && minMarkers > 1) {
+        cv::aruco::CharucoParameters retryParams = charucoParams;
+        retryParams.minMarkers = 1;
+        cv::aruco::CharucoDetector retryDetector(board, retryParams, detParams);
+        retryDetector.detectBoard(img, charucoCorners, charucoIds, markerCorners, markerIds);
+    }
+
+    bool found = !charucoCorners.empty();
+
+    if (verbose || (!found && markerIds.empty())) {
+        // Rate-limit the "0 markers found" warning to avoid console spam.
+        // Verbose mode always prints every frame.
+        static thread_local int s_noMarkerCount = 0;
+        bool shouldPrint = verbose || (++s_noMarkerCount == 1) ||
+                           (s_noMarkerCount % 300 == 0);
+        if (shouldPrint) {
+            std::cerr << "[charuco_detect] markers=" << markerIds.size()
+                      << " charuco_corners=" << charucoCorners.size()
+                      << " dict=" << dictName
+                      << " board=" << squaresX << "x" << squaresY
+                      << " first_marker_id=" << (firstMarkerId >= 0 ? std::to_string(firstMarkerId) : std::string("default"))
+                      << " min_markers=" << minMarkers
+                      << " min_marker_perim=" << minMarkerPerim
+                      << (markerIds.empty() ? " ← check dict/image quality" : "")
+                      << ((!markerIds.empty() && charucoCorners.empty())
+                          ? " ← markers found but no corners: try lower min_markers" : "")
+                      << "\n";
+        }
+        if (found) s_noMarkerCount = 0;  // reset on success
+    }
+
+    // Store corners in cache as Nx1 CV_32FC2 (matches find_chessboard_corners layout)
+    if (found) {
+        cv::Mat cornersMat(static_cast<int>(charucoCorners.size()), 1, CV_32FC2);
+        for (int i = 0; i < static_cast<int>(charucoCorners.size()); ++i) {
+            cornersMat.at<cv::Point2f>(i) = charucoCorners[i];
+        }
+        ctx.cacheManager->set(cornersCache, cornersMat);
+
+        cv::Mat idsMat(static_cast<int>(charucoIds.size()), 1, CV_32S);
+        for (int i = 0; i < static_cast<int>(charucoIds.size()); ++i) {
+            idsMat.at<int>(i) = charucoIds[i];
+        }
+        ctx.cacheManager->set(idsCache, idsMat);
+    } else {
+        // Explicitly clear cache on failure — consistent with find_chessboard_corners,
+        // ensures cache_ready("corners") correctly returns false this frame.
+        ctx.cacheManager->set(cornersCache, cv::Mat());
+        ctx.cacheManager->set(idsCache,     cv::Mat());
+    }
+
+    ctx.cacheManager->set(cornersCache + "_found",
+                          cv::Mat(1, 1, CV_8U, cv::Scalar(found ? 1 : 0)));
+
+    return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// DrawCharucoItem
+// ============================================================================
+
+DrawCharucoItem::DrawCharucoItem() {
+    _functionName = "draw_charuco";
+    _description  = "Draws detected ChArUco corners on the image";
+    _category     = "stereo";
+    _params = {
+        ParamDef::optional("corners_cache", BaseType::STRING, "Cache ID for ChArUco corners",  "charuco_corners"),
+        ParamDef::optional("ids_cache",     BaseType::STRING, "Cache ID for ChArUco IDs",      "charuco_ids"),
+        ParamDef::optional("color_r",       BaseType::INT,    "Red channel of corner color",   0),
+        ParamDef::optional("color_g",       BaseType::INT,    "Green channel of corner color", 255),
+        ParamDef::optional("color_b",       BaseType::INT,    "Blue channel of corner color",  0)
+    };
+    _example  = "draw_charuco(\"charuco_corners\", \"charuco_ids\")";
+    _returnType = "mat";
+    _tags = {"calibration", "charuco", "aruco", "draw"};
+}
+
+ExecutionResult DrawCharucoItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
+    std::string cornersCache = args.size() > 0 ? args[0].asString() : "charuco_corners";
+    std::string idsCache     = args.size() > 1 ? args[1].asString() : "charuco_ids";
+    int colorR = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 0;
+    int colorG = args.size() > 3 ? static_cast<int>(args[3].asNumber()) : 255;
+    int colorB = args.size() > 4 ? static_cast<int>(args[4].asNumber()) : 0;
+
+    cv::Mat cornersMat = ctx.cacheManager->get(cornersCache);
+    cv::Mat idsMat     = ctx.cacheManager->get(idsCache);
+
+    if (cornersMat.empty()) {
+        // Nothing detected – return image unchanged
+        return ExecutionResult::ok(ctx.currentMat);
+    }
+
+    cv::Mat result = ctx.currentMat.clone();
+    if (result.channels() == 1) {
+        cv::cvtColor(result, result, cv::COLOR_GRAY2BGR);
+    }
+
+    cv::Scalar color(colorB, colorG, colorR);
+
+    for (int i = 0; i < cornersMat.rows; ++i) {
+        cv::Point2f pt = cornersMat.at<cv::Point2f>(i);
+        cv::circle(result, pt, 6, color, 2);
+
+        if (!idsMat.empty() && i < idsMat.rows) {
+            int id = idsMat.at<int>(i);
+            cv::putText(result, std::to_string(id),
+                        cv::Point(static_cast<int>(pt.x) + 8, static_cast<int>(pt.y) - 8),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.45, color, 1);
+        }
+    }
+
+    return ExecutionResult::ok(result);
 }
 
 } // namespace visionpipe

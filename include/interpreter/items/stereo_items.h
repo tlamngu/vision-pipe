@@ -4,6 +4,7 @@
 #include "interpreter/item_registry.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/objdetect/charuco_detector.hpp>
 
 namespace visionpipe {
 
@@ -76,12 +77,21 @@ public:
 // ============================================================================
 
 /**
- * @brief Finds chessboard corners
- * 
+ * @brief Finds chessboard corners for calibration
+ *
+ * Uses the robust saddle-point detector (findChessboardCornersSB) by default.
+ * Falls back to the classic detector when use_sb=false.
+ *
  * Parameters:
- * - pattern_size: [cols, rows] of inner corners
- * - flags: Combination of "adaptive_thresh", "normalize_image", 
- *          "filter_quads", "fast_check"
+ * - pattern_width:  Inner corners per row
+ * - pattern_height: Inner corners per column
+ * - flags:          Classic-mode flags: adaptive_thresh, normalize_image,
+ *                   filter_quads, fast_check (only used when use_sb=false)
+ * - cache_id:       Cache key for corners (default: "corners")
+ * - use_sb:         Use findChessboardCornersSB (default: true)
+ * - sb_marker_size: SB marker size relative to square 0.1–0.9 (default: 0.5)
+ * - sb_exhaustive:  SB exhaustive search – slower but more robust (default: false)
+ * - subpix_win:     Sub-pixel window half-size for classic mode (default: 11)
  */
 class FindChessboardCornersItem : public InterpreterItem {
 public:
@@ -130,6 +140,45 @@ public:
 class ChessboardDetectedSaveItem : public InterpreterItem {
 public:
     ChessboardDetectedSaveItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Detects a ChArUco board (ArUco markers + chessboard grid)
+ *
+ * Parameters:
+ * - squares_x:      Number of chessboard squares in X direction (default: 10)
+ * - squares_y:      Number of chessboard squares in Y direction (default: 7)
+ * - square_length:  Size of a chessboard square in meters (default: 0.04)
+ * - marker_length:  Size of embedded ArUco markers in meters (default: 0.02)
+ * - dict:           ArUco dictionary: "4x4_50", "4x4_100", "4x4_250",
+ *                   "5x5_50", "5x5_100", "5x5_250", "6x6_50", "6x6_250",
+ *                   "7x7_50", "7x7_250", "aruco_original" (default: "4x4_50")
+ * - min_markers:    Minimum adjacent markers to accept a corner (default: 2)
+ * - refine:         Try sub-pixel refinement of marker positions (default: false)
+ * - corners_cache:  Cache ID for detected ChArUco corners (default: "charuco_corners")
+ * - ids_cache:      Cache ID for detected ChArUco corner IDs (default: "charuco_ids")
+ * - first_marker_id:First marker ID in board layout (default: -1 = OpenCV default)
+ */
+class CharucoDetectItem : public InterpreterItem {
+public:
+    CharucoDetectItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
+ * @brief Draws detected ChArUco corners on the current image
+ *
+ * Parameters:
+ * - corners_cache:  Cache ID for corners (default: "charuco_corners")
+ * - ids_cache:      Cache ID for IDs (default: "charuco_ids")
+ * - color_r:        Red channel of corner marker color (default: 0)
+ * - color_g:        Green channel (default: 255)
+ * - color_b:        Blue channel (default: 0)
+ */
+class DrawCharucoItem : public InterpreterItem {
+public:
+    DrawCharucoItem();
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 

@@ -216,17 +216,7 @@ public:
     /**
      * @brief Request stop of the main loop
      */
-    void requestStop() {
-        _stopRequested = true;
-        // Stop interval workers (they run in background threads).
-        {
-            std::lock_guard<std::mutex> lk(_intervalMutex);
-            for (auto& [name, worker] : _intervalWorkers) {
-                worker->stop.store(true);
-            }
-        }
-        shutdownForkChildren();
-    }
+    void requestStop();
     
     /**
      * @brief Check if there was an error
@@ -335,6 +325,10 @@ private:
     struct IntervalWorker {
         std::thread workerThread;
         std::atomic<bool> stop{false};
+        // Set to true by the worker thread just before it exits.  The
+        // destructor uses this to implement a timed join (avoids blocking
+        // forever if the pipeline inside the worker is stuck on I/O).
+        std::atomic<bool> done{false};
         std::unique_ptr<Interpreter> interp;  // dedicated child interpreter
     };
     // Key: pipeline name (or first pipeline name for multi)

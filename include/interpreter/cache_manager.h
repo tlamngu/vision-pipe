@@ -79,6 +79,21 @@ public:
 
     /// Set the shared-memory arena (created before fork, inherited by children).
     void setShmArena(ShmArena* arena) { _shmArena = arena; }
+
+    /// Configure the arena that will be created on the first exec_fork call.
+    /// maxFrameBytes: maximum frame size in bytes (0 = use compile-time default).
+    /// maxSlots:      maximum named channels   (0 = use compile-time default).
+    /// Must be called BEFORE exec_fork (i.e. during pipeline setup).
+    void setPendingShmConfig(size_t maxFrameBytes, int maxSlots = 0) {
+        _pendingShmMaxFrameBytes = maxFrameBytes;
+        _pendingShmMaxSlots      = maxSlots;
+    }
+
+    /// Returns the user-requested frame-byte limit (0 = use default).
+    size_t pendingShmMaxFrameBytes() const { return _pendingShmMaxFrameBytes; }
+
+    /// Returns the user-requested slot count (0 = use default).
+    int pendingShmMaxSlots() const { return _pendingShmMaxSlots; }
     
     // =========================================================================
     // Global cache operations
@@ -233,6 +248,10 @@ private:
     bool _isForkChild     = false;  ///< True in fork() child — setGlobal writes to arena
     bool _hasForkChildren = false;  ///< True in parent — getGlobal reads from arena
     ShmArena* _shmArena   = nullptr; ///< Anonymous mmap arena (set before fork)
+
+    // Pending arena configuration (set by set_shm_size() before exec_fork)
+    size_t _pendingShmMaxFrameBytes = 0;  ///< 0 = use compile-time default (32 MB)
+    int    _pendingShmMaxSlots      = 0;  ///< 0 = use compile-time default (8)
 
     // Local cache stack — strictly owned by this CacheManager instance.
     // No mutex needed: local scopes are only accessed by the thread that owns

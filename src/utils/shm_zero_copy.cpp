@@ -236,7 +236,13 @@ bool shmArenaWrite(ShmArena* arena, const std::string& name,
     size_t needed = frame.total() * frame.elemSize();
     if (needed > arena->maxFrameBytes) {
         std::cerr << "[shm_arena] Frame '" << name << "' too large: "
-                  << needed << " > " << arena->maxFrameBytes << "\n";
+                  << needed << " > " << arena->maxFrameBytes << " bytes\n"
+                  << "  This is the INTERNAL fork arena (anonymous mmap), which is\n"
+                  << "  used by global_cache regardless of the external IPC backend\n"
+                  << "  (iceoryx2 / posix-shm).  Add to your setup pipeline:\n"
+                  << "    set_shm_size(" << needed << ")  # exact fit\n"
+                  << "  or a round value, e.g. set_shm_size("
+                  << ((needed + 1024*1024 - 1) & ~(1024*1024 - 1)) << ")\n";
         return false;
     }
 

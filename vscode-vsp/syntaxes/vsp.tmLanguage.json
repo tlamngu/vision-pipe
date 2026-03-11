@@ -115,12 +115,12 @@
         {
           "comment": "Category: conditional",
           "name": "support.function.conditional.vsp",
-          "match": "\\b(cache_if|display_if|is_defined|is_even|is_negative|is_odd|is_positive|is_zero|logical_and|logical_not|logical_or|logical_xor|scalar_compare|scalar_in_range|select|set_if|skip_if_false|skip_if_true|toggle_var|trigger_every|trigger_on_change|trigger_on_falling|trigger_on_rising|use_if)\\b"
+          "match": "\\b(cache_if|cache_ready|display_if|is_defined|is_even|is_negative|is_odd|is_positive|is_zero|logical_and|logical_not|logical_or|logical_xor|scalar_compare|scalar_in_range|select|set_if|skip_if_false|skip_if_true|toggle_var|trigger_every|trigger_on_change|trigger_on_falling|trigger_on_rising|use_if)\\b"
         },
         {
           "comment": "Category: control",
           "name": "support.function.control.vsp",
-          "match": "\\b(absdiff|add|add_weighted|bitwise_and|bitwise_not|bitwise_or|bitwise_xor|break|cache|clear_cache|clone|continue|convert_to|copy_cache|copy_to|create_mat|decrement_var|divide|eye|get_var|global_cache|if|increment_var|list_cache|load_cache|loop|multiply|ones|promote_global|reshape|return|roi|scale_add|set_to|set_var|subtract|swap_cache|zeros)\\b"
+          "match": "\\b(absdiff|add|add_weighted|bitwise_and|bitwise_not|bitwise_or|bitwise_xor|break|cache|clear_cache|clone|continue|convert_to|copy_cache|copy_to|create_mat|decrement_var|divide|eye|get_var|global_cache|if|increment_var|list_cache|load_cache|loop|multiply|ones|promote_global|reshape|return|roi|scale_add|set_shm_size|set_to|set_var|subtract|swap_cache|zeros)\\b"
         },
         {
           "comment": "Category: display",
@@ -185,7 +185,7 @@
         {
           "comment": "Category: stereo",
           "name": "support.function.stereo.vsp",
-          "match": "\\b(calibrate_camera|chessboard_detected_save|disparity_to_depth|disparity_wls_filter|draw_chessboard_corners|find_chessboard_corners|find_circles_grid|find_essential_mat|find_fundamental_mat|init_undistort_rectify_map|normalize_disparity|project_points|recover_pose|reproject_image_to_3d|solve_pnp|solve_pnp_ransac|stereo_bm|stereo_calibrate|stereo_rectify|stereo_sgbm|triangulate_points|undistort|undistort_points)\\b"
+          "match": "\\b(calibrate_camera|charuco_detect|chessboard_detected_save|disparity_to_depth|disparity_wls_filter|draw_charuco|draw_chessboard_corners|find_chessboard_corners|find_circles_grid|find_essential_mat|find_fundamental_mat|init_undistort_rectify_map|normalize_disparity|project_points|recover_pose|reproject_image_to_3d|solve_pnp|solve_pnp_ransac|stereo_bm|stereo_calibrate|stereo_rectify|stereo_sgbm|triangulate_points|undistort|undistort_points)\\b"
         },
         {
           "comment": "Category: tensor",

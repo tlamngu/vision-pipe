@@ -41,14 +41,40 @@ Interpreter::Interpreter(InterpreterConfig config)
 
 Interpreter::~Interpreter() {
     // Stop interval worker threads first (they may reference pipelines/registry).
+    // Also signal each worker's child interpreter to stop so that any pipeline
+    // currently running inside the interval thread exits at the next check point
+    // rather than completing its full iteration.
     {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            worker->stop.store(true);
+            worker->stop.store(true, std::memory_order_release);
+            if (worker->interp) worker->interp->requestStop();
         }
+    }
+    // Join interval workers.  Because we called interp->requestStop() above,
+    // the interval's inner pipeline exits at the next _stopRequested check —
+    // so the thread should finish within one pipeline-item granularity.
+    // We use a 200 ms safety timeout per worker then detach.  The lambda
+    // captures a shared_ptr<IntervalWorker> so detaching is safe: the
+    // IntervalWorker (and its child Interpreter) stays alive until the thread
+    // exits naturally, even if we've cleared _intervalWorkers here.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            if (worker->workerThread.joinable()) {
+            if (!worker->workerThread.joinable()) continue;
+            while (!worker->done.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (worker->done.load(std::memory_order_acquire)) {
                 worker->workerThread.join();
+            } else {
+                // Timed out — detach.  The thread holds its own shared_ptr
+                // reference to the IntervalWorker so it is safe to clear the
+                // map: the underlying objects are not freed until the thread
+                // exits and releases its shared_ptr.
+                worker->workerThread.detach();
             }
         }
         _intervalWorkers.clear();
@@ -287,11 +313,23 @@ void Interpreter::reset() {
     {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            worker->stop.store(true);
+            worker->stop.store(true, std::memory_order_release);
+            if (worker->interp) worker->interp->requestStop();
         }
+    }
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            if (worker->workerThread.joinable()) {
+            if (!worker->workerThread.joinable()) continue;
+            while (!worker->done.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (worker->done.load(std::memory_order_acquire)) {
                 worker->workerThread.join();
+            } else {
+                worker->workerThread.detach();
             }
         }
         _intervalWorkers.clear();
@@ -319,16 +357,32 @@ void Interpreter::reset() {
 
 void Interpreter::setParamStore(std::shared_ptr<ParameterStore> store) {
     _paramStore = std::move(store);
+    if (_paramStore) _paramStore->setVerbose(_config.verbose);
     _paramCacheGen = 0;
     _paramCache.clear();
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] setParamStore: store attached, cache cleared\n";
+    }
 }
 
 void Interpreter::refreshParamCache() {
-    if (!_paramStore) return;
+    if (!_paramStore) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] refreshParamCache: no param store attached\n";
+        }
+        return;
+    }
     uint64_t currentGen = _paramStore->gen();
     if (currentGen == _paramCacheGen) return;  // no changes since last snapshot
     _paramCache = _paramStore->list();         // one lock, full snapshot
     _paramCacheGen = currentGen;
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] refreshParamCache: gen=" << currentGen
+                  << " entries=" << _paramCache.size() << "\n";
+        for (const auto& [k, v] : _paramCache) {
+            std::cerr << "  @" << k << " = " << v.toWireString() << "\n";
+        }
+    }
 }
 
 // ============================================================================
@@ -738,8 +792,35 @@ void Interpreter::execExecMulti(ExecMultiStmt* stmt) {
 
 void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
     _loopRunning = true;
-    
-    while (!_stopRequested) {
+
+    // Lambda so the stop condition is evaluated in one place and can be
+    // extended without touching every loop exit point below.
+    // Checks (in priority order):
+    //   1. _stopRequested   — set by requestStop() / break key / runtime stop
+    //   2. s_forkChildStopped — set by SIGTERM/SIGINT handler inside a
+    //      fork() child.  The outer exec_fork wrapper checks this flag
+    //      between executePipeline() calls, but pipelines that contain an
+    //      inner exec_loop (e.g. chessboard_loop → exec_loop charuco_det)
+    //      would never return from executePipeline() unless the inner loop
+    //      also checks this flag.
+    //   3. shmArenaIsShutdown — arena shutdown flag written by the parent
+    //      when it calls shutdownForkChildren().  Same reasoning as (2).
+    auto shouldStop = [this]() -> bool {
+        if (_stopRequested.load(std::memory_order_relaxed)) return true;
+        if (s_forkChildStopped.load(std::memory_order_relaxed)) {
+            // Propagate to _stopRequested so all other exit-condition checks
+            // in this function (shouldBreak handlers, etc.) also see it.
+            _stopRequested.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        if (_shmArena && shmArenaIsShutdown(_shmArena)) {
+            _stopRequested.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
+
+    while (!shouldStop()) {
         // Reset verbose/debug flags at each frame boundary so debug_start in a
         // previous iteration does not bleed through to the next frame.
         _context.verbose   = _config.verbose;
@@ -851,7 +932,8 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         auto it = _intervalWorkers.find(workerKey);
         if (it != _intervalWorkers.end()) {
-            it->second->stop.store(true);
+            it->second->stop.store(true, std::memory_order_release);
+            if (it->second->interp) it->second->interp->requestStop();
             if (it->second->workerThread.joinable()) it->second->workerThread.join();
             _intervalWorkers.erase(it);
         }
@@ -873,13 +955,17 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
     worker->interp->_cacheManager.setHasForkChildren(_hasForkChildren);
     worker->interp->_cacheManager.setShmArena(_shmArena);
 
-    auto* workerPtr   = worker.get();
     auto* interpPtr   = worker->interp.get();
     std::string pname = name;
 
-    worker->workerThread = std::thread([workerPtr, interpPtr, pname, args, intervalMs]() {
+    // Capture the shared_ptr by value so the IntervalWorker (and its child
+    // Interpreter) is kept alive for the lifetime of the thread.  This makes
+    // it safe to detach the thread in the destructor: clearing _intervalWorkers
+    // drops the map's reference but the thread still holds its own reference.
+    worker->workerThread = std::thread([workerShared = worker, interpPtr, pname, args, intervalMs]() {
+        auto* workerPtr = workerShared.get();
         using namespace std::chrono;
-        while (!workerPtr->stop.load()) {
+        while (!workerPtr->stop.load(std::memory_order_acquire)) {
             auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
 
             try {
@@ -893,10 +979,12 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
             }
 
             // Sleep until the next tick, but check stop frequently.
-            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+            while (!workerPtr->stop.load(std::memory_order_acquire) && steady_clock::now() < next) {
                 std::this_thread::sleep_for(milliseconds(1));
             }
         }
+        // Signal the destructor that this thread has finished its loop.
+        workerPtr->done.store(true, std::memory_order_release);
     });
 
     std::lock_guard<std::mutex> lk(_intervalMutex);
@@ -913,7 +1001,8 @@ void Interpreter::execNoInterval(NoIntervalStmt* stmt) {
     std::lock_guard<std::mutex> lk(_intervalMutex);
     auto it = _intervalWorkers.find(name);
     if (it != _intervalWorkers.end()) {
-        it->second->stop.store(true);
+        it->second->stop.store(true, std::memory_order_release);
+        if (it->second->interp) it->second->interp->requestStop();
         if (it->second->workerThread.joinable()) it->second->workerThread.join();
         _intervalWorkers.erase(it);
     } else {
@@ -939,7 +1028,8 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         auto it = _intervalWorkers.find(workerKey);
         if (it != _intervalWorkers.end()) {
-            it->second->stop.store(true);
+            it->second->stop.store(true, std::memory_order_release);
+            if (it->second->interp) it->second->interp->requestStop();
             if (it->second->workerThread.joinable()) it->second->workerThread.join();
             _intervalWorkers.erase(it);
         }
@@ -955,12 +1045,13 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
     auto registryCopy  = _registry;
     auto thrTblCopy    = _throughputTable;
 
-    auto* workerPtr = worker.get();
-
-    worker->workerThread = std::thread([workerPtr, names, pipelinesCopy, registryCopy,
+    // Capture the shared_ptr so the IntervalWorker outlives the thread
+    // even if the map is cleared (safe detach — see execExecInterval).
+    worker->workerThread = std::thread([workerShared = worker, names, pipelinesCopy, registryCopy,
                                   sharedGlobal, intervalMs, thrTblCopy, cfg = _config]() mutable {
+        auto* workerPtr = workerShared.get();
         using namespace std::chrono;
-        while (!workerPtr->stop.load()) {
+        while (!workerPtr->stop.load(std::memory_order_acquire)) {
             auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
 
             // Launch one child interpreter per pipeline in parallel.
@@ -985,10 +1076,12 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
             }
             for (auto& t : threads) if (t.joinable()) t.join();
 
-            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+            while (!workerPtr->stop.load(std::memory_order_acquire) && steady_clock::now() < next) {
                 std::this_thread::sleep_for(milliseconds(1));
             }
         }
+        // Signal the destructor that this thread has finished its loop.
+        workerPtr->done.store(true, std::memory_order_release);
     });
 
     std::lock_guard<std::mutex> lk(_intervalMutex);
@@ -1316,7 +1409,16 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
     // On the very first exec_fork, create an anonymous mmap arena.
     // This must happen BEFORE fork() so children inherit the mapping.
     if (!_shmArena) {
-        _shmArena = shmArenaCreate();  // 8 slots, 8 MB each (default)
+        // Use values configured by set_shm_size() if available, else defaults.
+        size_t frameBytes = _cacheManager.pendingShmMaxFrameBytes();
+        int    slots      = _cacheManager.pendingShmMaxSlots();
+        if (frameBytes == 0) frameBytes = 32UL * 1024 * 1024;  // 32 MB
+        if (slots      == 0) slots      = 8;
+        std::cout << "[exec_fork] Shared-memory arena: "
+                  << slots << " slots x "
+                  << (frameBytes / (1024 * 1024)) << " MB"
+                     " (override with set_shm_size() in pipeline setup)\n";
+        _shmArena = shmArenaCreate(slots, frameBytes);
         if (!_shmArena) {
             reportError("exec_fork: shmArenaCreate() failed", stmt->location);
             return;
@@ -1351,6 +1453,22 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
         }
         // Don't create a child ThroughputTable — throughput is recorded
         // directly into the ShmArena (read by the parent's printer).
+
+        // POSIX after fork(): only the calling thread survives.  Any
+        // std::thread object that is still joinable() will call
+        // std::terminate() in its destructor — so detach them all first.
+        for (auto& w : _multiWorkers) {
+            if (w.thread.joinable()) w.thread.detach();
+        }
+        for (auto& [name, nw] : _nasyncWorkers) {
+            if (nw && nw->thread.joinable()) nw->thread.detach();
+        }
+        // Do NOT lock _intervalMutex here — the thread that held it in
+        // the parent no longer exists in the child, so the mutex may be
+        // in a permanently locked state.  Access the map directly.
+        for (auto& [name, w] : _intervalWorkers) {
+            if (w && w->workerThread.joinable()) w->workerThread.detach();
+        }
 
         // Clear parent's thread-based workers (they don't exist in the child).
         _multiWorkers.clear();
@@ -1442,6 +1560,46 @@ void Interpreter::execExecFork(ExecForkStmt* stmt) {
               << " for pipeline '" << pname << "'\n";
 }
 
+void Interpreter::requestStop() {
+    _stopRequested = true;
+
+    // Stop interval workers (they run in background threads).
+    //
+    // IMPORTANT: do NOT lock _intervalMutex here.  requestStop() may be
+    // called from a POSIX signal handler (via g_runtime->stop()), which
+    // suspends the main thread mid-execution.  If the main thread held
+    // _intervalMutex at signal delivery (e.g. inside execExecInterval's
+    // lock_guard), acquiring it again in the handler would deadlock.
+    //
+    // Safety: _intervalWorkers is only modified by the main thread (the same
+    // thread the signal suspends).  Reading and writing the workers' atomic
+    // stop flags without the mutex is therefore safe here.
+    for (auto& [name, worker] : _intervalWorkers) {
+        if (!worker) continue;
+        worker->stop.store(true, std::memory_order_release);
+        // Also stop the child interpreter so any in-progress pipeline call
+        // exits at the next _stopRequested check rather than finishing its
+        // full iteration (which could involve blocking I/O).
+        if (worker->interp) worker->interp->requestStop();
+    }
+
+    // Signal fork children to exit using only async-signal-safe operations
+    // (atomic store + kill(2)).  Full cleanup — waitpid, arena destruction —
+    // is deferred to shutdownForkChildren() in the destructor, which runs on
+    // the normal thread after all pipeline loops have exited.
+    //
+    // Calling the full shutdownForkChildren() here would be unsafe when
+    // requestStop() is invoked from a signal handler (via g_runtime->stop())
+    // because shutdownForkChildren() uses std::this_thread::sleep_for() —
+    // not async-signal-safe — and may deadlock on mutexes held at signal time.
+    if (_shmArena) {
+        shmArenaSetShutdown(_shmArena);  // single atomic store — signal-safe
+    }
+    for (auto& c : _forkChildren) {
+        if (c.pid > 0) ::kill(c.pid, SIGTERM);
+    }
+}
+
 void Interpreter::shutdownForkChildren() {
     if (_forkChildren.empty()) return;
 
@@ -1450,31 +1608,61 @@ void Interpreter::shutdownForkChildren() {
         shmArenaSetShutdown(_shmArena);
     }
 
-    // Send SIGTERM to all children.
+    // Send SIGTERM to all children (may already have been sent by requestStop(),
+    // but idempotent for processes that are still alive or already a zombie).
     for (auto& c : _forkChildren) {
-        if (c.pid > 0) {
-            kill(c.pid, SIGTERM);
+        if (c.pid > 0) kill(c.pid, SIGTERM);
+    }
+
+    // Phase 1: give children up to 100 ms to exit cleanly after SIGTERM.
+    // requestStop() already sent SIGTERM and set the arena shutdown flag at
+    // signal-handler time, so children have had this signal for the entire
+    // duration of the parent's pipeline teardown.  100 ms is generous.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        for (auto& c : _forkChildren) {
+            if (c.pid <= 0) continue;
+            while (std::chrono::steady_clock::now() < deadline) {
+                int status;
+                if (waitpid(c.pid, &status, WNOHANG) == c.pid) { c.pid = -1; break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
         }
     }
 
-    // Wait for children to exit (timeout 3 seconds, then SIGKILL).
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    // Phase 2: SIGKILL any stragglers, then poll briefly and abandon.
+    //
+    // CRITICAL: do NOT use blocking waitpid() after SIGKILL.
+    //
+    // A fork child blocked in a kernel driver (e.g. a V4L2 camera read in
+    // uninterruptible sleep / D state) does not die from SIGKILL — the
+    // kernel delivers SIGKILL only after the driver's wait returns.  A
+    // blocking waitpid() would therefore hang the parent indefinitely.
+    //
+    // We poll for up to 200 ms with WNOHANG.  If the child is still alive
+    // after that (stuck in a kernel D-state wait), we abandon it: the child
+    // will be adopted by init and reaped when the driver eventually unblocks.
+    // The parent process exits cleanly without a second Ctrl+C.
     for (auto& c : _forkChildren) {
         if (c.pid <= 0) continue;
-        while (std::chrono::steady_clock::now() < deadline) {
-            int status;
-            pid_t w = waitpid(c.pid, &status, WNOHANG);
-            if (w == c.pid || w < 0) {
-                c.pid = -1;
-                break;
+        std::cerr << "[exec_fork] Force-killing child PID " << c.pid << "\n";
+        kill(c.pid, SIGKILL);
+    }
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        for (auto& c : _forkChildren) {
+            if (c.pid <= 0) continue;
+            while (std::chrono::steady_clock::now() < deadline) {
+                int status;
+                if (waitpid(c.pid, &status, WNOHANG) == c.pid) { c.pid = -1; break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        if (c.pid > 0) {
-            std::cerr << "[exec_fork] Force-killing child PID " << c.pid << "\n";
-            kill(c.pid, SIGKILL);
-            waitpid(c.pid, nullptr, 0);
-            c.pid = -1;
+            if (c.pid > 0) {
+                // D-state or very slow to die — abandon.  init will reap it.
+                std::cerr << "[exec_fork] Abandoning child PID " << c.pid
+                          << " (still alive after SIGKILL, likely in kernel D-state)\n";
+                c.pid = -1;
+            }
         }
     }
     _forkChildren.clear();
@@ -2043,6 +2231,13 @@ RuntimeValue Interpreter::evalArray(ArrayExpr* expr) {
 }
 
 RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                  << " paramStore=" << (_paramStore ? "yes" : "NO")
+                  << " cacheSize=" << _paramCache.size()
+                  << " cacheGen=" << _paramCacheGen
+                  << " storeGen=" << (_paramStore ? _paramStore->gen() : 0) << "\n";
+    }
     if (!_paramStore) {
         // No store attached – warn and return empty value
         reportError("@" + expr->paramName
@@ -2055,16 +2250,30 @@ RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
     refreshParamCache();
     auto it = _paramCache.find(expr->paramName);
     if (it == _paramCache.end()) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                      << " NOT FOUND in cache (" << _paramCache.size() << " entries)\n";
+            for (const auto& [k, v] : _paramCache) {
+                std::cerr << "  cache key: '" << k << "'\n";
+            }
+        }
         reportError("@" + expr->paramName
                     + " is not declared in params [] block",
                     expr->location);
         return RuntimeValue();
     }
     if (it->second.isNull()) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName << " is NULL (no default)\n";
+        }
         reportError("@" + expr->paramName
                     + " has no value and no default was declared",
                     expr->location);
         return RuntimeValue();
+    }
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                  << " = " << it->second.toWireString() << "\n";
     }
     const ParamValue& pv = it->second;
     switch (pv.type) {

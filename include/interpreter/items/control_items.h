@@ -41,11 +41,31 @@ public:
 };
 
 /**
+ * @brief Sets the shared-memory arena size used by exec_fork.
+ *
+ * Must be called BEFORE the first exec_fork (typically inside "pipeline setup").
+ * Overrides the compile-time default (32 MB per slot, 8 slots).
+ *
+ * Parameters:
+ * - max_frame_bytes: Maximum bytes per frame slot (e.g. 3280*2464*3 ≈ 24 MB → use 32000000)
+ * - max_slots:       Maximum named cache channels shared across forks (default 8)
+ *
+ * Example:
+ *   set_shm_size(33554432)        # 32 MB
+ *   set_shm_size(67108864, 16)    # 64 MB, 16 slots
+ */
+class SetShmSizeItem : public InterpreterItem {
+public:
+    SetShmSizeItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
+/**
  * @brief Caches current Mat GLOBALLY with specified ID
- * 
+ *
  * Parameters:
  * - cache_id: String cache identifier
- * 
+ *
  * Note: This caches to global scope, accessible from all pipelines
  */
 class GlobalCacheItem : public InterpreterItem {

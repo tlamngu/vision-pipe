@@ -163,8 +163,10 @@ ExecutionResult FindContoursItem::execute(const std::vector<RuntimeValue>& args,
     }
     
     // Cache contour data
-    cv::Mat pointsMat(allPoints);
-    cv::Mat sizesMat(contourSizes);
+    cv::Mat pointsMat;
+    cv::Mat(allPoints).copyTo(pointsMat);
+    cv::Mat sizesMat;
+    cv::Mat(contourSizes).copyTo(sizesMat);
     ctx.cacheManager->set(cacheId + "_points", pointsMat);
     ctx.cacheManager->set(cacheId + "_sizes", sizesMat);
     ctx.cacheManager->set(cacheId + "_count", cv::Mat(1, 1, CV_32S, cv::Scalar(static_cast<int>(contours.size()))));

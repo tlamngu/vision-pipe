@@ -48,10 +48,11 @@ struct ShmArena;
 /// Create an arena backed by anonymous mmap (pure RAM, no filesystem).
 /// Must be called BEFORE fork() so children inherit the mapping.
 /// @param maxSlots      Maximum named frame channels (default 8).
-/// @param maxFrameBytes Maximum byte size per individual frame buffer (default 8 MB).
+/// @param maxFrameBytes Maximum byte size per individual frame buffer (default 32 MB).
+///                      Raise this if you use large sensors (e.g. 3280×2464 BGR ≈ 24 MB).
 /// @return Arena handle, or nullptr on failure.
 ShmArena* shmArenaCreate(int maxSlots = 8,
-                          size_t maxFrameBytes = 8UL * 1024 * 1024);
+                          size_t maxFrameBytes = 32UL * 1024 * 1024);
 
 /// Destroy the arena (munmap).  Only the parent should call this after all
 /// children have exited.  Children that call _exit() never reach destructors
