@@ -375,10 +375,10 @@ ExecutionResult GpuDebayerItem::execute(const std::vector<RuntimeValue>& args,
                 "run video_cap or v4l2_setup before gpu_debayer");
         }
 #ifdef VISIONPIPE_V4L2_NATIVE_ENABLED
-        pattern = CameraDeviceManager::instance().getV4L2BayerPattern(ctx.lastSourceId);
+        pattern = CameraDeviceManager::forSource(ctx.lastSourceId).getV4L2BayerPattern(ctx.lastSourceId);
 #endif
         if (pattern.empty())
-            pattern = CameraDeviceManager::instance().getBayerPattern(ctx.lastSourceId);
+            pattern = CameraDeviceManager::forSource(ctx.lastSourceId).getBayerPattern(ctx.lastSourceId);
         if (pattern.empty()) {
             return ExecutionResult::fail(
                 "gpu_debayer(\"auto\"): could not detect Bayer pattern for source '"

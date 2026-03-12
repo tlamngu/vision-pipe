@@ -74,7 +74,8 @@ ExecutionResult GoodFeaturesToTrackItem::execute(const std::vector<RuntimeValue>
     }
     
     // Cache corners
-    cv::Mat cornersMat(corners);
+    cv::Mat cornersMat;
+    cv::Mat(corners).copyTo(cornersMat);
     ctx.cacheManager->set("corners", cornersMat);
     
     return ExecutionResult::ok(result);

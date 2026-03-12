@@ -34,6 +34,8 @@ enum class TokenType {
     KW_EXEC_INTERVAL_MULTI, // exec_interval_multi (parallel pipelines on a timer)
     KW_EXEC_RT_SEQ,     // exec_rt_seq (real-time sequential with timeout)
     KW_EXEC_RT_MULTI,   // exec_rt_multi (real-time parallel with timeout)
+    KW_EXEC_NASYNC,     // exec_nasync (fire-and-forget, Mat bypasses to next item)
+    KW_EXEC_FORK,       // exec_fork (fork child process running pipeline in loop)
     KW_DEBUG_START,     // debug_start (begin verbose debug block)
     KW_DEBUG_END,       // debug_end   (end verbose debug block)
     KW_USE,             // use (load from cache)

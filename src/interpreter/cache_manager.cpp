@@ -1,4 +1,5 @@
 #include "interpreter/cache_manager.h"
+#include "utils/shm_zero_copy.h"
 #include <sstream>
 #include <chrono>
 #include <shared_mutex>
@@ -25,28 +26,130 @@ void CacheManager::setGlobal(const std::string& id, const cv::Mat& mat, const st
     std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     
     CacheEntry entry;
-    entry.mat = mat.clone();  // Always clone to ensure ownership
+    entry.mat = mat;
     entry.source = source;
-    entry.timestamp = currentTimestamp();
+    entry.timestamp = 0;
     entry.accessCount = 0;
     entry.isGlobal = true;
+    entry.shmSeq = 0;  // Not sourced from SHM; clear so getGlobal always re-reads
     
     _sharedGlobal->entries[id] = std::move(entry);
+
+    // In fork child processes, write the frame into the anonymous-mmap arena
+    // so the parent (and its threads) can read it via zero-copy getGlobal().
+    if (_isForkChild && _shmArena && !mat.empty()) {
+        lock.unlock();  // don't hold lock during memcpy into arena
+        shmArenaWrite(_shmArena, id, mat);
+    }
 }
 
 cv::Mat CacheManager::getGlobal(const std::string& id) const {
+    // When fork children are running, use a seq-number write-through cache:
+    //
+    //   1. Read the SHM slot's writeSeq (one atomic load — very cheap).
+    //   2. If the in-process shared cache already holds a copy with the same
+    //      seq, return it immediately — no arena read, no clone.
+    //   3. Otherwise read from the arena (zero-copy header), clone to own
+    //      the data (arena triple-buffer may be recycled after 2 more writes),
+    //      and write it back with the seq so the next caller (e.g. the main
+    //      display loop after brightness_adjustment) gets a cache hit.
+    //
+    // Because all threads share _sharedGlobal, the first caller in any turn
+    // that reads a new frame pays one shmArenaRead + clone; every subsequent
+    // caller in the same turn (same writeSeq) pays only one shared_lock read.
+    if (_hasForkChildren && _shmArena) {
+        uint64_t shmSeq = shmArenaGetSeq(_shmArena, id);
+        if (shmSeq > 0) {
+            // Fast path: in-process cache has the current frame already.
+            {
+                std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+                auto it = _sharedGlobal->entries.find(id);
+                if (it != _sharedGlobal->entries.end() &&
+                    it->second.shmSeq == shmSeq) {
+                    const_cast<CacheEntry&>(it->second).accessCount++;
+                    return it->second.mat;  // cache hit — no SHM read
+                }
+            }
+
+            // Slow path: read from arena, clone, and write-through.
+            cv::Mat shmMat;
+            if (shmArenaRead(_shmArena, id, shmMat)) {
+                shmArenaRecordReadLatency(_shmArena, id);
+                // Clone so the stored Mat owns its data; the arena triple-
+                // buffer is only guaranteed stable for 2 more writer frames.
+                cv::Mat owned = shmMat.clone();
+                {
+                    std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+                    CacheEntry& entry    = _sharedGlobal->entries[id];
+                    entry.mat            = owned;
+                    entry.shmSeq         = shmSeq;
+                    entry.isGlobal       = true;
+                    entry.accessCount    = 1;
+                }
+                return owned;
+            }
+        }
+        // shmSeq==0 means the child hasn't written this slot yet; fall through
+        // to the in-process cache (may have a pre-fork value) or return empty.
+    }
+
+    // Secondary SHM read path for fork grandchildren:
+    // _hasForkChildren is intentionally false in fork children (see execExecFork),
+    // but a fork-of-a-fork (e.g. chessboard_loop inside camera_loop) still has
+    // _shmArena inherited from its parent and needs to read frames that a sibling
+    // fork child (e.g. camera_fetch) writes into the arena.
+    //
+    // Writers identify their entries with shmSeq=0 in the in-process map so
+    // we detect them by that sentinel and return without an arena round-trip.
+    if (_shmArena && !_hasForkChildren) {
+        uint64_t shmSeq = shmArenaGetSeq(_shmArena, id);
+        if (shmSeq > 0) {
+            // Fast path: in-process cache may already have a current copy.
+            {
+                std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+                auto it = _sharedGlobal->entries.find(id);
+                if (it != _sharedGlobal->entries.end()) {
+                    // shmSeq==0 on the entry marks a locally-written frame
+                    // (the writer process itself); always treat it as current.
+                    if (it->second.shmSeq == 0 || it->second.shmSeq == shmSeq) {
+                        const_cast<CacheEntry&>(it->second).accessCount++;
+                        return it->second.mat;
+                    }
+                }
+            }
+            // Slow path: read the updated frame from the arena.
+            cv::Mat shmMat;
+            if (shmArenaRead(_shmArena, id, shmMat)) {
+                cv::Mat owned = shmMat.clone();
+                {
+                    std::unique_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
+                    CacheEntry& entry = _sharedGlobal->entries[id];
+                    entry.mat         = owned;
+                    entry.shmSeq      = shmSeq;
+                    entry.isGlobal    = true;
+                    entry.accessCount = 1;
+                }
+                return owned;
+            }
+        }
+    }
+
+    // Fallback: in-process shared map (pre-fork values or direct setGlobal calls).
     std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
-    
     auto it = _sharedGlobal->entries.find(id);
     if (it != _sharedGlobal->entries.end()) {
         const_cast<CacheEntry&>(it->second).accessCount++;
-        // Clone while holding the lock so callers get an independent buffer.
-        return it->second.mat.clone();
+        return it->second.mat;
     }
     return cv::Mat();
 }
 
 bool CacheManager::hasGlobal(const std::string& id) const {
+    // When an SHM arena is attached, check it first — this covers fork
+    // grandchildren (e.g. chessboard_loop) that have _hasForkChildren=false
+    // but still need to detect frames written by a sibling fork child
+    // (e.g. camera_fetch) into the shared arena.
+    if (_shmArena && shmArenaGetSeq(_shmArena, id) > 0) return true;
     std::shared_lock<std::shared_mutex> lock(_sharedGlobal->mutex);
     return _sharedGlobal->entries.count(id) > 0;
 }

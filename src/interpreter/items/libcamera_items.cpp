@@ -35,7 +35,12 @@ LibCamSetupItem::LibCamSetupItem() {
         ParamDef::optional("height", BaseType::INT, "Frame height", 480),
         ParamDef::optional("pixel_format", BaseType::STRING, "Pixel format: BGR888, YUYV, MJPEG", "BGR888"),
         ParamDef::optional("buffer_count", BaseType::INT, "Number of buffers", 4),
-        ParamDef::optional("stream_role", BaseType::STRING, "Stream role: VideoRecording, StillCapture, Viewfinder", "VideoRecording")
+        ParamDef::optional("stream_role", BaseType::STRING, "Stream role: VideoRecording, StillCapture, Viewfinder", "VideoRecording"),
+        ParamDef::optional("camera_device_manager_id", BaseType::STRING,
+            "Bind this camera to a named device manager instance. "
+            "Cameras on different managers have independent mutexes and "
+            "libcamera::CameraManager instances, eliminating cross-device "
+            "lock contention and enabling true parallel capture throughput.", "")
     };
     _example = "libcam_setup(0, 1920, 1080, \"SRGGB10\", 4, \"Viewfinder\")";
     _returnType = "mat";
@@ -58,6 +63,12 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
     int bufferCount = args.size() > 4 ? static_cast<int>(args[4].asNumber()) : 4;
     std::string streamRole = args.size() > 5 ? args[5].asString() : "VideoRecording";
     
+    // Optional: bind this source to a named device manager
+    std::string managerId = args.size() > 6 ? args[6].asString() : "";
+    if (!managerId.empty()) {
+        CameraDeviceManager::bindSource(sourceId, managerId);
+    }
+
     // Configure camera before acquiring
     LibCameraConfig lcConfig;
     lcConfig.width = width;
@@ -65,13 +76,13 @@ ExecutionResult LibCamSetupItem::execute(const std::vector<RuntimeValue>& args, 
     lcConfig.pixelFormat = pixelFormat;
     lcConfig.bufferCount = bufferCount;
     lcConfig.streamRole = streamRole;
-    // Set configuration
-    CameraDeviceManager::instance().setLibCameraConfig(sourceId, lcConfig);
+    // Set configuration (uses the bound manager for this source)
+    CameraDeviceManager::forSource(sourceId).setLibCameraConfig(sourceId, lcConfig);
     
     // Proactively prepare (open/configure) the camera without starting it.
     // This allows multiple cameras to negotiate hardware links (like CSIDs)
     // sequentially during the setup phase.
-    CameraDeviceManager::instance().prepareCamera(sourceId, CameraBackend::LIBCAMERA, pixelFormat);
+    CameraDeviceManager::forSource(sourceId).prepareCamera(sourceId, CameraBackend::LIBCAMERA, pixelFormat);
     
     SystemLogger::info("LibCameraItems", "libcam_setup: Configured camera " + sourceId + " with resolution " + 
                  std::to_string(width) + "x" + std::to_string(height));
@@ -120,7 +131,7 @@ ExecutionResult LibCamPropItem::execute(const std::vector<RuntimeValue>& args, E
     
     std::cout << "[DEBUG] libcam_prop: Setting " << controlName << " to " << value << " on camera " << sourceId << std::endl;
 
-    if (!CameraDeviceManager::instance().setLibCameraControl(sourceId, controlName, value)) {
+    if (!CameraDeviceManager::forSource(sourceId).setLibCameraControl(sourceId, controlName, value)) {
         std::cout << "[ERROR] libcam_prop: Failed to set control " << controlName << std::endl;
         return ExecutionResult::fail("Failed to set control " + controlName + " on camera " + sourceId + 
                                      " (camera might not be open or control not supported)");
@@ -159,14 +170,14 @@ ExecutionResult LibCamListControlsItem::execute(const std::vector<RuntimeValue>&
         sourceId = "0";
     }
 
-    auto camera = CameraDeviceManager::instance().getLibCamera(sourceId);
+    auto camera = CameraDeviceManager::forSource(sourceId).getLibCamera(sourceId);
     if (!camera) {
         std::cout << "[INFO] Camera " << sourceId << " not open. Attempting to open for control discovery..." << std::endl;
         cv::Mat dummy;
-        if (!CameraDeviceManager::instance().acquireFrame(sourceId, CameraBackend::LIBCAMERA, dummy)) {
+        if (!CameraDeviceManager::forSource(sourceId).acquireFrame(sourceId, CameraBackend::LIBCAMERA, dummy)) {
             return ExecutionResult::fail("libcamera device not found or could not be opened: " + sourceId);
         }
-        camera = CameraDeviceManager::instance().getLibCamera(sourceId);
+        camera = CameraDeviceManager::forSource(sourceId).getLibCamera(sourceId);
     }
 
     if (!camera) {
@@ -230,7 +241,7 @@ LibCamListItem::LibCamListItem() {
 }
 
 ExecutionResult LibCamListItem::execute(const std::vector<RuntimeValue>&, ExecutionContext& ctx) {
-    auto* manager = CameraDeviceManager::instance().getLibCameraManager();
+    auto* manager = CameraDeviceManager::instance().getLibCameraManager(); // libcam_list uses default manager for enumeration
     if (!manager) {
         return ExecutionResult::fail("Failed to initialize libcamera manager");
     }
@@ -279,7 +290,7 @@ ExecutionResult LibCamGetBayerItem::execute(const std::vector<RuntimeValue>& arg
         sourceId = args[0].asString();
     }
     
-    std::string pattern = CameraDeviceManager::instance().getBayerPattern(sourceId);
+    std::string pattern = CameraDeviceManager::forSource(sourceId).getBayerPattern(sourceId);
     return ExecutionResult::ok(pattern);
 }
 
@@ -307,7 +318,7 @@ ExecutionResult LibCamListFormatsItem::execute(const std::vector<RuntimeValue>& 
         sourceId = args[0].asString();
     }
     
-    CameraDeviceManager::instance().listLibCameraFormats(sourceId);
+    CameraDeviceManager::forSource(sourceId).listLibCameraFormats(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
 
@@ -335,7 +346,7 @@ ExecutionResult LibCamDebugConfigItem::execute(const std::vector<RuntimeValue>& 
         sourceId = args[0].asString();
     }
     
-    CameraDeviceManager::instance().debugLibCameraConfig(sourceId);
+    CameraDeviceManager::forSource(sourceId).debugLibCameraConfig(sourceId);
     return ExecutionResult::ok(ctx.currentMat);
 }
 

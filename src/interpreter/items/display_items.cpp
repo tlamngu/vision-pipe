@@ -45,7 +45,7 @@ NamedWindowItem::NamedWindowItem() {
     _category = "display";
     _params = {
         ParamDef::required("name", BaseType::STRING, "Window name"),
-        ParamDef::optional("flags", BaseType::STRING, "Flags: normal, autosize, fullscreen, freeratio, keepratio", "autosize")
+        ParamDef::optional("flags", BaseType::STRING, "Flags: normal, autosize, fullscreen, freeratio, keepratio, gui_expanded", "autosize")
     };
     _example = "named_window(\"Output\", \"normal\")";
     _returnType = "mat";
@@ -61,7 +61,7 @@ ExecutionResult NamedWindowItem::execute(const std::vector<RuntimeValue>& args, 
     else if (flags == "fullscreen") windowFlags = cv::WINDOW_FULLSCREEN;
     else if (flags == "freeratio") windowFlags = cv::WINDOW_FREERATIO;
     else if (flags == "keepratio") windowFlags = cv::WINDOW_KEEPRATIO;
-    
+    else if (flags == "gui_expanded") windowFlags = cv::WINDOW_GUI_EXPANDED;
     cv::namedWindow(name, windowFlags);
     
     return ExecutionResult::ok(ctx.currentMat);
@@ -202,6 +202,8 @@ ImShowItem::ImShowItem() {
 
 ExecutionResult ImShowItem::execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) {
     std::string name = args.size() > 0 ? args[0].asString() : "Output";
+
+    
     cv::imshow(name, ctx.currentMat);
     return ExecutionResult::ok(ctx.currentMat);
 }
@@ -610,9 +612,11 @@ ExecutionResult FPSItem::execute(const std::vector<RuntimeValue>& args, Executio
     int x = args.size() > 1 ? static_cast<int>(args[1].asNumber()) : 10;
     int y = args.size() > 2 ? static_cast<int>(args[2].asNumber()) : 30;
     
-    static int64 prevTick = 0;
-    static double fps = 0;
-    
+    // thread_local: each pipeline thread (cap_l, cap_r, main, …) keeps its own
+    // independent counter so FPS readings don't cross-contaminate between threads.
+    thread_local int64  prevTick = 0;
+    thread_local double fps      = 0;
+
     int64 currentTick = cv::getTickCount();
     if (prevTick > 0) {
         double elapsed = (currentTick - prevTick) / cv::getTickFrequency();

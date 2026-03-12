@@ -44,6 +44,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <atomic>
 
 namespace visionpipe {
 
@@ -227,7 +228,15 @@ public:
     /** Serialize a single param as JSON */
     std::string paramToJson(const std::string& name) const;
 
+    /** Monotonically increasing generation counter — bumped on every set(). */
+    uint64_t gen() const { return _gen.load(std::memory_order_acquire); }
+
+    /** Enable verbose debug output for param system diagnostics. */
+    void setVerbose(bool v) { _verbose = v; }
+    bool isVerbose() const { return _verbose; }
+
 private:
+    bool _verbose = false;
     mutable std::shared_mutex _mutex;
 
     std::unordered_map<std::string, ParamDescriptor> _descriptors; // declared schema
@@ -244,6 +253,8 @@ private:
     mutable std::mutex    _listenerMutex;
 
     void notifyListeners(const ParamChangeEvent& evt);
+
+    std::atomic<uint64_t> _gen{0};  ///< bumped on every set()
 };
 
 } // namespace visionpipe

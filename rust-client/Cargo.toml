@@ -1,0 +1,47 @@
+[package]
+name = "visionpipe-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Native Rust client for VisionPipe — zero-copy frame streaming via iceoryx2"
+license = "Apache-2.0"
+readme = "README.md"
+
+[features]
+default = ["iceoryx2-transport"]
+# Enable the iceoryx2 IPC transport (requires local iceoryx2 installation)
+iceoryx2-transport = ["dep:iceoryx2"]
+# Enable async support via tokio
+async = ["dep:tokio"]
+
+[dependencies]
+# iceoryx2 — zero-copy IPC transport (local source)
+iceoryx2 = { path = "../../utils/iceoryx2/iceoryx2", optional = true }
+
+# JSON parsing for param server responses
+serde_json = "1"
+
+# Error handling
+thiserror = "1"
+
+# POSIX process signals (Linux/macOS)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Async runtime (optional)
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "time", "macros"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[[example]]
+name = "basic_stream"
+path = "examples/basic_stream.rs"
+
+[[example]]
+name = "params_control"
+path = "examples/params_control.rs"
+
+[[example]]
+name = "multi_sink"
+path = "examples/multi_sink.rs"

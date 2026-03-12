@@ -16,6 +16,9 @@ option(VISIONPIPE_BUILD_DOCS "Build VisionPipe documentation" OFF)
 # Feature flags
 option(VISIONPIPE_WITH_FASTCV "Enable FastCV extensions (requires OpenCV with FastCV)" OFF)
 option(VISIONPIPE_WITH_ICEORYX2 "Enable Iceoryx2 IPC for frame publishing" OFF)
+# When ON, replaces the POSIX shm IPC backend (shm_write/shm_read/exec_fork arena)
+# with Iceoryx2 publish/subscribe.  Requires VISIONPIPE_WITH_ICEORYX2=ON.
+option(VISIONPIPE_IPC_USE_ICEORYX2 "Use Iceoryx2 as the default IPC transport for shm_write/shm_read (requires VISIONPIPE_WITH_ICEORYX2)" OFF)
 option(VISIONPIPE_WITH_CUDA "Enable CUDA acceleration" OFF)
 option(VISIONPIPE_WITH_OPENCL "Enable OpenCL acceleration" ON)
 option(VISIONPIPE_WITH_DNN "Enable DeepLearning/DNN features (requires OpenCV DNN module)" ON)
@@ -23,6 +26,13 @@ option(VISIONPIPE_WITH_ONNXRUNTIME "Enable ONNX Runtime backend for DNN (alterna
 option(VISIONPIPE_IP_CAM "Enable HTTP-based IP streaming (MJPEG) for remote frame access" OFF)
 option(LIBCAMERA_BACKEND "Enable native libcamera backend for Linux camera support" OFF)
 option(V4L2_NATIVE_BACKEND "Enable native V4L2 backend (Linux only)" OFF)
+
+# Iceoryx2 path configuration
+set(iceoryx2_PATH "" CACHE PATH "Path to Iceoryx2 installation (e.g. /opt/iceoryx2 or /usr/local). If empty, uses system default search paths.")
+if(iceoryx2_PATH)
+    list(APPEND CMAKE_PREFIX_PATH "${iceoryx2_PATH}")
+    message(STATUS "iceoryx2_PATH set to: ${iceoryx2_PATH}")
+endif()
 
 # Performance options
 option(VISIONPIPE_ENABLE_SIMD "Enable SIMD optimizations" ON)
@@ -88,6 +98,7 @@ find_package(OpenCV COMPONENTS
     stitching
     # xphoto
     video
+    objdetect
 )
 
 if(NOT OpenCV_FOUND)
@@ -166,22 +177,49 @@ endif()
 
 # Iceoryx2 for IPC
 if(VISIONPIPE_WITH_ICEORYX2)
-    # Try to find iceoryx2 using CMake config or pkg-config
-    find_package(iceoryx2 QUIET)
-    if(NOT iceoryx2_FOUND)
+    # Primary: CMake config  (iceoryx2-cxx package  — lib/cmake/iceoryx2-cxx/)
+    find_package(iceoryx2-cxx QUIET)
+    if(NOT iceoryx2-cxx_FOUND)
+        # Fallback: pkg-config  (extends PKG_CONFIG_PATH if iceoryx2_PATH set)
         find_package(PkgConfig QUIET)
         if(PkgConfig_FOUND)
-            pkg_check_modules(ICEORYX2 iceoryx2)
+            if(iceoryx2_PATH)
+                set(ENV{PKG_CONFIG_PATH} "${iceoryx2_PATH}/lib/pkgconfig:${iceoryx2_PATH}/libdata/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+            endif()
+            pkg_check_modules(ICEORYX2_PKG iceoryx2-cxx)
         endif()
     endif()
-    
-    if(iceoryx2_FOUND OR ICEORYX2_FOUND)
+
+    if(iceoryx2-cxx_FOUND OR ICEORYX2_PKG_FOUND)
         add_definitions(-DVISIONPIPE_ICEORYX2_ENABLED)
-        message(STATUS "Iceoryx2 support enabled")
+        if(iceoryx2-cxx_FOUND)
+            message(STATUS "Iceoryx2 support enabled (via CMake config: iceoryx2-cxx)")
+        else()
+            message(STATUS "Iceoryx2 support enabled (via pkg-config)")
+        endif()
+
+        # ── Runtime IPC backend selection ───────────────────────────────────
+        if(VISIONPIPE_IPC_USE_ICEORYX2)
+            add_definitions(-DVISIONPIPE_IPC_USE_ICEORYX2)
+            message(STATUS "Iceoryx2 selected as default IPC transport "
+                           "(shm_write/shm_read → iceoryx2)")
+        endif()
     else()
-        message(WARNING "Iceoryx2 not found, disabling IPC extensions")
+        message(WARNING "Iceoryx2 not found, disabling Iceoryx2 IPC extensions")
+        message(STATUS "  To enable Iceoryx2, specify its path: cmake .. -Diceoryx2_PATH=/path/to/iceoryx2")
         set(VISIONPIPE_WITH_ICEORYX2 OFF)
+        if(VISIONPIPE_IPC_USE_ICEORYX2)
+            message(WARNING "VISIONPIPE_IPC_USE_ICEORYX2 requires Iceoryx2; "
+                            "disabling IPC backend switch")
+            set(VISIONPIPE_IPC_USE_ICEORYX2 OFF)
+        endif()
     endif()
+endif()
+
+# Enforce dependency: IPC backend switch needs the Iceoryx2 library
+if(VISIONPIPE_IPC_USE_ICEORYX2 AND NOT VISIONPIPE_WITH_ICEORYX2)
+    message(FATAL_ERROR
+        "VISIONPIPE_IPC_USE_ICEORYX2=ON requires VISIONPIPE_WITH_ICEORYX2=ON")
 endif()
 
 # CUDA support
@@ -246,6 +284,8 @@ set(VISIONPIPE_CORE_SOURCES
     src/pipeline/pipeline_item.cpp
     src/pipeline/pipeline_threaded_group.cpp
     src/utils/Logger.cpp
+    src/utils/shm_frame_transport.cpp
+    src/utils/shm_zero_copy.cpp
 )
 
 set(VISIONPIPE_INTERPRETER_SOURCES
@@ -286,8 +326,10 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/gpu_debayer_items.cpp
     src/interpreter/items/gpu_transform_items.cpp
     src/interpreter/items/frame_sink_items.cpp
+    src/interpreter/items/discovery_items.cpp
     src/interpreter/items/stabilization_items.cpp
     src/interpreter/items/gpu_stabilization_items.cpp
+    src/interpreter/items/shm_items.cpp
 )
 
 # IP Stream sources (optional feature)
@@ -335,12 +377,16 @@ if(VISIONPIPE_WITH_FASTCV AND FASTCV_INCLUDE_DIR AND FASTCV_LIBRARY)
     message(STATUS "FastCV items registered")
 endif()
 
-# if(VISIONPIPE_WITH_ICEORYX2)
-#     list(APPEND VISIONPIPE_CORE_SOURCES
-#         src/extensions/iceoryx/iceoryx_publisher.cpp
-#         src/extensions/iceoryx/publish_frame_item.cpp
-#     )
-# endif()
+if(VISIONPIPE_WITH_ICEORYX2)
+    list(APPEND VISIONPIPE_CORE_SOURCES
+        src/extensions/iceoryx/iceoryx_publisher.cpp
+        src/extensions/iceoryx/iceoryx_frame_transport.cpp
+    )
+    list(APPEND VISIONPIPE_ITEMS_SOURCES
+        src/extensions/iceoryx/publish_frame_item.cpp
+    )
+    message(STATUS "Iceoryx2 extension sources included")
+endif()
 
 # DeepLearning/DNN sources (optional feature)
 if(VISIONPIPE_WITH_DNN)
@@ -442,11 +488,13 @@ if(VISIONPIPE_WITH_FASTCV)
 endif()
 
 if(VISIONPIPE_WITH_ICEORYX2)
-    if(iceoryx2_FOUND)
-        target_link_libraries(visionpipe_core PRIVATE iceoryx2::iceoryx2)
-    elseif(ICEORYX2_FOUND)
-        target_include_directories(visionpipe_core PRIVATE ${ICEORYX2_INCLUDE_DIRS})
-        target_link_libraries(visionpipe_core PRIVATE ${ICEORYX2_LIBRARIES})
+    # Extension headers are under include/ (already on target via PUBLIC include)
+    if(iceoryx2-cxx_FOUND)
+        # Prefer the static lib to avoid runtime .so dependency on iceoryx2
+        target_link_libraries(visionpipe_core PUBLIC iceoryx2-cxx::static-lib-cxx)
+    elseif(ICEORYX2_PKG_FOUND)
+        target_include_directories(visionpipe_core PUBLIC ${ICEORYX2_PKG_INCLUDE_DIRS})
+        target_link_libraries(visionpipe_core PUBLIC ${ICEORYX2_PKG_LIBRARIES})
     endif()
 endif()
 
@@ -621,6 +669,49 @@ if(VISIONPIPE_BUILD_CLI)
 endif()
 
 # ============================================================================
+# VS Code Extension Generator Tool
+# ============================================================================
+# Reads the live ItemRegistry (all built-in VSP functions with their metadata)
+# and regenerates:
+#   - vscode-vsp/syntaxes/vsp.tmLanguage.json
+#   - vscode-vsp/snippets/vsp.json
+#
+# Usage (after build):
+#   ./gen_vscode_ext --out-dir <repo-root>/vscode-vsp
+#   ./gen_vscode_ext --list        # print all registered function names
+#   ./gen_vscode_ext --dry-run     # preview output sizes without writing
+# ============================================================================
+add_executable(gen_vscode_ext
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cli/gen_vscode_ext.cpp
+)
+target_include_directories(gen_vscode_ext PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(gen_vscode_ext PRIVATE
+    visionpipe_interpreter
+    visionpipe_core
+)
+if(OpenCV_FASTCV_LIB)
+    get_filename_component(_gvse_fcv_dir "${OpenCV_FASTCV_LIB}" DIRECTORY)
+    set_property(TARGET gen_vscode_ext APPEND PROPERTY BUILD_RPATH "${_gvse_fcv_dir}")
+endif()
+
+# Convenience: after a successful build, automatically run the generator to
+# keep the extension files up-to-date.  Can be disabled by setting
+# VISIONPIPE_AUTOGEN_VSCODE_EXT=OFF.
+option(VISIONPIPE_AUTOGEN_VSCODE_EXT "Auto-regenerate vscode-vsp extension after build" ON)
+if(VISIONPIPE_AUTOGEN_VSCODE_EXT)
+    add_custom_command(TARGET gen_vscode_ext POST_BUILD
+        COMMAND gen_vscode_ext
+                --out-dir "${CMAKE_CURRENT_SOURCE_DIR}/vscode-vsp"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Regenerating VS Code extension grammar and snippets..."
+        VERBATIM
+    )
+endif()
+
+# ============================================================================
 # Shared Library Target - libvisionpipe (client library)
 # ============================================================================
 option(VISIONPIPE_WITH_LIBVISIONPIPE "Build libvisionpipe shared library (client SDK)" ON)
@@ -630,6 +721,7 @@ if(VISIONPIPE_WITH_LIBVISIONPIPE)
     set(LIBVISIONPIPE_SOURCES
         src/libvisionpipe/frame_transport.cpp
         src/libvisionpipe/libvisionpipe.cpp
+        src/libvisionpipe/discovery.cpp
     )
 
     add_library(visionpipe_client SHARED ${LIBVISIONPIPE_SOURCES})
@@ -646,14 +738,45 @@ if(VISIONPIPE_WITH_LIBVISIONPIPE)
         target_link_libraries(visionpipe_client PUBLIC rt)
     endif()
     target_compile_definitions(visionpipe_client PRIVATE LIBVISIONPIPE_BUILDING)
+
+    # ── Iceoryx2 transport backend for libvisionpipe ────────────────────────────
+    # When VISIONPIPE_WITH_ICEORYX2=ON (and VISIONPIPE_IPC_USE_ICEORYX2=ON),
+    # libvisionpipe subscribes to frame_sink channels via Iceoryx2 instead of
+    # POSIX shared memory.
+    if(VISIONPIPE_WITH_ICEORYX2)
+        target_sources(visionpipe_client PRIVATE
+            src/extensions/iceoryx/iceoryx_publisher.cpp
+            src/extensions/iceoryx/iceoryx_frame_transport.cpp
+        )
+        if(iceoryx2-cxx_FOUND)
+            target_link_libraries(visionpipe_client PUBLIC iceoryx2-cxx::static-lib-cxx)
+        elseif(ICEORYX2_PKG_FOUND)
+            target_include_directories(visionpipe_client PUBLIC ${ICEORYX2_PKG_INCLUDE_DIRS})
+            target_link_libraries(visionpipe_client PUBLIC ${ICEORYX2_PKG_LIBRARIES})
+        endif()
+        target_compile_definitions(visionpipe_client PRIVATE VISIONPIPE_ICEORYX2_ENABLED)
+        if(VISIONPIPE_IPC_USE_ICEORYX2)
+            target_compile_definitions(visionpipe_client PRIVATE VISIONPIPE_IPC_USE_ICEORYX2)
+            message(STATUS "libvisionpipe: Iceoryx2 subscribe transport ENABLED "
+                           "(VISIONPIPE_IPC_USE_ICEORYX2=ON)")
+        else()
+            message(STATUS "libvisionpipe: Iceoryx2 available but POSIX shm transport active "
+                           "(set VISIONPIPE_IPC_USE_ICEORYX2=ON to switch)")
+        endif()
+    endif()
+
     set_target_properties(visionpipe_client PROPERTIES
         OUTPUT_NAME "visionpipe"
         VERSION ${PROJECT_VERSION}
         SOVERSION 1
     )
 
-    # Also link frame_transport into visionpipe_core so the frame_sink item can use it
-    target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
+    # Also link frame_transport and discovery into visionpipe_core so frame_sink
+    # and discovery_items can use them without linking against visionpipe_client.
+    target_sources(visionpipe_core PRIVATE
+        src/libvisionpipe/frame_transport.cpp
+        src/libvisionpipe/discovery.cpp
+    )
     target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(visionpipe_core PUBLIC rt)
@@ -732,9 +855,14 @@ if(VISIONPIPE_WITH_PYTHON)
         ${OpenCV_INCLUDE_DIRS}
     )
 
-    # Install to Python site-packages
+    # Install C++ extension to Python site-packages
     install(TARGETS pyvisionpipe
         LIBRARY DESTINATION "${Python3_SITEARCH}"
+    )
+
+    # Install the `visionpipe` wrapper package so `import visionpipe` works
+    install(DIRECTORY python/visionpipe
+        DESTINATION "${Python3_SITEARCH}"
     )
 
     message(STATUS "Python bindings (pyvisionpipe): ENABLED")
@@ -788,9 +916,15 @@ message(STATUS "Build type:       ${CMAKE_BUILD_TYPE}")
 message(STATUS "")
 message(STATUS "Features:")
 message(STATUS "  CLI:            ${VISIONPIPE_BUILD_CLI}")
+message(STATUS "  VSCode gen:     ${VISIONPIPE_AUTOGEN_VSCODE_EXT}")
 message(STATUS "  Tests:          ${VISIONPIPE_BUILD_TESTS}")
 message(STATUS "  FastCV:         ${VISIONPIPE_WITH_FASTCV}")
 message(STATUS "  Iceoryx2:       ${VISIONPIPE_WITH_ICEORYX2}")
+if(VISIONPIPE_IPC_USE_ICEORYX2)
+    message(STATUS "  IPC backend:    iceoryx2")
+else()
+    message(STATUS "  IPC backend:    posix-shm (default)")
+endif()
 message(STATUS "  CUDA:           ${VISIONPIPE_WITH_CUDA}")
 message(STATUS "  OpenCL:         ${VISIONPIPE_WITH_OPENCL}")
 message(STATUS "  DeepLearning:   ${VISIONPIPE_WITH_DNN}")

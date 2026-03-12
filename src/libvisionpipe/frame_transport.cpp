@@ -19,6 +19,7 @@
   #include <fcntl.h>
   #include <unistd.h>
   #include <cerrno>
+  #include <csignal>   // kill()
 #endif
 
 namespace visionpipe {
@@ -29,6 +30,12 @@ namespace visionpipe {
 
 std::string buildShmName(const std::string& sessionId, const std::string& sinkName) {
     return std::string(SHM_PREFIX) + sessionId + "_" + sinkName;
+}
+
+std::string buildIox2ChannelName(const std::string& sessionId, const std::string& sinkName) {
+    // Iceoryx2 service names must not begin with '/'; return a plain
+    // "<sessionId>_<sinkName>" key.  The iox2 publisher layer prepends "/vp_".
+    return sessionId + "_" + sinkName;
 }
 
 // Helper: get current process ID portably
@@ -275,13 +282,27 @@ bool FrameShmConsumer::open(const std::string& shmName, int timeoutMs) {
 
     while (true) {
         _fd = shm_open(shmName.c_str(), O_RDONLY, 0);
-        if (_fd >= 0) break;
+        if (_fd >= 0) {
+            // Guard against the race between shm_open(O_CREAT) and ftruncate
+            // in the producer: if the SHM object exists but has not yet been
+            // sized, mmap would succeed but any access beyond offset 0 yields
+            // SIGBUS.  Check the size before mapping and retry if too small.
+            struct stat sb;
+            if (::fstat(_fd, &sb) != 0 ||
+                static_cast<size_t>(sb.st_size) < shmTotalSize()) {
+                ::close(_fd);
+                _fd = -1;
+                // fall through to the timeout/sleep logic below
+            } else {
+                break;  // file is properly sized, proceed to mmap
+            }
+        }
 
         if (timeoutMs == 0 || std::chrono::steady_clock::now() >= deadline) {
-            std::cerr << "[FrameShmConsumer] shm_open failed: " << strerror(errno) << std::endl;
+            std::cerr << "[FrameShmConsumer] shm_open/fstat failed: " << strerror(errno) << std::endl;
             return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     _mapped = mmap(nullptr, shmTotalSize(), PROT_READ, MAP_SHARED, _fd, 0);
@@ -313,6 +334,15 @@ void FrameShmConsumer::close() {
         _fd = -1;
     }
     _shmName.clear();
+}
+
+bool FrameShmConsumer::isProducerAlive() const {
+    if (!_mapped) return false;
+    const auto* hdr = reinterpret_cast<const FrameShmHeader*>(_mapped);
+    pid_t pid = static_cast<pid_t>(hdr->producerPid);
+    if (pid <= 0) return true;           // unknown, assume alive
+    if (::kill(pid, 0) == 0) return true; // process exists
+    return errno != ESRCH;               // EPERM = exists but no permission
 }
 
 #endif // _WIN32

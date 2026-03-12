@@ -55,9 +55,15 @@ static Runtime* g_runtime = nullptr;  // Set before signal registration
 void signalHandler(int signum) {
     (void)signum;
     if (g_paused.load()) {
-        // If paused, force quit
-        std::cout << "\n[VisionPipe] Force quitting..." << std::endl;
-        std::exit(1);
+        // Force-quit: kill the entire foreground process group (parent + all
+        // exec_fork children) before exiting.  This prevents children from
+        // becoming orphans when _exit() bypasses the Interpreter destructor
+        // (which would normally SIGKILL stragglers via shutdownForkChildren).
+        // kill(0, SIGKILL) sends SIGKILL to every process in the process
+        // group of the caller — async-signal-safe per POSIX.
+        ::kill(0, SIGKILL);
+        // Unreachable: SIGKILL was sent to us too.  Fallback just in case.
+        _exit(1);
     }
     g_running.store(false);
     // Tell the runtime/interpreter to stop its loops immediately
@@ -88,6 +94,9 @@ struct CLIOptions {
     bool fpsCounting = false;  // Only count frames when explicitly enabled
     double targetFps = 0;  // 0 = unlimited
     int port = 8080;       // For docs server
+    bool throughputMode = false;            // Debug throughput profiling
+    double throughputIntervalSec = 1.0;    // Print interval for throughput table
+    bool latencyMode = false;              // Latency percentile reporting (p50/p95/p99)
 };
 
 // ============================================================================
@@ -138,6 +147,10 @@ Run Options:
   --no-display             Disable display windows
   --fps <rate>             Target frame rate (0 = unlimited)
   --fps-counting           Enable frame counting (disabled by default for long-running pipelines)
+  --throughput             Enable debug throughput mode (calls/s, avg/min/max ms per pipeline)
+  --throughput-interval N  Refresh interval in seconds (default: 1.0, requires --throughput)
+  --latency                Enable latency percentile mode (p50/p95/p99/max per pipeline,
+                           includes exec_fork child processes via shared-memory arena)
 
 Docs Options:
   --output, -o <dir>       Output directory (default: current)
@@ -264,6 +277,12 @@ CLIOptions parseArgs(int argc, char* argv[]) {
             opts.targetFps = std::stod(argv[++i]);
         } else if (arg == "--fps-counting") {
             opts.fpsCounting = true;
+        } else if (arg == "--throughput") {
+            opts.throughputMode = true;
+        } else if (arg == "--throughput-interval" && i + 1 < argc) {
+            opts.throughputIntervalSec = std::stod(argv[++i]);
+        } else if (arg == "--latency") {
+            opts.latencyMode = true;
         } else if (arg == "--port" && i + 1 < argc) {
             opts.port = std::stoi(argv[++i]);
         } else if (arg[0] != '-' && opts.scriptPath.empty()) {
@@ -333,10 +352,14 @@ int cmdRun(const CLIOptions& opts) {
         config.targetFps = opts.targetFps;
         config.interpreterConfig.fpsCounting = opts.fpsCounting;
         config.interpreterConfig.verbose = opts.verbose;
+        config.interpreterConfig.throughputMode = opts.throughputMode;
+        config.interpreterConfig.throughputPrintIntervalSec = opts.throughputIntervalSec;
+        config.interpreterConfig.latencyMode = opts.latencyMode;
         
         // Create runtime
         Runtime runtime(config);
-        runtime.loadBuiltins();
+        // Note: loadBuiltins() is already called by Runtime constructor
+        // when autoRegisterBuiltins=true (the default).
         
         // Apply initial --param overrides (before run, before declare()
         // fills defaults — ParameterStore::declare only sets if not yet set)
@@ -798,7 +821,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Clean shutdown
-    CameraDeviceManager::instance().releaseAll();
+    CameraDeviceManager::releaseAllManagers();
     
     return result;
 }

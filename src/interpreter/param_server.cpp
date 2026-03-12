@@ -156,6 +156,12 @@ void ParamServer::stop() {
 void ParamServer::pushChangeEvent(const ParamChangeEvent& evt) {
     if (!_running.load()) return;
 
+    // Fast path: skip JSON serialization when no clients are connected
+    {
+        std::lock_guard<std::mutex> lock(_clientsMutex);
+        if (_clients.empty()) return;
+    }
+
     // Build JSON event message
     std::ostringstream ss;
     ss << "{\"event\":\"changed\","

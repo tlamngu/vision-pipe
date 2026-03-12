@@ -85,7 +85,7 @@ struct V4L2AsyncWriter {
                 batch.swap(pending_);
             }
             for (auto& r : batch) {
-                CameraDeviceManager::instance().setV4L2Control(r.source, r.prop, r.value);
+                CameraDeviceManager::forSource(r.source).setV4L2Control(r.source, r.prop, r.value);
             }
         }
     }

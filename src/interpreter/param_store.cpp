@@ -2,6 +2,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <iostream>
 
 namespace visionpipe {
 
@@ -163,6 +164,34 @@ void ParameterStore::declare(const std::string& name, ParamType type,
     // Set default if not yet set
     if (_values.find(name) == _values.end()) {
         _values[name] = defaultValue;
+    } else {
+        // Value already exists (e.g. from --param override set before the
+        // params [] block was parsed).  Coerce it to the declared type so
+        // that e.g. "60" (string from CLI) becomes 60 (int) when the script
+        // declares brightness:int.
+        ParamValue& existing = _values[name];
+        if (existing.type != type) {
+            switch (type) {
+                case ParamType::INT:    existing = ParamValue(existing.asInt());    break;
+                case ParamType::FLOAT:  existing = ParamValue(existing.asFloat());  break;
+                case ParamType::STRING: existing = ParamValue(existing.asString()); break;
+                case ParamType::BOOL:   existing = ParamValue(existing.asBool());   break;
+                default: break;
+            }
+        }
+    }
+
+    // Bump the generation counter so that any interpreter's param cache is
+    // invalidated and reloaded on the next @param access.  Without this,
+    // refreshParamCache() sees gen==0 == _paramCacheGen==0 and skips the
+    // load, leaving the cache empty and every @param returning void.
+    uint64_t newGen = _gen.fetch_add(1, std::memory_order_release) + 1;
+
+    if (_verbose) {
+        std::cerr << "[PARAM DEBUG] declare: name='" << name
+                  << "' type=" << paramTypeToString(type)
+                  << " default=" << defaultValue.toWireString()
+                  << " gen=" << newGen << "\n";
     }
 }
 
@@ -219,6 +248,12 @@ void ParameterStore::set(const std::string& name, ParamValue value) {
         evt.newValue = value;
     }
 
+    uint64_t newGen = _gen.fetch_add(1, std::memory_order_release) + 1;
+    if (_verbose) {
+        std::cerr << "[PARAM DEBUG] set: name='" << evt.name
+                  << "' value=" << evt.newValue.toWireString()
+                  << " gen=" << newGen << "\n";
+    }
     notifyListeners(evt);
 }
 
@@ -269,6 +304,11 @@ void ParameterStore::unsubscribe(uint64_t id) {
 }
 
 void ParameterStore::notifyListeners(const ParamChangeEvent& evt) {
+    // Fast path: skip lock + copy when no listeners are registered
+    {
+        std::lock_guard<std::mutex> lock(_listenerMutex);
+        if (_listeners.empty()) return;
+    }
     std::vector<Listener> snapshot;
     {
         std::lock_guard<std::mutex> lock(_listenerMutex);

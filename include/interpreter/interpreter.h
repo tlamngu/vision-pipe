@@ -15,12 +15,15 @@
 #include <stack>
 #include <queue>
 #include <condition_variable>
+#include <climits>
+#include <sys/types.h>  // pid_t
 
 namespace visionpipe {
 
 // Forward declarations
 class Pipeline;
 class PipelineThreadedGroup;
+struct ShmArena;  // defined in utils/shm_zero_copy.h
 
 /**
  * @brief Interpreter configuration
@@ -33,6 +36,19 @@ struct InterpreterConfig {
     size_t maxRecursionDepth = 100;
     bool enableOptimization = true;
     bool fpsCounting = false;  // Enable frame counting (disabled by default for long-running pipelines)
+
+    // ── Debug throughput mode ────────────────────────────────────────────────
+    // When enabled, every executePipelineDecl() call is timed.  A background
+    // thread prints a summary table at the given interval.
+    bool   throughputMode           = false;
+    double throughputPrintIntervalSec = 1.0;  ///< How often to refresh the console report
+
+    // ── Latency mode ────────────────────────────────────────────────────────
+    // When enabled, tracks per-pipeline latency histograms and prints a
+    // latency percentile table (p50 / p95 / p99 / max) alongside (or instead
+    // of) the throughput table.  Works for both in-process pipelines and
+    // exec_fork child processes (via the shared ShmArena).
+    bool   latencyMode              = false;
 };
 
 /**
@@ -200,7 +216,7 @@ public:
     /**
      * @brief Request stop of the main loop
      */
-    void requestStop() { _stopRequested = true; }
+    void requestStop();
     
     /**
      * @brief Check if there was an error
@@ -232,6 +248,12 @@ private:
     };
     std::queue<ParamHandlerBody>  _pendingParamHandlers;
     std::mutex                    _pendingParamMutex;
+    std::atomic<bool>             _hasPendingParams{false};  ///< dirty-flag to skip mutex when empty
+
+    // Local param value cache — avoids shared_mutex on every @param read
+    uint64_t _paramCacheGen = 0;  ///< last store generation we synced from
+    std::unordered_map<std::string, ParamValue> _paramCache;  ///< snapshot
+    void refreshParamCache();  ///< re-reads store if generation changed
 
     // Registered on_params handlers (paramName -> body)
     struct OnParamsHandler {
@@ -268,10 +290,26 @@ private:
     // the topology stays constant (the common case), workers are initialised
     // once and reused every frame; only their context / local state is reset
     // between iterations.
+    //
+    // Workers run as persistent threads that sleep on a condition variable
+    // between frames, eliminating per-frame thread creation/join overhead.
     // =========================================================================
+    struct MultiWorkerSync {
+        std::mutex               mtx;
+        std::condition_variable  startCv;   ///< main → worker: wake up and run
+        std::condition_variable  doneCv;    ///< worker → main: finished this frame
+        bool                     hasWork{false};
+        bool                     workDone{false};
+        bool                     shutdown{false};
+        std::string              error;
+        std::string              invName;
+        std::vector<RuntimeValue> invArgs;
+    };
     struct MultiWorker {
         std::unique_ptr<Interpreter> interp;
         std::string pipelineName;   // which pipeline this slot runs
+        std::shared_ptr<MultiWorkerSync> sync;
+        std::thread thread;         // persistent worker thread
     };
     std::vector<MultiWorker> _multiWorkers;
     // Sentinel: pipeline names at last init; used to detect topology changes.
@@ -287,6 +325,10 @@ private:
     struct IntervalWorker {
         std::thread workerThread;
         std::atomic<bool> stop{false};
+        // Set to true by the worker thread just before it exits.  The
+        // destructor uses this to implement a timed join (avoids blocking
+        // forever if the pipeline inside the worker is stuck on I/O).
+        std::atomic<bool> done{false};
         std::unique_ptr<Interpreter> interp;  // dedicated child interpreter
     };
     // Key: pipeline name (or first pipeline name for multi)
@@ -294,10 +336,108 @@ private:
     std::mutex _intervalMutex;  // protect _intervalWorkers map
 
     // =========================================================================
+    // exec_nasync persistent worker pool
+    //
+    // Instead of spawning a detached thread + constructing a full Interpreter
+    // on every exec_nasync call, we maintain persistent worker threads that
+    // sleep between frames.  If the worker is still busy from the previous
+    // frame, the new invocation is skipped (preserving fire-and-forget
+    // semantics).
+    // =========================================================================
+    struct NasyncWorkerSync {
+        std::mutex              mtx;
+        std::condition_variable cv;
+        bool                    hasWork{false};
+        bool                    busy{false};
+        bool                    shutdown{false};
+        std::string             pipelineName;
+        std::vector<RuntimeValue> args;
+        cv::Mat                 inputMat;
+    };
+    struct NasyncWorker {
+        std::unique_ptr<Interpreter>    interp;
+        std::shared_ptr<NasyncWorkerSync> sync;
+        std::thread                     thread;
+    };
+    std::unordered_map<std::string, std::shared_ptr<NasyncWorker>> _nasyncWorkers;
+
+    // =========================================================================
+    // exec_fork child process tracking
+    //
+    // Each exec_fork call forks a child process that runs a pipeline in an
+    // infinite loop, communicating via shared memory.  The parent records
+    // the child PID so it can:
+    //   (a) send SIGTERM on shutdown
+    //   (b) waitpid to reap zombies
+    // =========================================================================
+    struct ForkChild {
+        pid_t       pid;
+        std::string pipelineName;
+    };
+    std::vector<ForkChild> _forkChildren;
+    bool _hasForkChildren = false;  ///< Parent: true after any exec_fork call
+    ShmArena* _shmArena = nullptr;  ///< Anonymous mmap arena for fork IPC
+
+    /// Send SIGTERM to all fork children and waitpid.
+    void shutdownForkChildren();
+
+    // =========================================================================
     // Debug dump flag
     // =========================================================================
     bool _debugDump = false;  // set by debug_start, cleared by debug_end
-    
+
+    // =========================================================================
+    // Debug throughput tracking
+    //
+    // All Interpreter instances that share the same root execution (parent +
+    // exec_multi workers + exec_interval children) share a single
+    // ThroughputTable via a std::shared_ptr.  This means per-pipeline stats
+    // aggregate across all threads automatically.
+    //
+    // Hot path (recordThroughput) is lock-free: only atomic fetch_add /
+    // compare_exchange operations.  The mutex inside ThroughputTable is held
+    // only during initial entry insertion (once per pipeline name per run).
+    // =========================================================================
+    struct ThroughputTable {
+        // ── 8-bucket log2 latency histogram ──────────────────────────────
+        // Buckets (pipeline execution time):
+        //   [0] < 1 ms   [1] 1-2 ms   [2] 2-4 ms   [3] 4-8 ms
+        //   [4] 8-16 ms  [5] 16-32 ms [6] 32-64 ms  [7] >= 64 ms
+        static constexpr int kBuckets = 8;
+
+        struct Entry {
+            std::atomic<uint64_t> callCount{0};
+            std::atomic<uint64_t> totalNs{0};
+            std::atomic<uint64_t> minNs{UINT64_MAX};
+            std::atomic<uint64_t> maxNs{0};
+            uint64_t snapCount{0};           // only touched by the printer thread
+            std::atomic<uint32_t> latBuckets[kBuckets];  // histogram
+            Entry() { for (auto& b : latBuckets) b.store(0); }
+        };
+        std::unordered_map<std::string, std::unique_ptr<Entry>> entries;
+        std::mutex mutex;  ///< protects entries (insertions only)
+
+        std::thread            printerThread;
+        std::atomic<bool>      stop{false};
+        std::condition_variable cv;
+        std::mutex             cvMtx;
+
+        // Printer display flags (set before startPrinter())
+        bool latencyMode{false};
+
+        // Fork-child throughput (read from ShmArena by the printer thread).
+        // Atomic so the main thread can set it after fork() without a data
+        // race against the already-running printer thread.
+        std::atomic<ShmArena*> forkArena{nullptr};
+        std::unordered_map<std::string, uint64_t> forkSnapCounts;
+
+        void record(const std::string& name, uint64_t durationNs);
+        void startPrinter(double intervalSec);
+        void stopPrinter();
+        ~ThroughputTable() { stopPrinter(); }
+    };
+    std::shared_ptr<ThroughputTable> _throughputTable;
+
     // =========================================================================
     // Internal execution methods
     // =========================================================================
@@ -317,6 +457,8 @@ private:
     void execExecIntervalMulti(ExecIntervalMultiStmt* stmt);
     void execExecRtSeq(ExecRtSeqStmt* stmt);
     void execExecRtMulti(ExecRtMultiStmt* stmt);
+    void execExecNasync(ExecNasyncStmt* stmt);
+    void execExecFork(ExecForkStmt* stmt);
     void execDebugStart(DebugStartStmt* stmt);
     void execDebugEnd(DebugEndStmt* stmt);
     void execUse(UseStmt* stmt);
@@ -361,6 +503,8 @@ private:
                           std::shared_ptr<GlobalCacheData> sharedGlobal);
     void resetWorkerState(Interpreter& worker, const cv::Mat& inputMat,
                           std::shared_ptr<GlobalCacheData> sharedGlobal);
+    void shutdownMultiWorkers();
+    void shutdownNasyncWorkers();
 };
 
 } // namespace visionpipe

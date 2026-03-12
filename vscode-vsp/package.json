@@ -1,14 +1,18 @@
 {
   "name": "visionpipe-vsp",
   "displayName": "VisionPipe VSP Language",
-  "description": "Syntax highlighting, snippets, and language support for VisionPipe Script (.vsp) files — including runtime params, on_params event handlers, and @param references",
-  "version": "1.1.0",
+  "description": "Syntax highlighting and auto-generated snippets for VisionPipe Script (.vsp) — grammar and snippets are machine-generated from the compiled ItemRegistry via gen_vscode_ext, covering all 487+ built-in functions, exec_* scheduling, debug blocks, runtime params and @param references",
+  "version": "1.3.0",
   "publisher": "visionpipe",
   "engines": {
     "vscode": "^1.75.0"
   },
+  "main": "./extension.js",
   "categories": [
     "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:vsp"
   ],
   "keywords": [
     "visionpipe",

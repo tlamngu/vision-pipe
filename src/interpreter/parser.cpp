@@ -120,6 +120,8 @@ void Parser::synchronize() {
             case TokenType::KW_EXEC_INTERVAL_MULTI:
             case TokenType::KW_EXEC_RT_SEQ:
             case TokenType::KW_EXEC_RT_MULTI:
+            case TokenType::KW_EXEC_NASYNC:
+            case TokenType::KW_EXEC_FORK:
             case TokenType::KW_DEBUG_START:
             case TokenType::KW_DEBUG_END:
             case TokenType::KW_IF:
@@ -186,6 +188,8 @@ std::shared_ptr<Program> Parser::program() {
                        check(TokenType::KW_EXEC_INTERVAL_MULTI) ||
                        check(TokenType::KW_EXEC_RT_SEQ) ||
                        check(TokenType::KW_EXEC_RT_MULTI) ||
+                       check(TokenType::KW_EXEC_NASYNC) ||
+                       check(TokenType::KW_EXEC_FORK) ||
                        check(TokenType::KW_DEBUG_START) ||
                        check(TokenType::KW_DEBUG_END)) {
                 prog->topLevelStatements.push_back(statement());
@@ -384,6 +388,8 @@ std::shared_ptr<Statement> Parser::statement() {
     if (check(TokenType::KW_EXEC_INTERVAL_MULTI)) return execIntervalMultiStatement();
     if (check(TokenType::KW_EXEC_RT_SEQ)) return execRtSeqStatement();
     if (check(TokenType::KW_EXEC_RT_MULTI)) return execRtMultiStatement();
+    if (check(TokenType::KW_EXEC_NASYNC)) return execNasyncStatement();
+    if (check(TokenType::KW_EXEC_FORK)) return execForkStatement();
     if (check(TokenType::KW_DEBUG_START)) return debugStartStatement();
     if (check(TokenType::KW_DEBUG_END))   return debugEndStatement();
     if (check(TokenType::KW_USE)) return useStatement();
@@ -399,15 +405,27 @@ std::shared_ptr<Statement> Parser::statement() {
 }
 
 std::shared_ptr<Statement> Parser::globalPromoteStatement() {
-    // global "cache_id" - promotes local cache to global
     auto stmt = std::make_shared<GlobalStmt>();
     stmt->location = current().location;
-    
+
     consume(TokenType::KW_GLOBAL, "Expected 'global'");
-    
-    Token cacheIdToken = consume(TokenType::STRING_LITERAL, "Expected cache id string");
-    stmt->cacheId = cacheIdToken.asString();
-    
+
+    if (check(TokenType::IDENTIFIER)) {
+        // global varname [= expr]  — assigns to the interpreter global variable scope.
+        // This is the pipeline-statement form of the top-level 'global name = expr'
+        // declaration and lets pipelines write values back to shared global variables.
+        Token nameToken = advance();
+        stmt->cacheId = nameToken.asString();
+        if (match(TokenType::OP_ASSIGN)) {
+            stmt->initialValue = expression();
+        }
+    } else {
+        // global "cache_id"  — promotes a local cache entry to the global cache store.
+        Token cacheIdToken = consume(TokenType::STRING_LITERAL,
+                                     "Expected cache id string or variable name after 'global'");
+        stmt->cacheId = cacheIdToken.asString();
+    }
+
     return stmt;
 }
 
@@ -524,6 +542,44 @@ std::shared_ptr<Statement> Parser::execRtMultiStatement() {
     return stmt;
 }
 
+std::shared_ptr<Statement> Parser::execNasyncStatement() {
+    auto stmt = std::make_shared<ExecNasyncStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_NASYNC, "Expected 'exec_nasync'");
+
+    // Detect inline-block form: exec_nasync start ... end
+    // 'start' is not a reserved keyword so we check the raw identifier text.
+    if (check(TokenType::IDENTIFIER) && current().raw == "start") {
+        advance();  // consume 'start'
+        while (!check(TokenType::KW_END) && !isAtEnd()) {
+            try {
+                stmt->body.push_back(statement());
+            } catch (const ParseError& e) {
+                _errors.push_back(e);
+                synchronize();
+                if (check(TokenType::KW_END)) break;
+            }
+        }
+        consume(TokenType::KW_END, "Expected 'end' after exec_nasync block");
+    } else {
+        // Named pipeline form: exec_nasync <pipeline_ref>
+        stmt->pipelineRef = expression();
+    }
+
+    return stmt;
+}
+
+std::shared_ptr<Statement> Parser::execForkStatement() {
+    auto stmt = std::make_shared<ExecForkStmt>();
+    stmt->location = current().location;
+
+    consume(TokenType::KW_EXEC_FORK, "Expected 'exec_fork'");
+    stmt->pipelineRef = expression();
+
+    return stmt;
+}
+
 std::shared_ptr<Statement> Parser::debugStartStatement() {
     auto stmt = std::make_shared<DebugStartStmt>();
     stmt->location = current().location;
@@ -619,8 +675,12 @@ std::shared_ptr<Statement> Parser::ifStatement() {
         stmt->thenBranch.push_back(statement());
     }
     
-    // Optional else branch
+    // Optional else / else-if branch
     if (match(TokenType::KW_ELSE)) {
+        if (check(TokenType::KW_IF)) {
+            stmt->elseBranch.push_back(ifStatement());
+            return stmt;
+        }
         while (!check(TokenType::KW_END) && !isAtEnd()) {
             stmt->elseBranch.push_back(statement());
         }
@@ -1039,6 +1099,8 @@ bool Parser::isStatementStart() const {
         TokenType::KW_EXEC_SEQ,
         TokenType::KW_EXEC_MULTI,
         TokenType::KW_EXEC_LOOP,
+        TokenType::KW_EXEC_NASYNC,
+        TokenType::KW_EXEC_FORK,
         TokenType::KW_USE,
         TokenType::KW_CACHE,
         TokenType::KW_IF,

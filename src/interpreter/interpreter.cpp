@@ -3,13 +3,25 @@
 #include "interpreter/param_store.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_threaded_group.h"
+#include "utils/shm_zero_copy.h"
 #include <iostream>
 #include <fstream>
 #include <thread>
 #include <chrono>
 #include <future>
+#include <iomanip>
+#include <algorithm>
+#include <sstream>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace visionpipe {
+
+// File-static flag for fork-child signal handling.  POSIX signal handlers
+// cannot capture member variables, so we use a static atomic that the child
+// process resets/checks in its tight loop.
+static std::atomic<bool> s_forkChildStopped{false};
 
 // ============================================================================
 // Constructor / Destructor
@@ -27,7 +39,65 @@ Interpreter::Interpreter(InterpreterConfig config)
     _context.verbose = _config.verbose;
 }
 
-Interpreter::~Interpreter() = default;
+Interpreter::~Interpreter() {
+    // Stop interval worker threads first (they may reference pipelines/registry).
+    // Also signal each worker's child interpreter to stop so that any pipeline
+    // currently running inside the interval thread exits at the next check point
+    // rather than completing its full iteration.
+    {
+        std::lock_guard<std::mutex> lk(_intervalMutex);
+        for (auto& [name, worker] : _intervalWorkers) {
+            worker->stop.store(true, std::memory_order_release);
+            if (worker->interp) worker->interp->requestStop();
+        }
+    }
+    // Join interval workers.  Because we called interp->requestStop() above,
+    // the interval's inner pipeline exits at the next _stopRequested check —
+    // so the thread should finish within one pipeline-item granularity.
+    // We use a 200 ms safety timeout per worker then detach.  The lambda
+    // captures a shared_ptr<IntervalWorker> so detaching is safe: the
+    // IntervalWorker (and its child Interpreter) stays alive until the thread
+    // exits naturally, even if we've cleared _intervalWorkers here.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        std::lock_guard<std::mutex> lk(_intervalMutex);
+        for (auto& [name, worker] : _intervalWorkers) {
+            if (!worker->workerThread.joinable()) continue;
+            while (!worker->done.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (worker->done.load(std::memory_order_acquire)) {
+                worker->workerThread.join();
+            } else {
+                // Timed out — detach.  The thread holds its own shared_ptr
+                // reference to the IntervalWorker so it is safe to clear the
+                // map: the underlying objects are not freed until the thread
+                // exits and releases its shared_ptr.
+                worker->workerThread.detach();
+            }
+        }
+        _intervalWorkers.clear();
+    }
+
+    // Stop persistent exec_multi worker threads.
+    shutdownMultiWorkers();
+
+    // Stop persistent exec_nasync worker threads.
+    shutdownNasyncWorkers();
+
+    // Stop fork children (sends SIGTERM, waits, cleans up arena).
+    shutdownForkChildren();
+
+    // Destroy the shared-memory arena (munmap).
+    if (_shmArena) {
+        shmArenaDestroy(_shmArena);
+        _shmArena = nullptr;
+    }
+
+    // Stop the throughput printer if this interpreter owns the last reference.
+    _throughputTable.reset();
+}
 
 void Interpreter::setConfig(const InterpreterConfig& config) {
     _config = config;
@@ -62,6 +132,13 @@ void Interpreter::execute(std::shared_ptr<Program> program) {
         throw std::runtime_error("Cannot execute null program");
     }
     
+    // Create and start the throughput table for the root execution.
+    if ((_config.throughputMode || _config.latencyMode) && !_throughputTable) {
+        _throughputTable = std::make_shared<ThroughputTable>();
+        _throughputTable->latencyMode = _config.latencyMode;
+        _throughputTable->startPrinter(_config.throughputPrintIntervalSec);
+    }
+
     _loadedPrograms.push_back(program);
     executeProgram(program);
 }
@@ -103,6 +180,12 @@ void Interpreter::executeStatement(std::shared_ptr<Statement> stmt) {
             break;
         case ASTNodeType::EXEC_RT_MULTI_STMT:
             execExecRtMulti(static_cast<ExecRtMultiStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_NASYNC_STMT:
+            execExecNasync(static_cast<ExecNasyncStmt*>(stmt.get()));
+            break;
+        case ASTNodeType::EXEC_FORK_STMT:
+            execExecFork(static_cast<ExecForkStmt*>(stmt.get()));
             break;
         case ASTNodeType::DEBUG_START_STMT:
             execDebugStart(static_cast<DebugStartStmt*>(stmt.get()));
@@ -230,11 +313,23 @@ void Interpreter::reset() {
     {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            worker->stop.store(true);
+            worker->stop.store(true, std::memory_order_release);
+            if (worker->interp) worker->interp->requestStop();
         }
+    }
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        std::lock_guard<std::mutex> lk(_intervalMutex);
         for (auto& [name, worker] : _intervalWorkers) {
-            if (worker->workerThread.joinable()) {
+            if (!worker->workerThread.joinable()) continue;
+            while (!worker->done.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (worker->done.load(std::memory_order_acquire)) {
                 worker->workerThread.join();
+            } else {
+                worker->workerThread.detach();
             }
         }
         _intervalWorkers.clear();
@@ -249,7 +344,10 @@ void Interpreter::reset() {
     {
         std::lock_guard<std::mutex> lk(_pendingParamMutex);
         while (!_pendingParamHandlers.empty()) _pendingParamHandlers.pop();
+        _hasPendingParams.store(false, std::memory_order_release);
     }
+    _paramCache.clear();
+    _paramCacheGen = 0;
     _debugDump = false;
 }
 
@@ -259,6 +357,32 @@ void Interpreter::reset() {
 
 void Interpreter::setParamStore(std::shared_ptr<ParameterStore> store) {
     _paramStore = std::move(store);
+    if (_paramStore) _paramStore->setVerbose(_config.verbose);
+    _paramCacheGen = 0;
+    _paramCache.clear();
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] setParamStore: store attached, cache cleared\n";
+    }
+}
+
+void Interpreter::refreshParamCache() {
+    if (!_paramStore) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] refreshParamCache: no param store attached\n";
+        }
+        return;
+    }
+    uint64_t currentGen = _paramStore->gen();
+    if (currentGen == _paramCacheGen) return;  // no changes since last snapshot
+    _paramCache = _paramStore->list();         // one lock, full snapshot
+    _paramCacheGen = currentGen;
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] refreshParamCache: gen=" << currentGen
+                  << " entries=" << _paramCache.size() << "\n";
+        for (const auto& [k, v] : _paramCache) {
+            std::cerr << "  @" << k << " = " << v.toWireString() << "\n";
+        }
+    }
 }
 
 // ============================================================================
@@ -348,10 +472,12 @@ void Interpreter::registerPipelines(std::shared_ptr<Program> program) {
                 ? _paramStore->subscribeAll([self, body](const ParamChangeEvent&) {
                       std::lock_guard<std::mutex> lk(self->_pendingParamMutex);
                       self->_pendingParamHandlers.push({body});
+                      self->_hasPendingParams.store(true, std::memory_order_release);
                   })
                 : _paramStore->subscribe(pname, [self, body](const ParamChangeEvent&) {
                       std::lock_guard<std::mutex> lk(self->_pendingParamMutex);
                       self->_pendingParamHandlers.push({body});
+                      self->_hasPendingParams.store(true, std::memory_order_release);
                   });
 
             _onParamsHandlers.push_back(std::move(h));
@@ -397,15 +523,48 @@ void Interpreter::execExecSeq(ExecSeqStmt* stmt) {
     }
 }
 
+void Interpreter::shutdownMultiWorkers() {
+    for (auto& w : _multiWorkers) {
+        if (w.sync) {
+            {
+                std::lock_guard<std::mutex> lk(w.sync->mtx);
+                w.sync->shutdown = true;
+            }
+            w.sync->startCv.notify_one();
+        }
+        if (w.thread.joinable()) w.thread.join();
+    }
+    _multiWorkers.clear();
+    _multiWorkerTopology.clear();
+}
+
+void Interpreter::shutdownNasyncWorkers() {
+    for (auto& [name, nw] : _nasyncWorkers) {
+        if (nw && nw->sync) {
+            {
+                std::lock_guard<std::mutex> lk(nw->sync->mtx);
+                nw->sync->shutdown = true;
+            }
+            nw->sync->cv.notify_one();
+        }
+        if (nw && nw->thread.joinable()) nw->thread.join();
+    }
+    _nasyncWorkers.clear();
+}
+
 void Interpreter::initMultiWorkers(const std::vector<std::string>& names,
                                     std::shared_ptr<GlobalCacheData> sharedGlobal) {
-    _multiWorkers.clear();
+    // Shut down any existing persistent worker threads.
+    shutdownMultiWorkers();
+
     _multiWorkers.reserve(names.size());
     _multiWorkerTopology = names;
 
+    // Phase 1: Create worker interpreters.
     for (const auto& name : names) {
         MultiWorker w;
         w.pipelineName = name;
+        w.sync = std::make_shared<MultiWorkerSync>();
         w.interp = std::make_unique<Interpreter>(_config);
 
         // Share read-only AST nodes and item instances with the parent.
@@ -415,6 +574,7 @@ void Interpreter::initMultiWorkers(const std::vector<std::string>& names,
         // parsed, so no locking is required.
         w.interp->_pipelines = _pipelines;
         w.interp->_registry  = _registry;
+        if (_throughputTable) w.interp->_throughputTable = _throughputTable;
 
         // Share param store so workers can read @param references.
         if (_paramStore) {
@@ -425,7 +585,56 @@ void Interpreter::initMultiWorkers(const std::vector<std::string>& names,
         w.interp->_cacheManager.replaceGlobalData(sharedGlobal);
         w.interp->_context.cacheManager = &w.interp->_cacheManager;
 
+        // Propagate fork-child awareness so arena reads work in workers.
+        w.interp->_hasForkChildren = _hasForkChildren;
+        w.interp->_cacheManager.setHasForkChildren(_hasForkChildren);
+        w.interp->_cacheManager.setShmArena(_shmArena);
+
+        // Seed the worker's global scope from the parent so that top-level
+        // 'global' variable declarations (e.g. movement_matrix) and their
+        // current values are visible inside worker pipelines.
+        w.interp->_scopes.clear();
+        w.interp->_scopes.push_back(_scopes.empty() ? Scope{} : _scopes.front());
+
         _multiWorkers.push_back(std::move(w));
+    }
+
+    // Phase 2: Launch persistent threads.  Vector is fully populated so
+    // element addresses are stable and we capture the shared_ptr<sync> +
+    // raw Interpreter* which remain valid for the worker's lifetime.
+    for (size_t i = 0; i < _multiWorkers.size(); ++i) {
+        auto  syncPtr  = _multiWorkers[i].sync;
+        auto* interpRaw = _multiWorkers[i].interp.get();
+
+        _multiWorkers[i].thread = std::thread([syncPtr, interpRaw]() {
+            while (true) {
+                // Wait for work or shutdown signal.
+                std::unique_lock<std::mutex> lk(syncPtr->mtx);
+                syncPtr->startCv.wait(lk, [&] { return syncPtr->hasWork || syncPtr->shutdown; });
+                if (syncPtr->shutdown) break;
+                syncPtr->hasWork = false;
+                // Snapshot invocation data under lock.
+                std::string name  = syncPtr->invName;
+                std::vector<RuntimeValue> args = syncPtr->invArgs;
+                lk.unlock();
+
+                // Execute the pipeline.
+                try {
+                    interpRaw->executePipeline(name, args,
+                                               interpRaw->_context.currentMat);
+                } catch (const std::exception& e) {
+                    std::lock_guard<std::mutex> errLk(syncPtr->mtx);
+                    syncPtr->error = e.what();
+                }
+
+                // Signal completion.
+                {
+                    std::lock_guard<std::mutex> doneLk(syncPtr->mtx);
+                    syncPtr->workDone = true;
+                }
+                syncPtr->doneCv.notify_one();
+            }
+        });
     }
 }
 
@@ -436,9 +645,13 @@ void Interpreter::resetWorkerState(Interpreter& worker, const cv::Mat& inputMat,
     worker._cacheManager.replaceGlobalData(sharedGlobal);
     worker._context.cacheManager = &worker._cacheManager;
 
-    // Keep variable scopes but clear any local state from the previous frame.
+    // Seed the worker's global scope from the parent interpreter so that
+    // top-level 'global' declarations and their latest values (e.g. the
+    // movement_matrix written by calculate_stabilization on the previous
+    // frame) are visible inside worker pipelines on each new frame.
+    // Local (non-global) variables are NOT inherited — only _scopes.front().
     worker._scopes.clear();
-    worker._scopes.emplace_back();      // fresh global scope
+    worker._scopes.push_back(_scopes.empty() ? Scope{} : _scopes.front());
 
     // Reset local cache scope stack.
     worker._cacheManager.resetLocalScopes();
@@ -461,7 +674,7 @@ void Interpreter::resetWorkerState(Interpreter& worker, const cv::Mat& inputMat,
 void Interpreter::execExecMulti(ExecMultiStmt* stmt) {
     // -------------------------------------------------------------------------
     // Step 1: Resolve pipeline names and evaluate all arguments on the MAIN
-    //         thread, before spawning any worker threads.
+    //         thread, before signaling any worker threads.
     // -------------------------------------------------------------------------
     struct Invocation {
         std::string name;
@@ -501,7 +714,7 @@ void Interpreter::execExecMulti(ExecMultiStmt* stmt) {
     for (const auto& inv : invocations) names.push_back(inv.name);
 
     if (_multiWorkerTopology != names) {
-        // First call or topology change — allocate fresh workers.
+        // First call or topology change — allocate fresh workers + threads.
         initMultiWorkers(names, sharedGlobal);
     } else {
         // Likely same global store, but replaceGlobalData is cheap.
@@ -512,58 +725,108 @@ void Interpreter::execExecMulti(ExecMultiStmt* stmt) {
     }
 
     // -------------------------------------------------------------------------
-    // Step 3: Prepare per-worker input mats and launch threads.
+    // Step 3: Prepare per-worker input mats and signal persistent threads.
     //
-    // Each worker gets its own clone of currentMat so threads never share a
-    // buffer.  The global-cache store is the only truly shared resource and is
-    // protected by shared_mutex internally.
+    // Each worker gets its own copy of currentMat so threads never share a
+    // buffer.  For pipelines that start with video_cap (which replaces
+    // currentMat entirely), an empty Mat is sufficient.  The global-cache
+    // store is the only truly shared resource and is protected by
+    // shared_mutex internally.
     // -------------------------------------------------------------------------
-    cv::Mat inputMat = _context.currentMat.empty()
-                       ? cv::Mat()
-                       : _context.currentMat.clone();
-
-    std::vector<std::thread> threads;
-    threads.reserve(invocations.size());
-    std::vector<std::string> errors(invocations.size());
+    cv::Mat inputMat = _context.currentMat;  // shallow copy — workers that need isolation clone themselves
 
     for (size_t i = 0; i < invocations.size(); ++i) {
-        // Each thread gets its own clone so no two threads share a buffer.
-        cv::Mat workerInput = (i == 0) ? inputMat : inputMat.clone();
+        // Give each worker its own shallow copy of the current Mat.
+        // Workers that replace it (video_cap) never touch the old buffer.
+        cv::Mat workerInput = inputMat;
 
         resetWorkerState(*_multiWorkers[i].interp, workerInput, sharedGlobal);
 
-        threads.emplace_back([this, &invocations, &errors, i]() {
-            try {
-                Interpreter& child = *_multiWorkers[i].interp;
-                child.executePipeline(invocations[i].name, invocations[i].args,
-                                      child._context.currentMat);
-            } catch (const std::exception& e) {
-                errors[i] = e.what();
+        auto& sync = *_multiWorkers[i].sync;
+        {
+            std::lock_guard<std::mutex> lk(sync.mtx);
+            sync.invName  = invocations[i].name;
+            sync.invArgs  = invocations[i].args;
+            sync.workDone = false;
+            sync.error.clear();
+            sync.hasWork  = true;
+        }
+        sync.startCv.notify_one();
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 4: Wait for all workers to finish.
+    // -------------------------------------------------------------------------
+    for (size_t i = 0; i < invocations.size(); ++i) {
+        auto& sync = *_multiWorkers[i].sync;
+        std::unique_lock<std::mutex> lk(sync.mtx);
+        sync.doneCv.wait(lk, [&sync] { return sync.workDone; });
+    }
+
+    // Merge each worker's global scope back into the parent so that global
+    // variable assignments written inside pipelines (e.g.
+    //   global movement_matrix = matrix_avg(...)  )
+    // are visible in subsequent statements and in the next exec_multi frame.
+    // Only non-void values are merged; void means "unchanged / not written".
+    if (!_scopes.empty()) {
+        for (auto& w : _multiWorkers) {
+            if (!w.interp->_scopes.empty()) {
+                for (auto& [name, val] : w.interp->_scopes.front().variables) {
+                    if (!val.isVoid()) {
+                        _scopes.front().variables[name] = val;
+                    }
+                }
             }
-        });
+        }
     }
 
-    for (auto& t : threads) {
-        if (t.joinable()) t.join();
-    }
-
-    for (size_t i = 0; i < errors.size(); ++i) {
-        if (!errors[i].empty()) {
+    for (size_t i = 0; i < invocations.size(); ++i) {
+        auto& sync = *_multiWorkers[i].sync;
+        std::lock_guard<std::mutex> lk(sync.mtx);
+        if (!sync.error.empty()) {
             std::cerr << "[exec_multi] Error in pipeline '"
-                      << invocations[i].name << "': " << errors[i] << "\n";
+                      << invocations[i].name << "': " << sync.error << "\n";
         }
     }
 }
 
 void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
     _loopRunning = true;
-    
-    while (!_stopRequested) {
+
+    // Lambda so the stop condition is evaluated in one place and can be
+    // extended without touching every loop exit point below.
+    // Checks (in priority order):
+    //   1. _stopRequested   — set by requestStop() / break key / runtime stop
+    //   2. s_forkChildStopped — set by SIGTERM/SIGINT handler inside a
+    //      fork() child.  The outer exec_fork wrapper checks this flag
+    //      between executePipeline() calls, but pipelines that contain an
+    //      inner exec_loop (e.g. chessboard_loop → exec_loop charuco_det)
+    //      would never return from executePipeline() unless the inner loop
+    //      also checks this flag.
+    //   3. shmArenaIsShutdown — arena shutdown flag written by the parent
+    //      when it calls shutdownForkChildren().  Same reasoning as (2).
+    auto shouldStop = [this]() -> bool {
+        if (_stopRequested.load(std::memory_order_relaxed)) return true;
+        if (s_forkChildStopped.load(std::memory_order_relaxed)) {
+            // Propagate to _stopRequested so all other exit-condition checks
+            // in this function (shouldBreak handlers, etc.) also see it.
+            _stopRequested.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        if (_shmArena && shmArenaIsShutdown(_shmArena)) {
+            _stopRequested.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
+
+    while (!shouldStop()) {
         // Reset verbose/debug flags at each frame boundary so debug_start in a
         // previous iteration does not bleed through to the next frame.
         _context.verbose   = _config.verbose;
         _context.debugDump = false;
         _debugDump         = false;
+        _context.frameNotReady = false;
 
         // Check condition if present
         if (stmt->condition.has_value()) {
@@ -583,6 +846,15 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
         } else if (auto* ident = dynamic_cast<IdentifierExpr*>(stmt->pipelineRef.get())) {
             executePipeline(ident->name, {}, _context.currentMat);
         }
+
+        // When a fork-child frame wasn't ready, yield briefly instead of
+        // tight-spinning.  This avoids burning CPU on fruitless retries
+        // and reduces thermal throttling on ARM SoCs.
+        if (_context.frameNotReady) {
+            _context.frameNotReady = false;
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            continue;  // skip frame counter increment — no real work done
+        }
         
         // Increment frame counter after each loop iteration (only if enabled)
         if (_config.fpsCounting) {
@@ -590,11 +862,13 @@ void Interpreter::execExecLoop(ExecLoopStmt* stmt) {
         }
         
         // Drain pending on_params handlers (run on runtime loop thread)
-        {
+        // Fast path: skip mutex entirely when nothing was queued
+        if (_hasPendingParams.load(std::memory_order_acquire)) {
             std::queue<ParamHandlerBody> pending;
             {
                 std::lock_guard<std::mutex> lk(_pendingParamMutex);
                 std::swap(pending, _pendingParamHandlers);
+                _hasPendingParams.store(false, std::memory_order_release);
             }
             while (!pending.empty()) {
                 auto& handler = pending.front();
@@ -658,7 +932,8 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         auto it = _intervalWorkers.find(workerKey);
         if (it != _intervalWorkers.end()) {
-            it->second->stop.store(true);
+            it->second->stop.store(true, std::memory_order_release);
+            if (it->second->interp) it->second->interp->requestStop();
             if (it->second->workerThread.joinable()) it->second->workerThread.join();
             _intervalWorkers.erase(it);
         }
@@ -669,18 +944,28 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
     worker->interp = std::make_unique<Interpreter>(_config);
     worker->interp->_pipelines = _pipelines;
     worker->interp->_registry  = _registry;
+    if (_throughputTable) worker->interp->_throughputTable = _throughputTable;
     if (_paramStore) worker->interp->_paramStore = _paramStore;
     auto sharedGlobal = _cacheManager.getGlobalData();
     worker->interp->_cacheManager.replaceGlobalData(sharedGlobal);
     worker->interp->_context.cacheManager = &worker->interp->_cacheManager;
 
-    auto* workerPtr   = worker.get();
+    // Propagate fork-child awareness so arena reads work in interval threads.
+    worker->interp->_hasForkChildren = _hasForkChildren;
+    worker->interp->_cacheManager.setHasForkChildren(_hasForkChildren);
+    worker->interp->_cacheManager.setShmArena(_shmArena);
+
     auto* interpPtr   = worker->interp.get();
     std::string pname = name;
 
-    worker->workerThread = std::thread([workerPtr, interpPtr, pname, args, intervalMs]() {
+    // Capture the shared_ptr by value so the IntervalWorker (and its child
+    // Interpreter) is kept alive for the lifetime of the thread.  This makes
+    // it safe to detach the thread in the destructor: clearing _intervalWorkers
+    // drops the map's reference but the thread still holds its own reference.
+    worker->workerThread = std::thread([workerShared = worker, interpPtr, pname, args, intervalMs]() {
+        auto* workerPtr = workerShared.get();
         using namespace std::chrono;
-        while (!workerPtr->stop.load()) {
+        while (!workerPtr->stop.load(std::memory_order_acquire)) {
             auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
 
             try {
@@ -694,10 +979,12 @@ void Interpreter::execExecInterval(ExecIntervalStmt* stmt) {
             }
 
             // Sleep until the next tick, but check stop frequently.
-            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+            while (!workerPtr->stop.load(std::memory_order_acquire) && steady_clock::now() < next) {
                 std::this_thread::sleep_for(milliseconds(1));
             }
         }
+        // Signal the destructor that this thread has finished its loop.
+        workerPtr->done.store(true, std::memory_order_release);
     });
 
     std::lock_guard<std::mutex> lk(_intervalMutex);
@@ -714,7 +1001,8 @@ void Interpreter::execNoInterval(NoIntervalStmt* stmt) {
     std::lock_guard<std::mutex> lk(_intervalMutex);
     auto it = _intervalWorkers.find(name);
     if (it != _intervalWorkers.end()) {
-        it->second->stop.store(true);
+        it->second->stop.store(true, std::memory_order_release);
+        if (it->second->interp) it->second->interp->requestStop();
         if (it->second->workerThread.joinable()) it->second->workerThread.join();
         _intervalWorkers.erase(it);
     } else {
@@ -740,7 +1028,8 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
         std::lock_guard<std::mutex> lk(_intervalMutex);
         auto it = _intervalWorkers.find(workerKey);
         if (it != _intervalWorkers.end()) {
-            it->second->stop.store(true);
+            it->second->stop.store(true, std::memory_order_release);
+            if (it->second->interp) it->second->interp->requestStop();
             if (it->second->workerThread.joinable()) it->second->workerThread.join();
             _intervalWorkers.erase(it);
         }
@@ -754,13 +1043,15 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
     // Snapshot pipelines / registry for child workers.
     auto pipelinesCopy = _pipelines;
     auto registryCopy  = _registry;
+    auto thrTblCopy    = _throughputTable;
 
-    auto* workerPtr = worker.get();
-
-    worker->workerThread = std::thread([workerPtr, names, pipelinesCopy, registryCopy,
-                                  sharedGlobal, intervalMs, cfg = _config]() mutable {
+    // Capture the shared_ptr so the IntervalWorker outlives the thread
+    // even if the map is cleared (safe detach — see execExecInterval).
+    worker->workerThread = std::thread([workerShared = worker, names, pipelinesCopy, registryCopy,
+                                  sharedGlobal, intervalMs, thrTblCopy, cfg = _config]() mutable {
+        auto* workerPtr = workerShared.get();
         using namespace std::chrono;
-        while (!workerPtr->stop.load()) {
+        while (!workerPtr->stop.load(std::memory_order_acquire)) {
             auto next = steady_clock::now() + duration<double, std::milli>(intervalMs);
 
             // Launch one child interpreter per pipeline in parallel.
@@ -768,10 +1059,11 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
             threads.reserve(names.size());
             for (const auto& pname : names) {
                 threads.emplace_back([&pname, &pipelinesCopy, &registryCopy,
-                                      &sharedGlobal, &cfg]() {
+                                      &sharedGlobal, &thrTblCopy, &cfg]() {
                     Interpreter child(cfg);
                     child._pipelines = pipelinesCopy;
                     child._registry  = registryCopy;
+                    if (thrTblCopy) child._throughputTable = thrTblCopy;
                     child._cacheManager.replaceGlobalData(sharedGlobal);
                     child._context.cacheManager = &child._cacheManager;
                     try {
@@ -784,10 +1076,12 @@ void Interpreter::execExecIntervalMulti(ExecIntervalMultiStmt* stmt) {
             }
             for (auto& t : threads) if (t.joinable()) t.join();
 
-            while (!workerPtr->stop.load() && steady_clock::now() < next) {
+            while (!workerPtr->stop.load(std::memory_order_acquire) && steady_clock::now() < next) {
                 std::this_thread::sleep_for(milliseconds(1));
             }
         }
+        // Signal the destructor that this thread has finished its loop.
+        workerPtr->done.store(true, std::memory_order_release);
     });
 
     std::lock_guard<std::mutex> lk(_intervalMutex);
@@ -823,13 +1117,15 @@ void Interpreter::execExecRtSeq(ExecRtSeqStmt* stmt) {
     auto pipelines   = _pipelines;
     auto registry    = _registry;
     auto cfg         = _config;
+    auto thrTbl      = _throughputTable;
 
     // Run in async; wait up to timeoutMs.
     auto fut = std::async(std::launch::async,
-        [pname, args, inputMat, pipelines, registry, sharedGlobal, cfg]() mutable {
+        [pname, args, inputMat, pipelines, registry, sharedGlobal, cfg, thrTbl]() mutable {
             Interpreter child(cfg);
             child._pipelines = std::move(pipelines);
             child._registry  = std::move(registry);
+            if (thrTbl) child._throughputTable = thrTbl;
             child._cacheManager.replaceGlobalData(sharedGlobal);
             child._context.cacheManager = &child._cacheManager;
             child.executePipeline(pname, args, inputMat);
@@ -867,18 +1163,20 @@ void Interpreter::execExecRtMulti(ExecRtMultiStmt* stmt) {
     auto pipelines    = _pipelines;
     auto registry     = _registry;
     auto cfg          = _config;
+    auto thrTbl       = _throughputTable;
 
     auto fut = std::async(std::launch::async,
-        [invocations, inputMat, pipelines, registry, sharedGlobal, cfg]() mutable {
+        [invocations, inputMat, pipelines, registry, sharedGlobal, cfg, thrTbl]() mutable {
             std::vector<std::thread> threads;
             threads.reserve(invocations.size());
             for (size_t i = 0; i < invocations.size(); ++i) {
                 cv::Mat workerMat = (i == 0) ? inputMat : inputMat.clone();
                 threads.emplace_back([&inv = invocations[i], workerMat, &pipelines,
-                                      &registry, &sharedGlobal, &cfg]() {
+                                      &registry, &sharedGlobal, &cfg, &thrTbl]() {
                     Interpreter child(cfg);
                     child._pipelines = pipelines;
                     child._registry  = registry;
+                    if (thrTbl) child._throughputTable = thrTbl;
                     child._cacheManager.replaceGlobalData(sharedGlobal);
                     child._context.cacheManager = &child._cacheManager;
                     try {
@@ -898,6 +1196,476 @@ void Interpreter::execExecRtMulti(ExecRtMultiStmt* stmt) {
                   << " ms) for " << invocations.size() << " pipelines\n";
         fut.wait();
     }
+}
+
+// ============================================================================
+// exec_nasync  (fire-and-forget with persistent worker threads)
+//
+// Semantics:
+//   • The current Mat is shared (shallow copy) for the async thread.  Pipeline
+//     items produce new buffers so the parent's Mat is unaffected.
+//   • For named pipelines, a persistent worker thread is reused across frames.
+//     If the worker is still busy from the previous frame, the new invocation
+//     is silently skipped (preserving fire-and-forget semantics).
+//   • For inline blocks, the original detached-thread behaviour is preserved
+//     because inline blocks have no stable name to key the worker on.
+//   • The calling thread's Mat is left unchanged (bypass behaviour).
+//
+// Forms:
+//   exec_nasync pipeline_name        – run named pipeline (persistent worker)
+//   exec_nasync start ... end        – run inline anonymous block (detached)
+// ============================================================================
+
+void Interpreter::execExecNasync(ExecNasyncStmt* stmt) {
+
+    if (!stmt->isInlineBlock()) {
+        // ── Named pipeline form ── persistent worker thread ──────────────────
+        std::string pname;
+        std::vector<RuntimeValue> args;
+
+        if (auto* call = dynamic_cast<FunctionCallExpr*>(stmt->pipelineRef.get())) {
+            pname = call->functionName;
+            for (const auto& arg : call->arguments)
+                args.push_back(evalExpression(arg.get()));
+        } else if (auto* ident = dynamic_cast<IdentifierExpr*>(stmt->pipelineRef.get())) {
+            pname = ident->name;
+        }
+
+        if (pname.empty()) {
+            reportError("exec_nasync: could not resolve pipeline name", stmt->location);
+            return;
+        }
+
+        // Shallow copy of the Mat — the async thread must not mutate it.
+        cv::Mat asyncMat = _context.currentMat;
+
+        // Find or create persistent worker for this pipeline name.
+        auto it = _nasyncWorkers.find(pname);
+        if (it == _nasyncWorkers.end()) {
+            // First invocation: create the worker.
+            auto nw   = std::make_shared<NasyncWorker>();
+            nw->sync  = std::make_shared<NasyncWorkerSync>();
+            nw->interp = std::make_unique<Interpreter>(_config);
+            nw->interp->_pipelines = _pipelines;
+            nw->interp->_registry  = _registry;
+            if (_throughputTable) nw->interp->_throughputTable = _throughputTable;
+            auto sharedGlobal = _cacheManager.getGlobalData();
+            nw->interp->_cacheManager.replaceGlobalData(sharedGlobal);
+            nw->interp->_context.cacheManager = &nw->interp->_cacheManager;
+            if (_paramStore) nw->interp->_paramStore = _paramStore;
+
+            // Propagate fork-child awareness so arena reads work.
+            nw->interp->_hasForkChildren = _hasForkChildren;
+            nw->interp->_cacheManager.setHasForkChildren(_hasForkChildren);
+            nw->interp->_cacheManager.setShmArena(_shmArena);
+
+            auto  syncPtr  = nw->sync;
+            auto* interpRaw = nw->interp.get();
+
+            nw->thread = std::thread([syncPtr, interpRaw]() {
+                while (true) {
+                    std::unique_lock<std::mutex> lk(syncPtr->mtx);
+                    syncPtr->cv.wait(lk, [&] { return syncPtr->hasWork || syncPtr->shutdown; });
+                    if (syncPtr->shutdown) break;
+                    syncPtr->hasWork = false;
+                    syncPtr->busy    = true;
+                    std::string name    = syncPtr->pipelineName;
+                    std::vector<RuntimeValue> a = syncPtr->args;
+                    cv::Mat mat         = syncPtr->inputMat;
+                    lk.unlock();
+
+                    // Reset per-frame state.
+                    interpRaw->_context.reset();
+                    interpRaw->_context.currentMat     = mat;
+                    interpRaw->_context.cacheManager   = &interpRaw->_cacheManager;
+                    interpRaw->_context.verbose         = interpRaw->_config.verbose;
+                    interpRaw->_context.debugDump       = false;
+                    interpRaw->_cacheManager.resetLocalScopes();
+                    interpRaw->_scopes.clear();
+                    interpRaw->_scopes.emplace_back();
+                    interpRaw->_recursionDepth = 0;
+
+                    try {
+                        interpRaw->executePipeline(name, a, mat);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[exec_nasync] Error in pipeline '"
+                                  << name << "': " << e.what() << "\n";
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lk2(syncPtr->mtx);
+                        syncPtr->busy = false;
+                    }
+                }
+            });
+
+            it = _nasyncWorkers.emplace(pname, std::move(nw)).first;
+        }
+
+        // Signal the persistent worker if it is idle.
+        auto& sync = *it->second->sync;
+        {
+            std::lock_guard<std::mutex> lk(sync.mtx);
+            if (sync.busy) {
+                // Worker is still processing previous frame — skip.
+                return;
+            }
+            // Refresh the shared global cache pointer (cheap swap).
+            it->second->interp->_cacheManager.replaceGlobalData(
+                _cacheManager.getGlobalData());
+            if (_paramStore)
+                it->second->interp->_paramStore = _paramStore;
+
+            sync.pipelineName = pname;
+            sync.args         = std::move(args);
+            sync.inputMat     = asyncMat;
+            sync.hasWork      = true;
+        }
+        sync.cv.notify_one();
+
+    } else {
+        // ── Inline block form ── detached thread (unchanged) ─────────────────
+        // AST statement nodes are immutable shared_ptrs – safe to share across
+        // threads without any locking.
+        auto body = stmt->body;
+
+        auto pipelines    = _pipelines;
+        auto registry     = _registry;
+        auto cfg          = _config;
+        auto thrTbl       = _throughputTable;
+        auto sharedGlobal = _cacheManager.getGlobalData();
+        auto paramStore   = _paramStore;
+        cv::Mat asyncMat  = _context.currentMat.empty()
+                            ? cv::Mat()
+                            : _context.currentMat.clone();
+
+        std::thread([body = std::move(body), asyncMat,
+                     pipelines = std::move(pipelines),
+                     registry  = std::move(registry),
+                     sharedGlobal, paramStore, cfg, thrTbl]() mutable {
+            Interpreter child(cfg);
+            child._pipelines = std::move(pipelines);
+            child._registry  = std::move(registry);
+            if (thrTbl) child._throughputTable = thrTbl;
+            child._cacheManager.replaceGlobalData(sharedGlobal);
+            child._context.cacheManager = &child._cacheManager;
+            child._context.currentMat   = asyncMat;
+            if (paramStore) child._paramStore = paramStore;
+            child._scopes.emplace_back();  // global scope for the block
+            try {
+                for (const auto& s : body) {
+                    child.executeStatement(s);
+                    if (child._context.shouldBreak ||
+                        child._context.shouldReturn ||
+                        child._stopRequested.load(std::memory_order_relaxed)) break;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "[exec_nasync] Error in inline block: " << e.what() << "\n";
+            }
+        }).detach();
+    }
+
+    // Main thread continues immediately with the original (unchanged) Mat.
+}
+
+// ============================================================================
+// exec_fork  (child process via fork())
+//
+// Semantics:
+//   • Forks a child process that runs the named pipeline in an infinite loop.
+//   • The parent records the child PID and continues immediately.
+//   • Communication between parent and child is via POSIX shared memory
+//     (shm_write / shm_read items in the .vsp script).
+//   • On SIGTERM (or shmFrameIsShutdown), the child exits its loop.
+//   • The parent sends SIGTERM to all fork children on shutdown.
+//
+// IMPORTANT: exec_fork should be called BEFORE exec_loop to avoid fork()
+//            in a multithreaded context.
+// ============================================================================
+
+void Interpreter::execExecFork(ExecForkStmt* stmt) {
+    std::string pname;
+    std::vector<RuntimeValue> args;
+
+    if (auto* call = dynamic_cast<FunctionCallExpr*>(stmt->pipelineRef.get())) {
+        pname = call->functionName;
+        for (const auto& arg : call->arguments)
+            args.push_back(evalExpression(arg.get()));
+    } else if (auto* ident = dynamic_cast<IdentifierExpr*>(stmt->pipelineRef.get())) {
+        pname = ident->name;
+    }
+
+    if (pname.empty()) {
+        reportError("exec_fork: could not resolve pipeline name", stmt->location);
+        return;
+    }
+
+    // Verify the pipeline exists before forking.
+    if (!hasPipeline(pname)) {
+        reportError("exec_fork: pipeline '" + pname + "' not found", stmt->location);
+        return;
+    }
+
+    // On the very first exec_fork, create an anonymous mmap arena.
+    // This must happen BEFORE fork() so children inherit the mapping.
+    if (!_shmArena) {
+        // Use values configured by set_shm_size() if available, else defaults.
+        size_t frameBytes = _cacheManager.pendingShmMaxFrameBytes();
+        int    slots      = _cacheManager.pendingShmMaxSlots();
+        if (frameBytes == 0) frameBytes = 32UL * 1024 * 1024;  // 32 MB
+        if (slots      == 0) slots      = 8;
+        std::cout << "[exec_fork] Shared-memory arena: "
+                  << slots << " slots x "
+                  << (frameBytes / (1024 * 1024)) << " MB"
+                     " (override with set_shm_size() in pipeline setup)\n";
+        _shmArena = shmArenaCreate(slots, frameBytes);
+        if (!_shmArena) {
+            reportError("exec_fork: shmArenaCreate() failed", stmt->location);
+            return;
+        }
+        _cacheManager.setShmArena(_shmArena);
+    }
+
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        reportError("exec_fork: fork() failed: " + std::string(strerror(errno)),
+                     stmt->location);
+        return;
+    }
+
+    if (pid == 0) {
+        // ── CHILD PROCESS ──────────────────────────────────────────────────
+        // We are now in a forked child.  The only thread that exists is the
+        // calling thread (POSIX guarantee).  Mutexes from threads that no
+        // longer exist may be in an inconsistent state, so we avoid touching
+        // them and reinitialise what we need.
+
+        // Abandon the parent's ThroughputTable WITHOUT destroying it.
+        // ~ThroughputTable() would try to join() the parent's printer thread,
+        // which doesn't exist in the child (only the calling thread survives
+        // fork).  join() on a dead pthread → ESRCH → exception from noexcept
+        // destructor → std::terminate().  We intentionally leak the old table;
+        // the OS reclaims all memory on _exit().
+        if (_throughputTable) {
+            new auto(std::move(_throughputTable));  // leak into heap
+            // _throughputTable is now nullptr
+        }
+        // Don't create a child ThroughputTable — throughput is recorded
+        // directly into the ShmArena (read by the parent's printer).
+
+        // POSIX after fork(): only the calling thread survives.  Any
+        // std::thread object that is still joinable() will call
+        // std::terminate() in its destructor — so detach them all first.
+        for (auto& w : _multiWorkers) {
+            if (w.thread.joinable()) w.thread.detach();
+        }
+        for (auto& [name, nw] : _nasyncWorkers) {
+            if (nw && nw->thread.joinable()) nw->thread.detach();
+        }
+        // Do NOT lock _intervalMutex here — the thread that held it in
+        // the parent no longer exists in the child, so the mutex may be
+        // in a permanently locked state.  Access the map directly.
+        for (auto& [name, w] : _intervalWorkers) {
+            if (w && w->workerThread.joinable()) w->workerThread.detach();
+        }
+
+        // Clear parent's thread-based workers (they don't exist in the child).
+        _multiWorkers.clear();
+        _multiWorkerTopology.clear();
+        _nasyncWorkers.clear();
+        _intervalWorkers.clear();  // interval threads don't exist in child
+        _forkChildren.clear();  // child doesn't own parent's children
+
+        // Mark this interpreter as running inside a fork child so that
+        // setGlobal() automatically writes to the shared-memory arena.
+        _cacheManager.setForkChild(true);
+
+        // Fork children do NOT have fork children of their own.
+        // Inheriting _hasForkChildren=true from the parent would cause:
+        //   1. getGlobal() to go through the (slower) arena read-back path
+        //      even though the child is the writer – in-process cache is
+        //      cheaper and correct.
+        //   2. execUse() to trigger frameNotReady when use(global) returns
+        //      an empty mat inside the child's own exec_loop, which breaks
+        //      the inner exec_loop and prevents frame_sink from publishing.
+        _hasForkChildren = false;
+        _cacheManager.setHasForkChildren(false);
+
+        // Install a signal handler that sets the static stop flag.
+        s_forkChildStopped.store(false);
+        struct sigaction sa;
+        sa.sa_handler = [](int) {
+            s_forkChildStopped.store(true, std::memory_order_relaxed);
+        };
+        sa.sa_flags   = 0;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTERM, &sa, nullptr);
+        sigaction(SIGINT,  &sa, nullptr);
+
+        // Run the pipeline in a loop until signalled.
+        _stopRequested.store(false);
+        _loopRunning = true;
+        bool firstIteration = true;
+        using clock = std::chrono::steady_clock;
+
+        while (!_stopRequested.load(std::memory_order_relaxed) &&
+               !s_forkChildStopped.load(std::memory_order_relaxed)) {
+
+            // Check the arena shutdown flag (set by parent).
+            if (_shmArena && shmArenaIsShutdown(_shmArena)) {
+                _stopRequested.store(true);
+                break;
+            }
+
+            try {
+                _context.reset();
+                _cacheManager.resetLocalScopes();
+                _scopes.clear();
+                _scopes.emplace_back();
+
+                auto t0 = clock::now();
+                executePipeline(pname, args, cv::Mat());
+                // Per-pipeline timing is now handled inside executePipelineDecl
+                // for fork children (via the _shmArena path). No redundant
+                // recording needed here.
+            } catch (const std::exception& e) {
+                std::cerr << "[exec_fork:" << pname << "] Error: " << e.what() << "\n";
+                // On first iteration failure, exit (likely config error).
+                if (firstIteration) break;
+            }
+            firstIteration = false;
+        }
+
+        _loopRunning = false;
+        _shmArena = nullptr;  // don't destroy — parent owns it
+        _exit(0);  // _exit to avoid running parent's atexit handlers
+    }
+
+    // ── PARENT PROCESS ─────────────────────────────────────────────────────
+    _hasForkChildren = true;
+    _cacheManager.setHasForkChildren(true);
+
+    // Let the throughput printer read fork-child stats from the arena.
+    if (_throughputTable && _shmArena) {
+        _throughputTable->forkArena.store(_shmArena, std::memory_order_release);
+    }
+
+    ForkChild child;
+    child.pid          = pid;
+    child.pipelineName = pname;
+    _forkChildren.push_back(std::move(child));
+
+    std::cerr << "[exec_fork] Forked child PID " << pid
+              << " for pipeline '" << pname << "'\n";
+}
+
+void Interpreter::requestStop() {
+    _stopRequested = true;
+
+    // Stop interval workers (they run in background threads).
+    //
+    // IMPORTANT: do NOT lock _intervalMutex here.  requestStop() may be
+    // called from a POSIX signal handler (via g_runtime->stop()), which
+    // suspends the main thread mid-execution.  If the main thread held
+    // _intervalMutex at signal delivery (e.g. inside execExecInterval's
+    // lock_guard), acquiring it again in the handler would deadlock.
+    //
+    // Safety: _intervalWorkers is only modified by the main thread (the same
+    // thread the signal suspends).  Reading and writing the workers' atomic
+    // stop flags without the mutex is therefore safe here.
+    for (auto& [name, worker] : _intervalWorkers) {
+        if (!worker) continue;
+        worker->stop.store(true, std::memory_order_release);
+        // Also stop the child interpreter so any in-progress pipeline call
+        // exits at the next _stopRequested check rather than finishing its
+        // full iteration (which could involve blocking I/O).
+        if (worker->interp) worker->interp->requestStop();
+    }
+
+    // Signal fork children to exit using only async-signal-safe operations
+    // (atomic store + kill(2)).  Full cleanup — waitpid, arena destruction —
+    // is deferred to shutdownForkChildren() in the destructor, which runs on
+    // the normal thread after all pipeline loops have exited.
+    //
+    // Calling the full shutdownForkChildren() here would be unsafe when
+    // requestStop() is invoked from a signal handler (via g_runtime->stop())
+    // because shutdownForkChildren() uses std::this_thread::sleep_for() —
+    // not async-signal-safe — and may deadlock on mutexes held at signal time.
+    if (_shmArena) {
+        shmArenaSetShutdown(_shmArena);  // single atomic store — signal-safe
+    }
+    for (auto& c : _forkChildren) {
+        if (c.pid > 0) ::kill(c.pid, SIGTERM);
+    }
+}
+
+void Interpreter::shutdownForkChildren() {
+    if (_forkChildren.empty()) return;
+
+    // Signal the arena shutdown flag — children poll this in their loop.
+    if (_shmArena) {
+        shmArenaSetShutdown(_shmArena);
+    }
+
+    // Send SIGTERM to all children (may already have been sent by requestStop(),
+    // but idempotent for processes that are still alive or already a zombie).
+    for (auto& c : _forkChildren) {
+        if (c.pid > 0) kill(c.pid, SIGTERM);
+    }
+
+    // Phase 1: give children up to 100 ms to exit cleanly after SIGTERM.
+    // requestStop() already sent SIGTERM and set the arena shutdown flag at
+    // signal-handler time, so children have had this signal for the entire
+    // duration of the parent's pipeline teardown.  100 ms is generous.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        for (auto& c : _forkChildren) {
+            if (c.pid <= 0) continue;
+            while (std::chrono::steady_clock::now() < deadline) {
+                int status;
+                if (waitpid(c.pid, &status, WNOHANG) == c.pid) { c.pid = -1; break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
+
+    // Phase 2: SIGKILL any stragglers, then poll briefly and abandon.
+    //
+    // CRITICAL: do NOT use blocking waitpid() after SIGKILL.
+    //
+    // A fork child blocked in a kernel driver (e.g. a V4L2 camera read in
+    // uninterruptible sleep / D state) does not die from SIGKILL — the
+    // kernel delivers SIGKILL only after the driver's wait returns.  A
+    // blocking waitpid() would therefore hang the parent indefinitely.
+    //
+    // We poll for up to 200 ms with WNOHANG.  If the child is still alive
+    // after that (stuck in a kernel D-state wait), we abandon it: the child
+    // will be adopted by init and reaped when the driver eventually unblocks.
+    // The parent process exits cleanly without a second Ctrl+C.
+    for (auto& c : _forkChildren) {
+        if (c.pid <= 0) continue;
+        std::cerr << "[exec_fork] Force-killing child PID " << c.pid << "\n";
+        kill(c.pid, SIGKILL);
+    }
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        for (auto& c : _forkChildren) {
+            if (c.pid <= 0) continue;
+            while (std::chrono::steady_clock::now() < deadline) {
+                int status;
+                if (waitpid(c.pid, &status, WNOHANG) == c.pid) { c.pid = -1; break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            if (c.pid > 0) {
+                // D-state or very slow to die — abandon.  init will reap it.
+                std::cerr << "[exec_fork] Abandoning child PID " << c.pid
+                          << " (still alive after SIGKILL, likely in kernel D-state)\n";
+                c.pid = -1;
+            }
+        }
+    }
+    _forkChildren.clear();
 }
 
 // ============================================================================
@@ -925,6 +1693,17 @@ void Interpreter::execUse(UseStmt* stmt) {
         mat = _cacheManager.getGlobal(stmt->cacheId);
     } else {
         mat = _cacheManager.get(stmt->cacheId);
+    }
+
+    // When fork children are active and the frame hasn't arrived yet,
+    // skip this pipeline iteration gracefully instead of passing an empty
+    // mat to downstream items (resize, debayer, etc.) that would crash.
+    // Set frameNotReady so the exec_loop can yield instead of tight-spinning.
+    if (mat.empty() && _hasForkChildren && stmt->isGlobal) {
+        _context.currentMat = mat;
+        _context.shouldReturn = true;
+        _context.frameNotReady = true;
+        return;
     }
     
     if (mat.empty() && _config.strictMode) {
@@ -962,7 +1741,17 @@ void Interpreter::execCache(CacheStmt* stmt) {
 }
 
 void Interpreter::execGlobalPromote(GlobalStmt* stmt) {
-    // Promote a local cache entry to global
+    if (stmt->initialValue.has_value()) {
+        // global varname = expr  — evaluate and write to the interpreter's
+        // global (front) scope so the value is visible across all subsequent
+        // pipeline calls on this interpreter, and is picked up by the parent
+        // interpreter's scope-merge after exec_multi completes.
+        RuntimeValue value = evalExpression(stmt->initialValue->get());
+        setVariable(stmt->cacheId, value);
+        return;
+    }
+
+    // global "cache_id"  — promote a local cache entry to the global cache store.
     cv::Mat mat = _cacheManager.get(stmt->cacheId);
     if (!mat.empty()) {
         _cacheManager.set(stmt->cacheId, mat.clone(), true);  // true = global
@@ -1442,6 +2231,13 @@ RuntimeValue Interpreter::evalArray(ArrayExpr* expr) {
 }
 
 RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                  << " paramStore=" << (_paramStore ? "yes" : "NO")
+                  << " cacheSize=" << _paramCache.size()
+                  << " cacheGen=" << _paramCacheGen
+                  << " storeGen=" << (_paramStore ? _paramStore->gen() : 0) << "\n";
+    }
     if (!_paramStore) {
         // No store attached – warn and return empty value
         reportError("@" + expr->paramName
@@ -1450,11 +2246,36 @@ RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
         return RuntimeValue();
     }
 
-    ParamValue pv = _paramStore->get(expr->paramName);
-    if (pv.isNull()) {
-        // Not set yet – could be optional, return empty
+    // Use local cache to avoid shared_mutex on every read
+    refreshParamCache();
+    auto it = _paramCache.find(expr->paramName);
+    if (it == _paramCache.end()) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                      << " NOT FOUND in cache (" << _paramCache.size() << " entries)\n";
+            for (const auto& [k, v] : _paramCache) {
+                std::cerr << "  cache key: '" << k << "'\n";
+            }
+        }
+        reportError("@" + expr->paramName
+                    + " is not declared in params [] block",
+                    expr->location);
         return RuntimeValue();
     }
+    if (it->second.isNull()) {
+        if (_config.verbose) {
+            std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName << " is NULL (no default)\n";
+        }
+        reportError("@" + expr->paramName
+                    + " has no value and no default was declared",
+                    expr->location);
+        return RuntimeValue();
+    }
+    if (_config.verbose) {
+        std::cerr << "[PARAM DEBUG] evalParamRef: @" << expr->paramName
+                  << " = " << it->second.toWireString() << "\n";
+    }
+    const ParamValue& pv = it->second;
     switch (pv.type) {
         case ParamType::INT:    return RuntimeValue(static_cast<double>(pv.asInt()));
         case ParamType::FLOAT:  return RuntimeValue(pv.asFloat());
@@ -1471,8 +2292,25 @@ RuntimeValue Interpreter::evalParamRef(ParamRefExpr* expr) {
 cv::Mat Interpreter::executePipelineDecl(PipelineDecl* pipeline, 
                                           const std::vector<RuntimeValue>& args,
                                           const cv::Mat& input) {
+    // ── Optional throughput timing ────────────────────────────────────────────
+    using clock = std::chrono::steady_clock;
+    clock::time_point t0;
+    const bool isTopLevel = (_recursionDepth == 0);
+    // Time execution when the in-process table is active OR we are a fork
+    // child writing directly into the shared arena.
+    if (_throughputTable || _shmArena) {
+        t0 = clock::now();
+    }
     checkRecursionLimit();
     ++_recursionDepth;
+    // RAII guard: always decrement even if an exception flies out of the body.
+    // Without this, a throwing pipeline would leave _recursionDepth stuck > 0
+    // so subsequent calls on the same interpreter (exec_interval reuse) would
+    // never satisfy the _recursionDepth == 0 recording gate.
+    struct DepthGuard {
+        size_t& depth;
+        ~DepthGuard() { --depth; }
+    } depthGuard{_recursionDepth};
     
     // Create new scope for pipeline execution
     pushScope();
@@ -1524,7 +2362,25 @@ cv::Mat Interpreter::executePipelineDecl(PipelineDecl* pipeline,
     // Clean up scope
     _cacheManager.popScope();
     popScope();
-    --_recursionDepth;
+    // _recursionDepth is decremented by DepthGuard RAII above.
+
+    // Record throughput for the outermost call on this interpreter instance.
+    // isTopLevel captures depth==0 BEFORE increment, so it is true only for
+    // the first (non-nested) executePipelineDecl call on this interpreter.
+    if (_throughputTable && isTopLevel) {
+        uint64_t durationNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - t0).count());
+        _throughputTable->record(pipeline->name, durationNs);
+    } else if (_shmArena) {
+        // Fork-child path: _throughputTable is null; record ALL pipeline depths
+        // into the shared arena so the printer can show per-iteration stats for
+        // inner pipelines like "capture_left" inside exec_loop inside cap_l_loop.
+        uint64_t durationNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - t0).count());
+        shmArenaRecordThroughput(_shmArena, pipeline->name, durationNs);
+    }
     
     return result;
 }
@@ -1588,6 +2444,247 @@ void Interpreter::checkRecursionLimit() {
     if (_recursionDepth >= _config.maxRecursionDepth) {
         throw std::runtime_error("Maximum recursion depth exceeded");
     }
+}
+
+// ============================================================================
+// Debug throughput helpers  (ThroughputTable methods)
+// ============================================================================
+
+/// Map a duration in nanoseconds to a latency histogram bucket:
+///   [0]<1ms  [1]1-2ms  [2]2-4ms  [3]4-8ms
+///   [4]8-16ms  [5]16-32ms  [6]32-64ms  [7]>=64ms
+static int latencyBucket(uint64_t ns) {
+    if (ns <  1'000'000ULL) return 0;
+    if (ns <  2'000'000ULL) return 1;
+    if (ns <  4'000'000ULL) return 2;
+    if (ns <  8'000'000ULL) return 3;
+    if (ns < 16'000'000ULL) return 4;
+    if (ns < 32'000'000ULL) return 5;
+    if (ns < 64'000'000ULL) return 6;
+    return 7;
+}
+
+/// Estimate the p-th percentile (0-100) from the 8-bucket histogram.
+/// Returns a midpoint approximation of the containing bucket in milliseconds.
+static double percentileMs(const uint64_t buckets[8], uint64_t total, double p) {
+    if (total == 0) return 0.0;
+    static const double bounds[9] = {0.0, 1.0, 2.0, 4.0, 8.0,
+                                     16.0, 32.0, 64.0, 128.0};
+    uint64_t target = static_cast<uint64_t>(p / 100.0 * static_cast<double>(total));
+    if (target == 0) target = 1;
+    uint64_t acc = 0;
+    for (int i = 0; i < 8; i++) {
+        acc += buckets[i];
+        if (acc >= target)
+            return (bounds[i] + bounds[i + 1]) / 2.0;
+    }
+    return bounds[8];
+}
+
+void Interpreter::ThroughputTable::record(const std::string& name, uint64_t durationNs) {
+    Entry* entry = nullptr;
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = entries.find(name);
+        if (it == entries.end()) {
+            entries[name] = std::make_unique<Entry>();
+            it = entries.find(name);
+        }
+        entry = it->second.get();
+    }  // lock released – Entry pointer is stable (unique_ptr value, never moved)
+
+    entry->callCount.fetch_add(1, std::memory_order_relaxed);
+    entry->totalNs.fetch_add(durationNs, std::memory_order_relaxed);
+
+    // Lock-free min update
+    uint64_t curMin = entry->minNs.load(std::memory_order_relaxed);
+    while (durationNs < curMin &&
+           !entry->minNs.compare_exchange_weak(curMin, durationNs,
+                                               std::memory_order_relaxed))
+    { /* retry */ }
+
+    // Lock-free max update
+    uint64_t curMax = entry->maxNs.load(std::memory_order_relaxed);
+    while (durationNs > curMax &&
+           !entry->maxNs.compare_exchange_weak(curMax, durationNs,
+                                               std::memory_order_relaxed))
+    { /* retry */ }
+
+    // Latency histogram (lock-free bucket increment)
+    entry->latBuckets[latencyBucket(durationNs)]
+        .fetch_add(1, std::memory_order_relaxed);
+}
+
+void Interpreter::ThroughputTable::stopPrinter() {
+    if (!printerThread.joinable()) return;
+    stop.store(true);
+    cv.notify_all();
+    printerThread.join();
+}
+
+void Interpreter::ThroughputTable::startPrinter(double intervalSec) {
+    stop.store(false);
+    printerThread = std::thread([this, intervalSec]() {
+        using namespace std::chrono;
+        using clock = steady_clock;
+
+        if (latencyMode) {
+            std::cout << "\n[Latency] Latency measurement mode active"
+                      << " (print interval: " << intervalSec << " s)\n"
+                      << std::flush;
+        } else {
+            std::cout << "\n[Throughput] Debug throughput mode active"
+                      << " (print interval: " << intervalSec << " s)\n" << std::flush;
+        }
+
+        auto lastPrint = clock::now();
+
+        while (!stop.load(std::memory_order_relaxed)) {
+            {
+                std::unique_lock<std::mutex> lk(cvMtx);
+                cv.wait_for(lk, duration<double>(intervalSec),
+                            [this]{ return stop.load(std::memory_order_relaxed); });
+            }
+            if (stop.load(std::memory_order_relaxed)) break;
+
+            auto   now        = clock::now();
+            double elapsedSec = duration<double>(now - lastPrint).count();
+            lastPrint         = now;
+
+            struct Row {
+                std::string name;
+                uint64_t total, windowCalls;
+                double avgMs, minMs, maxMs, cps;
+                uint64_t latBuckets[8];  // histogram for percentile computation
+            };
+            std::vector<Row> rows;
+
+            {
+                std::unique_lock<std::mutex> lk(mutex);
+                for (auto& [pname, entry] : entries) {
+                    uint64_t total = entry->callCount.load(std::memory_order_relaxed);
+                    uint64_t ns    = entry->totalNs.load(std::memory_order_relaxed);
+                    uint64_t minNs = entry->minNs.load(std::memory_order_relaxed);
+                    uint64_t maxNs = entry->maxNs.load(std::memory_order_relaxed);
+
+                    uint64_t win     = total - entry->snapCount;
+                    entry->snapCount = total;
+
+                    double avgMs = (total > 0) ? (static_cast<double>(ns) / 1e6 / total) : 0.0;
+                    double cps   = (elapsedSec > 0) ? (static_cast<double>(win) / elapsedSec) : 0.0;
+                    double minMs = (minNs == UINT64_MAX) ? 0.0 : (static_cast<double>(minNs) / 1e6);
+                    double maxMs = static_cast<double>(maxNs) / 1e6;
+
+                    Row r;
+                    r.name        = pname;
+                    r.total       = total;
+                    r.windowCalls = win;
+                    r.avgMs       = avgMs;
+                    r.minMs       = minMs;
+                    r.maxMs       = maxMs;
+                    r.cps         = cps;
+                    for (int b = 0; b < 8; b++)
+                        r.latBuckets[b] = entry->latBuckets[b].load(
+                            std::memory_order_relaxed);
+                    rows.push_back(std::move(r));
+                }
+            }
+
+            // ── Merge fork-child throughput from the shared arena ──────────
+            ShmArena* fa = forkArena.load(std::memory_order_acquire);
+            if (fa && !shmArenaIsShutdown(fa)) {
+                auto forkData = shmArenaReadThroughput(fa);
+                for (const auto& fd : forkData) {
+                    std::string rowName = "fork:" + fd.name;
+                    uint64_t prevSnap = forkSnapCounts[rowName];
+                    uint64_t win      = fd.callCount - prevSnap;
+                    forkSnapCounts[rowName] = fd.callCount;
+
+                    double avgMs = (fd.callCount > 0)
+                        ? (static_cast<double>(fd.totalNs) / 1e6 / fd.callCount) : 0.0;
+                    double cps   = (elapsedSec > 0)
+                        ? (static_cast<double>(win) / elapsedSec) : 0.0;
+                    double fMinMs = (fd.minNs == UINT64_MAX)
+                        ? 0.0 : (static_cast<double>(fd.minNs) / 1e6);
+                    double fMaxMs = static_cast<double>(fd.maxNs) / 1e6;
+
+                    rows.push_back({rowName, fd.callCount, win, avgMs, fMinMs, fMaxMs, cps,
+                                    {fd.latBuckets[0], fd.latBuckets[1],
+                                     fd.latBuckets[2], fd.latBuckets[3],
+                                     fd.latBuckets[4], fd.latBuckets[5],
+                                     fd.latBuckets[6], fd.latBuckets[7]}});
+                }
+            }
+
+            if (rows.empty()) continue;
+
+            // Slowest pipelines first (avg ms descending).
+            std::sort(rows.begin(), rows.end(),
+                [](const Row& a, const Row& b){ return a.avgMs > b.avgMs; });
+
+            size_t maxNameLen = 8;  // "Pipeline"
+            for (const auto& r : rows) maxNameLen = std::max(maxNameLen, r.name.size());
+
+            const int W = static_cast<int>(maxNameLen) + 2;
+
+            // ── Throughput table (always shown when printer is running) ───────────
+            {
+                const int totalWidth = W + 8 + 10 + 10 + 10 + 10;
+                std::ostringstream oss;
+                oss << "\n[Throughput] " << std::string(totalWidth, '-') << '\n';
+                oss << "[Throughput]  "
+                    << std::left  << std::setw(W)  << "Pipeline"
+                    << std::right << std::setw(8)  << "calls"
+                    << std::right << std::setw(10) << "calls/s"
+                    << std::right << std::setw(10) << "avg ms"
+                    << std::right << std::setw(10) << "min ms"
+                    << std::right << std::setw(10) << "max ms"
+                    << '\n';
+                oss << "[Throughput]  " << std::string(totalWidth, '-') << '\n';
+                for (const auto& r : rows) {
+                    oss << "[Throughput]  "
+                        << std::left  << std::setw(W)  << r.name
+                        << std::right << std::setw(8)  << r.total
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(1) << r.cps
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.avgMs
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.minMs
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.maxMs
+                        << '\n';
+                }
+                std::cout << oss.str() << std::flush;
+            }
+
+            // ── Latency percentile table (shown when latencyMode is set) ────────
+            if (latencyMode) {
+                const int totalWidth = W + 8 + 10 + 10 + 10 + 10;
+                std::ostringstream oss;
+                oss << "\n[Latency] " << std::string(totalWidth, '-') << '\n';
+                oss << "[Latency]  "
+                    << std::left  << std::setw(W)  << "Pipeline"
+                    << std::right << std::setw(8)  << "calls"
+                    << std::right << std::setw(10) << "p50 ms"
+                    << std::right << std::setw(10) << "p95 ms"
+                    << std::right << std::setw(10) << "p99 ms"
+                    << std::right << std::setw(10) << "max ms"
+                    << '\n';
+                oss << "[Latency]  " << std::string(totalWidth, '-') << '\n';
+                for (const auto& r : rows) {
+                    double p50 = percentileMs(r.latBuckets, r.total, 50.0);
+                    double p95 = percentileMs(r.latBuckets, r.total, 95.0);
+                    double p99 = percentileMs(r.latBuckets, r.total, 99.0);
+                    oss << "[Latency]  "
+                        << std::left  << std::setw(W)  << r.name
+                        << std::right << std::setw(8)  << r.total
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p50
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p95
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << p99
+                        << std::right << std::setw(10) << std::fixed << std::setprecision(2) << r.maxMs
+                        << '\n';
+                }
+                std::cout << oss.str() << std::flush;
+            }
+        }
+    });
 }
 
 } // namespace visionpipe

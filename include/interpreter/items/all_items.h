@@ -36,8 +36,10 @@
 #include "interpreter/items/gpu_debayer_items.h"
 #include "interpreter/items/gpu_transform_items.h"
 #include "interpreter/items/frame_sink_items.h"
+#include "interpreter/items/discovery_items.h"
 #include "interpreter/items/stabilization_items.h"
 #include "interpreter/items/gpu_stabilization_items.h"
+#include "interpreter/items/shm_items.h"
 
 // Optional: DeepLearning/DNN items (when VISIONPIPE_WITH_DNN is enabled)
 #ifdef VISIONPIPE_WITH_DNN
@@ -57,6 +59,11 @@
 // Optional: FastCV accelerated items (when VISIONPIPE_WITH_FASTCV is enabled)
 #ifdef VISIONPIPE_FASTCV_ENABLED
 #include "interpreter/items/fastcv_items.h"
+#endif
+
+// Optional: Iceoryx2 explicit publish/subscribe items
+#ifdef VISIONPIPE_ICEORYX2_ENABLED
+#include "extensions/iceoryx/publish_frame_item.h"
 #endif
 
 namespace visionpipe {

@@ -1,0 +1,126 @@
+# stereo_test.vsp
+#
+# Dual-camera stereo capture with process-based (exec_fork) isolation.
+# Designed for headless use with libvisionpipe / pyvisionpipe:
+#
+#   session.grab_frame("frame_l")
+#   session.grab_frame("frame_r")
+#
+# Process layout:
+#
+#   Process 0 (parent)      exec_loop main
+#     └─ wait_key               (keeps the parent alive)
+#
+#   Process 1 (child)       exec_fork cap_l_loop
+#     └─ video_cap → debayer → cvt_color → global_cache
+#        → [use(global) → frame_sink("frame_l")]
+#
+#   Process 2 (child)       exec_fork cap_r_loop
+#     └─ video_cap → debayer → cvt_color → global_cache
+#        → [use(global) → frame_sink("frame_r")]
+#
+#   Background (parent)     exec_interval brightness_adjustment 33ms
+#
+# frame_sink publishes each frame into a named IPC channel (Iceoryx2 or
+# POSIX shm, depending on the build configuration).  libvisionpipe's
+# grab_frame() reads from those channels without touching the pipelines.
+#
+
+# ────────────────────────────────────────────────────────────────────────────
+# One-shot camera setup (runs in parent BEFORE fork)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline setup
+
+    v4l2_setup("/dev/video9", 1640, 1232, "SRGGB8", 60, 4)
+    v4l2_prop("/dev/video9", "vertical_flip", 1)
+    v4l2_prop("/dev/video9", "exposure",      1600)
+    v4l2_prop("/dev/video9", "analogue_gain", 232)
+    v4l2_prop("/dev/video9", "digital_gain",  700)
+
+    v4l2_setup("/dev/video3", 1640, 1232, "SRGGB8", 60, 4)
+    v4l2_prop("/dev/video3", "vertical_flip", 1)
+    v4l2_prop("/dev/video3", "exposure",      1600)
+    v4l2_prop("/dev/video3", "analogue_gain", 232)
+    v4l2_prop("/dev/video3", "digital_gain",  700)
+
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Capture + publish pipelines (each runs in its own child process)
+# ────────────────────────────────────────────────────────────────────────────
+
+# frame_sink_publish_l: reads the global cache slot written by capture_left
+# and publishes it to the libvisionpipe IPC channel "frame_l".
+pipeline frame_sink_publish_l
+    use(global "frame_l")
+    frame_sink("frame_l")
+end
+
+pipeline capture_left
+    video_cap("/dev/video9", "v4l2_native")
+    debayer("GRBG")
+    cvt_color("bgr2gray")
+    global_cache("frame_l")
+    exec_seq frame_sink_publish_l
+end
+
+pipeline cap_l_loop
+    exec_loop capture_left
+end
+
+# Same pattern for the right camera.
+pipeline frame_sink_publish_r
+    use(global "frame_r")
+    frame_sink("frame_r")
+end
+
+pipeline capture_right
+    video_cap("/dev/video3", "v4l2_native")
+    debayer("GRBG")
+    cvt_color("bgr2gray")
+    global_cache("frame_r")
+    exec_seq frame_sink_publish_r
+end
+
+pipeline cap_r_loop
+    exec_loop capture_right
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Auto-brightness (background thread in parent)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline brightness_adjustment
+    use(global "frame_r")
+    resize(480, 320)
+    adaptive_auto_brightness("/dev/video3",
+        exposure_prop="exposure",         min_exposure=4,   max_exposure=1703,
+        analog_gain_prop="analogue_gain", min_analog_gain=0, max_analog_gain=232,
+        digital_gain_prop="digital_gain", target=100, brightness_mode="median")
+    video_sync("/dev/video3", "/dev/video9")
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Main loop (parent process — just keeps the session alive)
+# ────────────────────────────────────────────────────────────────────────────
+
+pipeline main
+    key = wait_key(1)
+    if key == 113
+        break
+    end
+    if key == 27
+        break
+    end
+end
+
+# ────────────────────────────────────────────────────────────────────────────
+# Entry points
+# ────────────────────────────────────────────────────────────────────────────
+
+exec_seq setup
+exec_fork cap_l_loop
+exec_fork cap_r_loop
+exec_interval brightness_adjustment 33
+exec_loop main

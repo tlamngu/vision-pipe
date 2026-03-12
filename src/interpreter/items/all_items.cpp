@@ -37,11 +37,17 @@ void registerAllItems(ItemRegistry& registry) {
     // Frame sink (shared memory IPC for libvisionpipe)
     registerFrameSinkItems(registry);
 
+    // Discovery: discover_sinks, sink_properties, discover_capture, capture_capabilities
+    registerDiscoveryItems(registry);
+
     // Horizon lock / video stabilization
     registerStabilizationItems(registry);
 
     // GPU-accelerated stabilization (OpenCL warp kernel)
     registerGpuStabilizationItems(registry);
+
+    // Shared-memory IPC items for exec_fork multiprocessing
+    registerShmItems(registry);
 
     // Optional: Register IP Stream items when feature is enabled
     // This function is a no-op when VISIONPIPE_IP_STREAM_ENABLED is not defined
@@ -65,6 +71,11 @@ void registerAllItems(ItemRegistry& registry) {
     // Optional: Register FastCV accelerated items when feature is enabled
 #ifdef VISIONPIPE_FASTCV_ENABLED
     registerFastCVItems(registry);
+#endif
+
+    // Optional: Register Iceoryx2 explicit publish/subscribe items
+#ifdef VISIONPIPE_ICEORYX2_ENABLED
+    registerIceoryxPublishItems(registry);
 #endif
 }
 

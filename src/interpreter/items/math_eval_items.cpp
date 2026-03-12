@@ -54,6 +54,23 @@ void registerMathEvalItems(ItemRegistry& registry) {
     
     // Constants
     registry.add<MathConstantItem>();
+
+    // Matrix math (OpenCV-accelerated)
+    registry.add<MatrixAvgItem>();
+    registry.add<MatrixAddItem>();
+    registry.add<MatrixSubItem>();
+    registry.add<MatrixMulItem>();
+    registry.add<MatrixDivItem>();
+    registry.add<MatrixScaleItem>();
+    registry.add<MatrixAbsDiffItem>();
+    registry.add<MatrixMinItem>();
+    registry.add<MatrixMaxItem>();
+    registry.add<MatrixNormalizeItem>();
+    registry.add<MatrixBlendItem>();
+    registry.add<MatrixDotItem>();
+    registry.add<MatrixGemmItem>();
+    registry.add<MatrixTransposeItem>();
+    registry.add<MatrixInvertItem>();
 }
 
 // Helper function to get numeric value from argument
@@ -862,6 +879,575 @@ ExecutionResult MathConstantItem::execute(const std::vector<RuntimeValue>& args,
     ctx.variables[outputVar] = RuntimeValue(value);
     
     return ExecutionResult::ok(ctx.currentMat);
+}
+
+// ============================================================================
+// Matrix Math Operations (OpenCV-accelerated)
+// ============================================================================
+
+// Helper: retrieve a cv::Mat from a RuntimeValue (MAT) arg.
+// Returns empty mat if the arg is not a MAT.
+static cv::Mat getMatArg(const RuntimeValue& arg) {
+    if (arg.isMat()) return arg.asMat();
+    return cv::Mat{};
+}
+
+// Helper: ensure two mats are compatible for element-wise ops.
+// Converts types if needed so both share the same depth.
+static bool ensureCompatible(cv::Mat& a, cv::Mat& b, std::string& err) {
+    if (a.empty() || b.empty()) { err = "matrix argument is empty"; return false; }
+    if (a.size() != b.size())   { err = "matrix size mismatch"; return false; }
+    if (a.type() != b.type()) {
+        // Convert to the higher-depth common type
+        int depth = std::max(a.depth(), b.depth());
+        if (depth < CV_32F) depth = CV_32F;  // promote integer types
+        int type = CV_MAKETYPE(depth, std::max(a.channels(), b.channels()));
+        if (a.type() != type) a.convertTo(a, type);
+        if (b.type() != type) b.convertTo(b, type);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// matrix_avg
+// ---------------------------------------------------------------------------
+
+MatrixAvgItem::MatrixAvgItem() {
+    _functionName = "matrix_avg";
+    _description  = "Element-wise average of two matrices: (A + B) / 2. "
+                    "Uses cv::addWeighted (SIMD-accelerated). "
+                    "Both matrices must have the same size; types are auto-promoted if needed.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "result = matrix_avg(frame_a, frame_b)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "average", "blend", "mean"};
+}
+
+ExecutionResult MatrixAvgItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_avg: requires mat_a and mat_b");
+
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_avg: " + err);
+
+    cv::Mat result;
+    cv::addWeighted(a, 0.5, b, 0.5, 0.0, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_add
+// ---------------------------------------------------------------------------
+
+MatrixAddItem::MatrixAddItem() {
+    _functionName = "matrix_add";
+    _description  = "Element-wise addition A + B (cv::add, SIMD-accelerated). "
+                    "Both matrices must have the same size.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "sum = matrix_add(frame_a, frame_b)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "add", "addition"};
+}
+
+ExecutionResult MatrixAddItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_add: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_add: " + err);
+    cv::Mat result;
+    cv::add(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_sub
+// ---------------------------------------------------------------------------
+
+MatrixSubItem::MatrixSubItem() {
+    _functionName = "matrix_sub";
+    _description  = "Element-wise subtraction A - B (cv::subtract, SIMD-accelerated).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "Minuend matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Subtrahend matrix")
+    };
+    _example    = "diff = matrix_sub(frame_a, frame_b)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "subtract", "subtraction", "difference"};
+}
+
+ExecutionResult MatrixSubItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_sub: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_sub: " + err);
+    cv::Mat result;
+    cv::subtract(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_mul (element-wise)
+// ---------------------------------------------------------------------------
+
+MatrixMulItem::MatrixMulItem() {
+    _functionName = "matrix_mul";
+    _description  = "Element-wise (Hadamard) multiplication A ⊙ B (cv::multiply). "
+                    "For true matrix multiplication use matrix_gemm.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "product = matrix_mul(mask, frame)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "multiply", "hadamard", "element-wise"};
+}
+
+ExecutionResult MatrixMulItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_mul: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_mul: " + err);
+    cv::Mat result;
+    cv::multiply(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_div (element-wise)
+// ---------------------------------------------------------------------------
+
+MatrixDivItem::MatrixDivItem() {
+    _functionName = "matrix_div";
+    _description  = "Element-wise division A ÷ B (cv::divide). "
+                    "Division by zero pixels produces 0 (OpenCV convention).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "Numerator matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Denominator matrix")
+    };
+    _example    = "quotient = matrix_div(foreground, background)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "divide", "division"};
+}
+
+ExecutionResult MatrixDivItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_div: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_div: " + err);
+    cv::Mat result;
+    cv::divide(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_scale
+// ---------------------------------------------------------------------------
+
+MatrixScaleItem::MatrixScaleItem() {
+    _functionName = "matrix_scale";
+    _description  = "Multiply every element of the matrix by a scalar factor "
+                    "(cv::multiply with Scalar — SIMD-accelerated). "
+                    "Useful for halving frame brightness, normalizing depth maps, etc.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat",    BaseType::MAT,   "Input matrix"),
+        ParamDef::required("factor", BaseType::FLOAT, "Scale factor")
+    };
+    _example    = "half = matrix_scale(frame, 0.5)\n"
+                  "bright = matrix_scale(frame, 2.0)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "scale", "multiply", "scalar"};
+}
+
+ExecutionResult MatrixScaleItem::execute(const std::vector<RuntimeValue>& args,
+                                         ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_scale: requires mat and factor");
+    cv::Mat a = getMatArg(args[0]);
+    if (a.empty())
+        return ExecutionResult::fail("matrix_scale: mat argument is empty");
+    double factor = args[1].asNumber();
+    cv::Mat result;
+    a.convertTo(result, a.depth() < CV_32F ? CV_32F : a.depth(), factor);
+    // Convert back to original depth if it was integer
+    if (a.depth() < CV_32F) {
+        result.convertTo(result, a.type());
+    }
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_abs_diff
+// ---------------------------------------------------------------------------
+
+MatrixAbsDiffItem::MatrixAbsDiffItem() {
+    _functionName = "matrix_abs_diff";
+    _description  = "Element-wise absolute difference |A - B| (cv::absdiff, SIMD-accelerated). "
+                    "Useful for motion detection, frame differencing, and comparing "
+                    "stabilization outputs.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "diff = matrix_abs_diff(current, previous)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "abs_diff", "difference", "motion"};
+}
+
+ExecutionResult MatrixAbsDiffItem::execute(const std::vector<RuntimeValue>& args,
+                                           ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_abs_diff: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_abs_diff: " + err);
+    cv::Mat result;
+    cv::absdiff(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_min
+// ---------------------------------------------------------------------------
+
+MatrixMinItem::MatrixMinItem() {
+    _functionName = "matrix_min";
+    _description  = "Element-wise minimum min(A, B) (cv::min, SIMD-accelerated).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "darkest = matrix_min(frame_a, frame_b)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "min", "minimum"};
+}
+
+ExecutionResult MatrixMinItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_min: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_min: " + err);
+    cv::Mat result;
+    cv::min(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_max
+// ---------------------------------------------------------------------------
+
+MatrixMaxItem::MatrixMaxItem() {
+    _functionName = "matrix_max";
+    _description  = "Element-wise maximum max(A, B) (cv::max, SIMD-accelerated).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix")
+    };
+    _example    = "brightest = matrix_max(frame_a, frame_b)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "max", "maximum"};
+}
+
+ExecutionResult MatrixMaxItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_max: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_max: " + err);
+    cv::Mat result;
+    cv::max(a, b, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_normalize
+// ---------------------------------------------------------------------------
+
+MatrixNormalizeItem::MatrixNormalizeItem() {
+    _functionName = "matrix_normalize";
+    _description  = "Normalize matrix values to [alpha, beta] range using cv::normalize. "
+                    "norm_type selects the normalization method: "
+                    "\"minmax\" (default) maps the min/max to [alpha, beta]; "
+                    "\"l1\", \"l2\", \"inf\" normalise by the corresponding vector norm.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat",       BaseType::MAT,    "Input matrix"),
+        ParamDef::optional("alpha",     BaseType::FLOAT,  "Lower bound / norm target (default 0)", 0.0),
+        ParamDef::optional("beta",      BaseType::FLOAT,  "Upper bound (default 255, ignored for non-minmax norms)", 255.0),
+        ParamDef::optional("norm_type", BaseType::STRING, "\"minmax\" | \"l1\" | \"l2\" | \"inf\" (default \"minmax\")", std::string("minmax"))
+    };
+    _example    = "norm = matrix_normalize(depth_map)\n"
+                  "norm = matrix_normalize(feature_map, 0, 1, \"l2\")";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "normalize", "scale", "range"};
+}
+
+ExecutionResult MatrixNormalizeItem::execute(const std::vector<RuntimeValue>& args,
+                                             ExecutionContext& ctx) {
+    if (args.empty())
+        return ExecutionResult::fail("matrix_normalize: requires mat argument");
+    cv::Mat a = getMatArg(args[0]);
+    if (a.empty())
+        return ExecutionResult::fail("matrix_normalize: mat argument is empty");
+
+    double alpha    = args.size() > 1 ? args[1].asNumber() : 0.0;
+    double beta     = args.size() > 2 ? args[2].asNumber() : 255.0;
+    std::string ntype = args.size() > 3 ? args[3].asString() : "minmax";
+
+    int normType = cv::NORM_MINMAX;
+    if      (ntype == "l1")  normType = cv::NORM_L1;
+    else if (ntype == "l2")  normType = cv::NORM_L2;
+    else if (ntype == "inf") normType = cv::NORM_INF;
+
+    // Normalize always into float; convert back to original depth.
+    int origDepth = a.depth();
+    int origType  = a.type();
+    cv::Mat f;
+    a.convertTo(f, CV_32F);
+    cv::Mat result;
+    cv::normalize(f, result, alpha, beta, normType, CV_32F);
+    // Restore original integer depth (if applicable)
+    if (origDepth < CV_32F) {
+        result.convertTo(result, origType);
+    }
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_blend
+// ---------------------------------------------------------------------------
+
+MatrixBlendItem::MatrixBlendItem() {
+    _functionName = "matrix_blend";
+    _description  = "Weighted blend of two matrices: α·A + (1−α)·B (cv::addWeighted). "
+                    "alpha=1 returns A unchanged; alpha=0 returns B unchanged.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT,   "First matrix"),
+        ParamDef::required("mat_b", BaseType::MAT,   "Second matrix"),
+        ParamDef::required("alpha", BaseType::FLOAT, "Weight of mat_a ∈ [0, 1]")
+    };
+    _example    = "blended = matrix_blend(current, stabilized, 0.7)\n"
+                  "// equal blend:\n"
+                  "blended = matrix_blend(frame_a, frame_b, 0.5)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "blend", "lerp", "mix", "alpha"};
+}
+
+ExecutionResult MatrixBlendItem::execute(const std::vector<RuntimeValue>& args,
+                                         ExecutionContext& ctx) {
+    if (args.size() < 3)
+        return ExecutionResult::fail("matrix_blend: requires mat_a, mat_b, and alpha");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    double alpha = std::max(0.0, std::min(args[2].asNumber(), 1.0));
+    std::string err;
+    if (!ensureCompatible(a, b, err))
+        return ExecutionResult::fail("matrix_blend: " + err);
+    cv::Mat result;
+    cv::addWeighted(a, alpha, b, 1.0 - alpha, 0.0, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_dot
+// ---------------------------------------------------------------------------
+
+MatrixDotItem::MatrixDotItem() {
+    _functionName = "matrix_dot";
+    _description  = "Dot product of two matrices / vectors: Σ(A ⊙ B). "
+                    "Both must have the same total element count. "
+                    "Returns a scalar FLOAT value.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a", BaseType::MAT, "First matrix / vector"),
+        ParamDef::required("mat_b", BaseType::MAT, "Second matrix / vector")
+    };
+    _example    = "d = matrix_dot(vec_a, vec_b)";
+    _returnType = "float";
+    _tags       = {"math", "matrix", "dot", "inner product", "vector"};
+}
+
+ExecutionResult MatrixDotItem::execute(const std::vector<RuntimeValue>& args,
+                                       ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_dot: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    if (a.empty() || b.empty())
+        return ExecutionResult::fail("matrix_dot: matrix argument is empty");
+    if (a.total() != b.total())
+        return ExecutionResult::fail("matrix_dot: matrices must have the same total element count");
+    // Flatten to single-row if needed, promote to float for precision
+    cv::Mat af, bf;
+    a.reshape(1, 1).convertTo(af, CV_64F);
+    b.reshape(1, 1).convertTo(bf, CV_64F);
+    double dot = af.dot(bf);
+    return ExecutionResult::okWithMat(ctx.currentMat, RuntimeValue(dot));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_gemm
+// ---------------------------------------------------------------------------
+
+MatrixGemmItem::MatrixGemmItem() {
+    _functionName = "matrix_gemm";
+    _description  = "General matrix multiplication: α·A·B + β·C (cv::gemm). "
+                    "Maps to an optimized BLAS implementation when available. "
+                    "Inputs must be CV_32F or CV_64F (converted automatically).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat_a",  BaseType::MAT,   "Left matrix"),
+        ParamDef::required("mat_b",  BaseType::MAT,   "Right matrix"),
+        ParamDef::optional("alpha",  BaseType::FLOAT, "Scale for A·B (default 1.0)", 1.0),
+        ParamDef::optional("mat_c",  BaseType::MAT,   "Addend matrix (optional, pass empty mat to skip)", cv::Mat()),
+        ParamDef::optional("beta",   BaseType::FLOAT, "Scale for C (default 0.0)" , 0.0)
+    };
+    _example    = "product = matrix_gemm(rot_mat, points)\n"
+                  "result  = matrix_gemm(A, B, 1.0, C, 1.0)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "gemm", "matmul", "linear algebra", "blas"};
+}
+
+ExecutionResult MatrixGemmItem::execute(const std::vector<RuntimeValue>& args,
+                                        ExecutionContext& ctx) {
+    if (args.size() < 2)
+        return ExecutionResult::fail("matrix_gemm: requires mat_a and mat_b");
+    cv::Mat a = getMatArg(args[0]);
+    cv::Mat b = getMatArg(args[1]);
+    if (a.empty() || b.empty())
+        return ExecutionResult::fail("matrix_gemm: matrix argument is empty");
+
+    double alpha = args.size() > 2 ? args[2].asNumber() : 1.0;
+    cv::Mat c    = args.size() > 3 ? getMatArg(args[3]) : cv::Mat();
+    double beta  = args.size() > 4 ? args[4].asNumber() : 0.0;
+
+    // cv::gemm requires CV_32F or CV_64F
+    int dtype = CV_64F;
+    cv::Mat af, bf, cf, result;
+    a.convertTo(af, dtype);
+    b.convertTo(bf, dtype);
+    if (!c.empty()) {
+        c.convertTo(cf, dtype);
+    }
+    cv::gemm(af, bf, alpha, cf, beta, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_transpose
+// ---------------------------------------------------------------------------
+
+MatrixTransposeItem::MatrixTransposeItem() {
+    _functionName = "matrix_transpose";
+    _description  = "Transpose a matrix Aᵀ (cv::transpose, SIMD-accelerated).";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat", BaseType::MAT, "Input matrix")
+    };
+    _example    = "t = matrix_transpose(homography)";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "transpose", "linear algebra"};
+}
+
+ExecutionResult MatrixTransposeItem::execute(const std::vector<RuntimeValue>& args,
+                                             ExecutionContext& ctx) {
+    if (args.empty())
+        return ExecutionResult::fail("matrix_transpose: requires mat argument");
+    cv::Mat a = getMatArg(args[0]);
+    if (a.empty())
+        return ExecutionResult::fail("matrix_transpose: mat argument is empty");
+    cv::Mat result;
+    cv::transpose(a, result);
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
+}
+
+// ---------------------------------------------------------------------------
+// matrix_invert
+// ---------------------------------------------------------------------------
+
+MatrixInvertItem::MatrixInvertItem() {
+    _functionName = "matrix_invert";
+    _description  = "Invert a square matrix using cv::invert. "
+                    "method: \"lu\" (LU decomposition, default) for regular matrices; "
+                    "\"svd\" or \"pseudo\" for the Moore-Penrose pseudo-inverse "
+                    "(handles singular / non-square matrices); "
+                    "\"cholesky\" for symmetric positive-definite matrices.";
+    _category     = "math";
+    _params = {
+        ParamDef::required("mat",    BaseType::MAT,    "Input matrix (square or any size for pseudo)"),
+        ParamDef::optional("method", BaseType::STRING, "\"lu\" | \"svd\" | \"cholesky\" | \"pseudo\" (default \"lu\")",
+                           std::string("lu"))
+    };
+    _example    = "inv = matrix_invert(homography)\n"
+                  "inv = matrix_invert(cov_mat, \"svd\")";
+    _returnType = "mat";
+    _tags       = {"math", "matrix", "invert", "inverse", "linear algebra", "svd"};
+}
+
+ExecutionResult MatrixInvertItem::execute(const std::vector<RuntimeValue>& args,
+                                          ExecutionContext& ctx) {
+    if (args.empty())
+        return ExecutionResult::fail("matrix_invert: requires mat argument");
+    cv::Mat a = getMatArg(args[0]);
+    if (a.empty())
+        return ExecutionResult::fail("matrix_invert: mat argument is empty");
+
+    std::string methodStr = args.size() > 1 ? args[1].asString() : "lu";
+    int method = cv::DECOMP_LU;
+    if      (methodStr == "svd" || methodStr == "pseudo") method = cv::DECOMP_SVD;
+    else if (methodStr == "cholesky") method = cv::DECOMP_CHOLESKY;
+
+    // cv::invert requires CV_32F or CV_64F
+    cv::Mat f, result;
+    a.convertTo(f, CV_64F);
+    double det = cv::invert(f, result, method);
+    if (det == 0.0 && methodStr == "lu")
+        return ExecutionResult::fail("matrix_invert: matrix is singular (try method \"svd\" for pseudo-inverse)");
+    return ExecutionResult::okWithMat(result, RuntimeValue(result));
 }
 
 } // namespace visionpipe

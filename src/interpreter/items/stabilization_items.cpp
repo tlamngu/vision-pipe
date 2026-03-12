@@ -9,6 +9,8 @@ void registerStabilizationItems(ItemRegistry& registry) {
     registry.add<HorizonLockItem>();
     registry.add<VideoStabilizeItem>();
     registry.add<StereoStabilizeItem>();
+    registry.add<VideoStabilizeCalculateItem>();
+    registry.add<VideoStabilizeApplyItem>();
 }
 
 // ============================================================================
@@ -749,6 +751,314 @@ ExecutionResult StereoStabilizeItem::execute(const std::vector<RuntimeValue>& ar
     ctx.cacheManager->set(outputCache, resultR);
 
     return ExecutionResult::ok(resultL);
+}
+
+// ============================================================================
+// VideoStabilizeCalculateItem
+// ============================================================================
+
+VideoStabilizeCalculateItem::VideoStabilizeCalculateItem() {
+    _functionName = "stabilization_calculate";
+    _description  = "Compute the 2-D stabilization correction transform without applying it. "
+                    "Tracks feature points and accumulates the camera-motion trajectory (Δx, Δy, Δθ) "
+                    "via Lucas-Kanade / RANSAC, then returns the 2×3 affine counter-transform matrix "
+                    "as a MAT value. The current frame passes through unchanged. "
+                    "Pass the returned matrix to stabilization_apply() to warp any frame with it.";
+    _category = "stabilization";
+    _params = {
+        ParamDef::optional("id",           BaseType::STRING, "Stream identifier — unique string per camera so each stream keeps independent state (default \"default\")", RuntimeValue(std::string("default"))),
+        ParamDef::optional("delta_smooth", BaseType::FLOAT, "EMA coefficient for per-frame delta noise [0,1) (default 0.5)", 0.5),
+        ParamDef::optional("drift_decay",  BaseType::FLOAT, "Per-frame decay in (0,1]. 1.0 = hard lock (default 0.997)", 0.997),
+        ParamDef::optional("max_points",   BaseType::INT,   "Max Shi-Tomasi corners (default 200)", 200),
+        ParamDef::optional("quality",      BaseType::FLOAT, "Shi-Tomasi quality level (default 0.01)", 0.01),
+        ParamDef::optional("min_distance", BaseType::FLOAT, "Min distance between corners in px (default 10)", 10.0),
+        ParamDef::optional("reset",        BaseType::BOOL,  "Reset accumulated state and restart (default false)", false)
+    };
+    _example    = "// single camera:\n"
+                  "movement_matrix = stabilization_calculate()\n"
+                  "stabilization_apply(movement_matrix)\n"
+                  "// multi-camera with independent state:\n"
+                  "matrix_l = stabilization_calculate(\"cam_l\", 0.8, 0.6)\n"
+                  "matrix_r = stabilization_calculate(\"cam_r\", 0.8, 0.6)\n"
+                  "use(\"other_cam\") | stabilization_apply(matrix_r)";
+    _returnType = "mat";  // 2x3 CV_64F affine correction matrix
+    _tags       = {"stabilization", "video", "shake", "translation", "rotation", "calculate", "matrix"};
+}
+
+// ---------------------------------------------------------------------------
+
+std::vector<cv::Point2f> VideoStabilizeCalculateItem::detectPoints(const cv::Mat& gray,
+                                                                    int maxPoints,
+                                                                    double quality,
+                                                                    double minDist) {
+    std::vector<cv::Point2f> pts;
+    cv::goodFeaturesToTrack(gray, pts, maxPoints, quality, minDist,
+                            cv::noArray(), 3, false);
+    return pts;
+}
+
+// ---------------------------------------------------------------------------
+
+ExecutionResult VideoStabilizeCalculateItem::execute(const std::vector<RuntimeValue>& args,
+                                                     ExecutionContext& ctx) {
+    // Build an identity correction matrix (no correction) with source dimensions.
+    // Row 2 carries src_W/src_H so stabilization_apply() can scale translations.
+    auto identityMat = [&]() {
+        const double W = ctx.currentMat.empty() ? 0.0 : static_cast<double>(ctx.currentMat.cols);
+        const double H = ctx.currentMat.empty() ? 0.0 : static_cast<double>(ctx.currentMat.rows);
+        cv::Mat M = (cv::Mat_<double>(3, 3) <<
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            W,   H,   0.0
+        );
+        return M;
+    };
+
+    if (ctx.currentMat.empty())
+        return ExecutionResult::okWithMat(ctx.currentMat, RuntimeValue(identityMat()));
+
+    // ------------------------------------------------------------------ args
+    std::string id         = (args.size() > 0 && args[0].isString()) ? args[0].asString() : "default";
+    double deltaSmooth = args.size() > 1 ? args[1].asNumber() : 0.5;
+    double driftDecay  = args.size() > 2 ? args[2].asNumber() : 0.997;
+    int    maxPoints   = args.size() > 3 ? static_cast<int>(args[3].asNumber()) : 200;
+    double quality     = args.size() > 4 ? args[4].asNumber() : 0.01;
+    double minDistance = args.size() > 5 ? args[5].asNumber() : 10.0;
+    bool   reset       = args.size() > 6 ? args[6].asBool()   : false;
+
+    // ------------------------------------------------------------------ state
+    StreamState& s = _streams[id];
+
+    deltaSmooth = std::max(0.0, std::min(deltaSmooth, 0.99));
+    driftDecay  = std::max(0.9, std::min(driftDecay,  1.0));
+    maxPoints   = std::max(10,  std::min(maxPoints,   2000));
+
+    // ----------------------------------------------------------------- reset
+    if (reset) {
+        s.prevGray.release();
+        s.prevPts.clear();
+        s.accX = s.accY = s.accA = 0.0;
+        s.smoothDx = s.smoothDy = s.smoothDa = 0.0;
+        s.initialised = false;
+    }
+
+    // --------------------------------------------------- grayscale of current
+    cv::Mat gray;
+    if (ctx.currentMat.channels() == 1) gray = ctx.currentMat;
+    else cv::cvtColor(ctx.currentMat, gray, cv::COLOR_BGR2GRAY);
+
+    // ---------------------------------------- first frame — just initialise
+    if (!s.initialised || s.prevGray.empty()) {
+        s.prevGray    = gray.clone();
+        s.prevPts     = detectPoints(gray, maxPoints, quality, minDistance);
+        s.initialised = true;
+        // Return identity (no correction yet) + unmodified frame
+        return ExecutionResult::okWithMat(ctx.currentMat, RuntimeValue(identityMat()));
+    }
+
+    // ------------------------------------------ refresh points if too sparse
+    if (static_cast<int>(s.prevPts.size()) < maxPoints / 4)
+        s.prevPts = detectPoints(s.prevGray, maxPoints, quality, minDistance);
+
+    if (s.prevPts.empty()) {
+        s.prevGray = gray.clone();
+        return ExecutionResult::okWithMat(ctx.currentMat, RuntimeValue(identityMat()));
+    }
+
+    // --------------------------------------- optical flow (Lucas-Kanade PyrLK)
+    std::vector<cv::Point2f> currPts;
+    std::vector<uchar>       status;
+    std::vector<float>       err;
+
+    cv::calcOpticalFlowPyrLK(
+        s.prevGray, gray,
+        s.prevPts, currPts,
+        status, err,
+        cv::Size(21, 21), 3,
+        cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01)
+    );
+
+    std::vector<cv::Point2f> goodPrev, goodCurr;
+    goodPrev.reserve(s.prevPts.size());
+    goodCurr.reserve(currPts.size());
+    for (size_t i = 0; i < status.size(); ++i) {
+        if (status[i]) {
+            goodPrev.push_back(s.prevPts[i]);
+            goodCurr.push_back(currPts[i]);
+        }
+    }
+
+    // ------------------------------------------- estimate full 2-D transform
+    double rawDx = 0.0, rawDy = 0.0, rawDa = 0.0;
+
+    if (goodPrev.size() >= 4) {
+        cv::Mat affine = cv::estimateAffinePartial2D(
+            goodPrev, goodCurr, cv::noArray(), cv::RANSAC, 2.0);
+        if (!affine.empty()) {
+            rawDa = std::atan2(affine.at<double>(1, 0), affine.at<double>(0, 0));
+            rawDx = affine.at<double>(0, 2);
+            rawDy = affine.at<double>(1, 2);
+
+            const double kMaxAngle = 5.0 * CV_PI / 180.0;
+            const double kMaxTx = std::max(ctx.currentMat.cols, ctx.currentMat.rows) * 0.1;
+            if (std::abs(rawDa) > kMaxAngle) rawDa = 0.0;
+            if (std::abs(rawDx) > kMaxTx)    rawDx = 0.0;
+            if (std::abs(rawDy) > kMaxTx)    rawDy = 0.0;
+        }
+    }
+
+    // ---------------------------------------------- EMA noise filter
+    s.smoothDx = deltaSmooth * s.smoothDx + (1.0 - deltaSmooth) * rawDx;
+    s.smoothDy = deltaSmooth * s.smoothDy + (1.0 - deltaSmooth) * rawDy;
+    s.smoothDa = deltaSmooth * s.smoothDa + (1.0 - deltaSmooth) * rawDa;
+
+    // Integrate
+    s.accX += s.smoothDx;
+    s.accY += s.smoothDy;
+    s.accA += s.smoothDa;
+
+    // Soft-lock decay
+    s.accX *= driftDecay;
+    s.accY *= driftDecay;
+    s.accA *= driftDecay;
+
+    // ------------------------------------------------- update previous state
+    s.prevGray = gray.clone();
+    s.prevPts  = goodCurr;
+
+    // ----------------------------------------- build correction matrix
+    // Use a 3×3 matrix to carry both the correction and the source resolution.
+    // Row 2 stores the source frame dimensions so stabilization_apply() can
+    // scale corrX/corrY to whatever target resolution it is applied at.
+    //
+    //   [ cosA   -sinA   corrX  ]   raw translation in SOURCE pixel units
+    //   [ sinA    cosA   corrY  ]
+    //   [ src_W   src_H  0     ]   source frame dimensions
+    const double corrA = -s.accA;
+    const double corrX = -s.accX;
+    const double corrY = -s.accY;
+
+    const double cosA  = std::cos(corrA);
+    const double sinA  = std::sin(corrA);
+    const double src_W = static_cast<double>(ctx.currentMat.cols);
+    const double src_H = static_cast<double>(ctx.currentMat.rows);
+
+    cv::Mat M = (cv::Mat_<double>(3, 3) <<
+        cosA, -sinA,  corrX,
+        sinA,  cosA,  corrY,
+        src_W, src_H, 0.0
+    );
+
+    // Frame passes through; correction matrix is the scalar return value.
+    return ExecutionResult::okWithMat(ctx.currentMat, RuntimeValue(M));
+}
+
+// ============================================================================
+// VideoStabilizeApplyItem
+// ============================================================================
+
+VideoStabilizeApplyItem::VideoStabilizeApplyItem() {
+    _functionName = "stabilization_apply";
+    _description  = "Apply a pre-computed stabilization correction matrix to the current frame. "
+                    "Accepts the 2×3 affine matrix returned by stabilization_calculate() and "
+                    "warps the current frame with it. Optionally scales the result to hide the "
+                    "black borders introduced by the warp.";
+    _category = "stabilization";
+    _params = {
+        ParamDef::optional("movement_matrix", BaseType::MAT,
+                           "2×3 CV_64F correction matrix from stabilization_calculate(). "
+                           "Omit or pass an unset variable on the first frame for a no-op pass-through.",
+                           RuntimeValue(cv::Mat())),
+        ParamDef::optional("crop",            BaseType::BOOL, "Scale-crop to hide warp borders (default true)", true)
+    };
+    _example    = "movement_matrix = stabilization_calculate()\n"
+                  "stabilization_apply(movement_matrix)\n"
+                  "// apply the same transform to a different frame:\n"
+                  "use(\"other_cam\") | stabilization_apply(movement_matrix)";
+    _returnType = "mat";
+    _tags       = {"stabilization", "video", "shake", "apply", "warp", "matrix"};
+}
+
+// ---------------------------------------------------------------------------
+
+ExecutionResult VideoStabilizeApplyItem::execute(const std::vector<RuntimeValue>& args,
+                                                  ExecutionContext& ctx) {
+    if (ctx.currentMat.empty()) return ExecutionResult::ok(ctx.currentMat);
+
+    // Extract movement matrix — tolerate void/empty on the first frame
+    // (movement_matrix is unset until calculate_stabilization runs once).
+    cv::Mat M;
+    if (!args.empty() && args[0].isMat()) {
+        M = args[0].asMat();
+    }
+    bool crop = args.size() > 1 ? args[1].asBool() : true;
+
+    // Empty mat or wrong shape means no correction
+    if (M.empty() || M.cols != 3 || (M.rows != 2 && M.rows != 3))
+        return ExecutionResult::ok(ctx.currentMat);
+
+    // Read rotation + raw translation from the matrix produced by stabilization_calculate().
+    // M layout (3×3):  [ cosA  -sinA  corrX ]   corrX/corrY in SOURCE pixel units
+    //                  [ sinA   cosA  corrY ]
+    //                  [ src_W  src_H  0   ]   source frame dimensions
+    // Legacy 2×3 matrices (no source dims) are applied without scaling.
+    const double cosA  = M.at<double>(0, 0);
+    const double sinA  = M.at<double>(1, 0);
+    const double corrA = std::atan2(sinA, cosA);
+    double corrX = M.at<double>(0, 2);
+    double corrY = M.at<double>(1, 2);
+
+    // Scale translation from source-frame units to target-frame units.
+    const double tgt_W = static_cast<double>(ctx.currentMat.cols);
+    const double tgt_H = static_cast<double>(ctx.currentMat.rows);
+    if (M.rows == 3) {
+        const double src_W = M.at<double>(2, 0);
+        const double src_H = M.at<double>(2, 1);
+        if (src_W > 0.0 && src_H > 0.0) {
+            corrX *= tgt_W / src_W;
+            corrY *= tgt_H / src_H;
+        }
+    }
+
+    // Check if correction is trivially small (identity-like)
+    if (std::abs(corrA) < 1e-7 && std::abs(corrX) < 0.1 && std::abs(corrY) < 0.1)
+        return ExecutionResult::ok(ctx.currentMat);
+
+    // Build the warp matrix for the TARGET frame dimensions.
+    // Rotation is applied about the target frame's centre; scaled translation added on top.
+    cv::Point2f  centre(tgt_W * 0.5f, tgt_H * 0.5f);
+
+    cv::Mat Mout = (cv::Mat_<double>(2, 3) <<
+        cosA, -sinA,  (1.0 - cosA) * centre.x + sinA * centre.y + corrX,
+        sinA,  cosA, -sinA * centre.x + (1.0 - cosA) * centre.y + corrY
+    );
+
+    if (crop) {
+        double absA  = std::abs(corrA);
+        double sinAb = std::sin(absA);
+        double cosAb = std::cos(absA);
+        double scaleW = cosAb + (tgt_H / tgt_W) * sinAb;
+        double scaleH = cosAb + (tgt_W / tgt_H) * sinAb;
+        double scale  = std::max(scaleW, scaleH);
+        scale = std::min(scale, 1.5);
+
+        if (scale > 1.0 + 1e-4) {
+            Mout.at<double>(0, 0) *= scale;
+            Mout.at<double>(0, 1) *= scale;
+            Mout.at<double>(1, 0) *= scale;
+            Mout.at<double>(1, 1) *= scale;
+            Mout.at<double>(0, 2) = scale * Mout.at<double>(0, 2) + (1.0 - scale) * centre.x;
+            Mout.at<double>(1, 2) = scale * Mout.at<double>(1, 2) + (1.0 - scale) * centre.y;
+        }
+    }
+
+    cv::Mat result;
+    cv::warpAffine(ctx.currentMat, result, Mout,
+                   ctx.currentMat.size(),
+                   cv::INTER_LINEAR,
+                   cv::BORDER_REPLICATE);
+
+    return ExecutionResult::ok(result);
 }
 
 } // namespace visionpipe

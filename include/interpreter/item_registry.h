@@ -151,12 +151,14 @@ struct ExecutionContext {
     bool shouldBreak = false;
     bool shouldContinue = false;
     bool shouldReturn = false;
+    bool frameNotReady = false;             // Set by use(global) when fork-child frame not yet available
     RuntimeValue returnValue;
     
     void reset() {
         shouldBreak = false;
         shouldContinue = false;
         shouldReturn = false;
+        frameNotReady = false;
         returnValue = RuntimeValue();
     }
 };

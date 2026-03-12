@@ -318,6 +318,30 @@ public:
     ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
 };
 
+// ============================================================================
+// Cache State Checks
+// ============================================================================
+
+/**
+ * @brief Returns true if a cache entry exists and the Mat is not empty.
+ *
+ * Checks local cache first, then global. Use `global=true` to check only
+ * the global cache (e.g. frames written by exec_fork children).
+ *
+ * Parameters:
+ * - cache_id : string  - Cache identifier to check
+ * - global   : bool (optional, default false) - Check global cache only
+ *
+ * Returns bool as a scalar so it can be used directly:
+ *   if cache_ready("frame_l") ... end
+ *   let ok = cache_ready("frame_l")
+ */
+class CacheReadyItem : public InterpreterItem {
+public:
+    CacheReadyItem();
+    ExecutionResult execute(const std::vector<RuntimeValue>& args, ExecutionContext& ctx) override;
+};
+
 } // namespace visionpipe
 
 #endif // VISIONPIPE_CONDITIONAL_ITEMS_H

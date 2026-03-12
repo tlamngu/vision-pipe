@@ -92,6 +92,8 @@ enum class ASTNodeType {
     EXEC_INTERVAL_MULTI_STMT,
     EXEC_RT_SEQ_STMT,
     EXEC_RT_MULTI_STMT,
+    EXEC_NASYNC_STMT,
+    EXEC_FORK_STMT,
     DEBUG_START_STMT,
     DEBUG_END_STMT,
     USE_STMT,
@@ -389,6 +391,48 @@ struct ExecRtMultiStmt : Statement {
 };
 
 /**
+ * @brief exec_nasync statement – fire-and-forget async execution
+ *
+ * Two forms:
+ *   exec_nasync <pipeline>          – run named pipeline in background thread
+ *   exec_nasync start ... end       – run inline block in background thread
+ *
+ * In both cases the calling thread continues immediately and the current
+ * Mat is UNCHANGED (bypasses through to the next item).  The background
+ * thread receives a deep-clone of the Mat and fully private interpreter
+ * state; the only shared resource is the global cache (thread-safe).
+ */
+struct ExecNasyncStmt : Statement {
+    /// Named pipeline mode: non-null when a pipeline reference is given.
+    std::shared_ptr<Expression> pipelineRef;
+    /// Inline block mode: non-empty when exec_nasync start ... end is used.
+    std::vector<std::shared_ptr<Statement>> body;
+
+    bool isInlineBlock() const { return static_cast<bool>(body.size()); }
+
+    ExecNasyncStmt() : Statement(ASTNodeType::EXEC_NASYNC_STMT) {}
+    std::string toString(int ind = 0) const override;
+};
+
+/**
+ * @brief exec_fork statement – fork a child process running a pipeline in a loop
+ *
+ * exec_fork <pipeline>
+ * Forks a child process that continuously executes the named pipeline.
+ * The parent continues immediately.  Communication between parent and
+ * child happens exclusively through POSIX shared memory
+ * (shm_write / shm_read items).
+ */
+struct ExecForkStmt : Statement {
+    std::shared_ptr<Expression> pipelineRef;
+
+    ExecForkStmt() : Statement(ASTNodeType::EXEC_FORK_STMT) {}
+    std::string toString(int ind = 0) const override {
+        return std::string(ind, ' ') + "exec_fork <pipeline>";
+    }
+};
+
+/**
  * @brief debug_start statement - begin a verbose debug logging block
  */
 struct DebugStartStmt : Statement {
@@ -662,6 +706,8 @@ public:
     virtual void visit(ExecIntervalMultiStmt& node) = 0;
     virtual void visit(ExecRtSeqStmt& node) = 0;
     virtual void visit(ExecRtMultiStmt& node) = 0;
+    virtual void visit(ExecNasyncStmt& node) = 0;
+    virtual void visit(ExecForkStmt& node) = 0;
     virtual void visit(DebugStartStmt& node) = 0;
     virtual void visit(DebugEndStmt& node) = 0;
     virtual void visit(UseStmt& node) = 0;

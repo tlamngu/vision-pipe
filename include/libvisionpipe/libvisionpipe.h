@@ -41,7 +41,13 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <chrono>
 #include <opencv2/core/mat.hpp>
+#include "libvisionpipe/frame_transport.h"
+
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+#include "extensions/iceoryx/iceoryx_frame_transport.h"
+#endif
 
 // Platform-specific process handle type
 #if defined(_WIN32)
@@ -65,7 +71,9 @@
 namespace visionpipe {
 
 // Forward declarations
+#ifndef VISIONPIPE_IPC_USE_ICEORYX2
 class FrameShmConsumer;
+#endif
 
 // ============================================================================
 // Types
@@ -77,6 +85,17 @@ class FrameShmConsumer;
  * @param frameNumber Monotonically increasing frame counter
  */
 using FrameCallback = std::function<void(const cv::Mat& frame, uint64_t frameNumber)>;
+
+/**
+ * @brief Callback type for frame-update notifications (no frame data)
+ * @param frameNumber Monotonically increasing frame counter of the new frame
+ *
+ * Lighter-weight alternative to FrameCallback: the callback is invoked
+ * whenever the sink produces a new (dirty) frame but does NOT receive the
+ * frame itself.  Use Session::grabFrame() inside the callback if you need
+ * the actual pixel data.
+ */
+using FrameUpdateCallback = std::function<void(uint64_t frameNumber)>;
 
 /**
  * @brief Session state
@@ -104,6 +123,16 @@ struct LIBVISIONPIPE_API VisionPipeConfig {
     std::map<std::string, std::string> params;      ///< Script parameters (--param key=value)
     std::string pipeline;                           ///< Specific pipeline to run (--pipeline name)
     int sinkTimeoutMs = 10000;                      ///< Timeout waiting for frame_sink shm to appear
+    /**
+     * @brief Redirect visionpipe stdout+stderr to this file path.
+     *
+     * ""/unset  — inherit the parent's stdout/stderr (default, logs visible)
+     * "/dev/null" — suppress all visionpipe output (quiet mode)
+     * "/path/to/vp.log" — capture to a log file
+     *
+     * Only applied on POSIX; ignored on Windows.
+     */
+    std::string logFile;
 };
 
 // ============================================================================
@@ -140,6 +169,19 @@ public:
      * Multiple callbacks can be registered per sink.
      */
     void onFrame(const std::string& sinkName, FrameCallback callback);
+
+    /**
+     * @brief Register a frame-update (dirty) notification for a named sink
+     * @param sinkName Must match a frame_sink("name") call in the .vsp script
+     * @param callback Function invoked whenever the sink produces a new frame;
+     *                 receives only the new frame sequence number, not the frame
+     *                 data itself.  Call grabFrame() from inside the callback
+     *                 if the pixel data is needed.
+     *
+     * Multiple callbacks can be registered per sink, and they can be mixed
+     * freely with onFrame() callbacks on the same sink.
+     */
+    void onFrameUpdate(const std::string& sinkName, FrameUpdateCallback callback);
 
     /**
      * @brief Grab the latest frame from a sink (polling mode)
@@ -263,10 +305,18 @@ private:
 #endif
 
     struct SinkConnection {
+#ifdef VISIONPIPE_IPC_USE_ICEORYX2
+        /// Iceoryx2 channel name ("<sessionId>_<sinkName>")
+        std::string ioxChannelName;
+#else
         std::unique_ptr<FrameShmConsumer> consumer;
+#endif
         std::vector<FrameCallback> callbacks;
+        std::vector<FrameUpdateCallback> updateCallbacks; ///< Dirty-frame notification callbacks
         uint64_t lastDispatchedSeq = 0;
         bool connected = false;
+        /// Timestamp of the last producer-liveness check (throttled to ~1 s)
+        std::chrono::steady_clock::time_point lastLivenessCheck{};
     };
 
     std::string _sessionId;
