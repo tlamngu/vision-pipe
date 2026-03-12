@@ -512,6 +512,118 @@ session.on_frame("output", move |frame| {
 - `Frame::seq` monotonically increases (or wraps at u64::MAX)
 - `Session` tracks `last_dispatched_seq` per sink to avoid re-dispatching
 
+---
+
+## 6. `discovery.rs` — Sink and capture device discovery
+
+**Purpose**: Pure-Rust, zero-dependency enumeration of active `frame_sink()` IPC
+segments and video capture devices. Mirrors the libvisionpipe C++ `discovery.h`
+API and the VSP built-in functions `discover_sinks / sink_properties /
+discover_capture / capture_capabilities`.
+
+### Public API
+
+```rust
+// Sink discovery
+pub fn discover_sinks()   -> Vec<SinkInfo>
+pub fn sink_properties(session_id: &str, sink_name: &str) -> Option<SinkProperties>
+
+// Capture device discovery
+pub fn discover_capture() -> Vec<CaptureDevice>
+pub fn capture_capabilities(device: &str) -> CaptureDevice
+```
+
+### Structs
+
+| Struct | Fields |
+|---|---|
+| `SinkInfo` | `session_id`, `sink_name`, `shm_name`, `producer_pid`, `producer_alive` |
+| `SinkProperties` | `is_valid`, `rows`, `cols`, `channels`, `cv_type`, `step`, `data_size`, `frame_seq`, `producer_pid`, `producer_alive` |
+| `CaptureDevice` | `path`, `device_name`, `driver_name`, `bus_info`, `backend`, `is_capture`, `has_controls`, `formats` |
+| `CaptureFormat` | `pixel_format`, `width`, `height`, `fps_min`, `fps_max` |
+
+### Sink discovery implementation
+
+1. **Scan `/dev/shm`** (`std::fs::read_dir`) for files matching `visionpipe_sink_*`
+2. **Parse** the session ID and sink name from the filename (splits on 3rd `_`)
+3. **Memory-map** each segment read-only via `libc::shm_open` + `libc::mmap`
+4. **Verify** the `SHM_MAGIC` (`0x56505346`) at offset 0
+5. **Read header** fields at their C struct offsets (see layout comment in source)
+6. **Liveness check** via `kill(pid, 0)` — `EPERM` counts as alive
+7. Returns a sorted `Vec<SinkInfo>` (by session_id then sink_name)
+
+#### SHM header layout (matches `frame_transport.h`)
+
+```
+offset  0  u32  magic          (SHM_MAGIC = 0x56505346)
+offset  4  u32  (pad for alignment of atomic<u64>)
+offset  8  u64  frame_seq      (atomic, monotonic)
+offset 16  i32  rows
+offset 20  i32  cols
+offset 24  i32  cv_type        (depth | ((channels-1) << 3))
+offset 28  i32  step           (bytes per row)
+offset 32  u32  data_size
+offset 36  i32  writer_lock    (atomic spin-lock)
+offset 40  i32  producer_pid
+offset 44  u8   _pad[16]
+total = 60 bytes (struct); mapping = 64-byte aligned header + MAX_FRAME_BYTES data
+```
+
+### Capture discovery implementation (Linux / V4L2)
+
+1. **Probe `/dev/video0` … `/dev/video63`** — skip missing paths  
+2. **`VIDIOC_QUERYCAP`** — read card name, driver, bus_info; check `V4L2_CAP_VIDEO_CAPTURE`  
+3. **`VIDIOC_QUERYCTRL`** — test for control existence (sets `has_controls`)  
+4. **`VIDIOC_ENUM_FMT`** — iterate all supported pixel formats  
+5. **`VIDIOC_ENUM_FRAMESIZES`** — for each format, iterate discrete or stepwise sizes  
+6. **`VIDIOC_ENUM_FRAMEINTERVALS`** — for each (format, size), collect min/max fps  
+
+All ioctls use `repr(C)` Rust structs directly matching the kernel ABI —
+no bindgen required. The ioctl numbers are hard-coded for x86-64 / ARM64.
+
+### `#[cfg]` guards
+
+| Block | Guard |
+|---|---|
+| `posix_shm` (shm_open/mmap/kill) | `#[cfg(unix)]` |
+| `v4l2` sub-module | `#[cfg(target_os = "linux")]` |
+| Ioctl-based discover/query | `#[cfg(target_os = "linux")]` |
+| Non-Linux fallback | `#[allow(unreachable_code)]` pass-through |
+
+### Example usage
+
+```rust
+use visionpipe_client::{discover_sinks, sink_properties, discover_capture, capture_capabilities};
+
+// Find all live sinks
+for sink in discover_sinks() {
+    println!("{}/{}: pid={} alive={}",
+        sink.session_id, sink.sink_name,
+        sink.producer_pid, sink.producer_alive);
+
+    if let Some(props) = sink_properties(&sink.session_id, &sink.sink_name) {
+        println!("  {}×{} ch={} seq={}",
+            props.cols, props.rows, props.channels, props.frame_seq);
+    }
+}
+
+// Enumerate cameras
+for dev in discover_capture() {
+    println!("{} – {} [{} formats]",
+        dev.path, dev.device_name, dev.formats.len());
+}
+
+// Query one device in detail
+let caps = capture_capabilities("/dev/video0");
+for fmt in &caps.formats {
+    println!("  {} {}×{}  {:.0}–{:.0} fps",
+        fmt.pixel_format, fmt.width, fmt.height,
+        fmt.fps_min, fmt.fps_max);
+}
+```
+
+---
+
 ## Future Extensions
 
 ### Proposed features (not implemented)
@@ -523,7 +635,7 @@ session.on_frame("output", move |frame| {
    - `#[derive(Serialize, Deserialize)]` on Frame metadata
    - Frame data remains raw bytes (no point in serializing pixel buffers)
 
-3. **Height-level bindings**
+3. **High-level bindings**
    - Type-safe param builders (macro or builder)
    - Frame format validation at type level
 

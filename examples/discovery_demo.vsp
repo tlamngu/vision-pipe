@@ -1,0 +1,38 @@
+# discovery_demo.vsp
+# Demonstrates discover_sinks(), sink_properties(), discover_capture(),
+# and capture_capabilities() built-in functions.
+#
+# Run:
+#   visionpipe run examples/discovery_demo.vsp
+
+pipeline show_sinks
+    sinks = discover_sinks()
+    log "=== Active frame_sink() segments ==="
+    log "  count: {sinks}"
+end
+
+pipeline show_sink_props(let session_id, let sink_name)
+    props = sink_properties(session_id, sink_name)
+    log "Sink '{sink_name}' properties:"
+    log "  valid:    {props}"
+end
+
+pipeline show_cameras
+    cameras = discover_capture()
+    log "=== Detected capture devices ==="
+    log "  count: {cameras}"
+end
+
+pipeline show_caps(let device)
+    caps = capture_capabilities(device)
+    log "=== Capabilities: {device} ==="
+    log "  result: {caps}"
+end
+
+pipeline main
+    exec_seq show_sinks
+    exec_seq show_cameras
+    exec_seq show_caps("/dev/video0")
+end
+
+exec_seq main

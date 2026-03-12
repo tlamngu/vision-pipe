@@ -326,6 +326,7 @@ set(VISIONPIPE_ITEMS_SOURCES
     src/interpreter/items/gpu_debayer_items.cpp
     src/interpreter/items/gpu_transform_items.cpp
     src/interpreter/items/frame_sink_items.cpp
+    src/interpreter/items/discovery_items.cpp
     src/interpreter/items/stabilization_items.cpp
     src/interpreter/items/gpu_stabilization_items.cpp
     src/interpreter/items/shm_items.cpp
@@ -720,6 +721,7 @@ if(VISIONPIPE_WITH_LIBVISIONPIPE)
     set(LIBVISIONPIPE_SOURCES
         src/libvisionpipe/frame_transport.cpp
         src/libvisionpipe/libvisionpipe.cpp
+        src/libvisionpipe/discovery.cpp
     )
 
     add_library(visionpipe_client SHARED ${LIBVISIONPIPE_SOURCES})
@@ -769,8 +771,12 @@ if(VISIONPIPE_WITH_LIBVISIONPIPE)
         SOVERSION 1
     )
 
-    # Also link frame_transport into visionpipe_core so the frame_sink item can use it
-    target_sources(visionpipe_core PRIVATE src/libvisionpipe/frame_transport.cpp)
+    # Also link frame_transport and discovery into visionpipe_core so frame_sink
+    # and discovery_items can use them without linking against visionpipe_client.
+    target_sources(visionpipe_core PRIVATE
+        src/libvisionpipe/frame_transport.cpp
+        src/libvisionpipe/discovery.cpp
+    )
     target_include_directories(visionpipe_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(visionpipe_core PUBLIC rt)

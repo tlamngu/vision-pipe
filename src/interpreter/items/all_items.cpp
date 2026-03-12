@@ -37,6 +37,9 @@ void registerAllItems(ItemRegistry& registry) {
     // Frame sink (shared memory IPC for libvisionpipe)
     registerFrameSinkItems(registry);
 
+    // Discovery: discover_sinks, sink_properties, discover_capture, capture_capabilities
+    registerDiscoveryItems(registry);
+
     // Horizon lock / video stabilization
     registerStabilizationItems(registry);
 

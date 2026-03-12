@@ -62,6 +62,7 @@ pub mod frame;
 pub mod params;
 pub mod session;
 pub mod visionpipe;
+pub mod discovery;
 
 #[cfg(feature = "iceoryx2-transport")]
 pub mod transport;
@@ -72,3 +73,7 @@ pub use frame::{Frame, FrameData, FrameFormat};
 pub use params::{ParamChangeEvent, ParamClient, ParamValue, WatchHandle};
 pub use session::{FrameCallback, FrameUpdateCallback, Session, SessionState};
 pub use visionpipe::{VisionPipe, VisionPipeConfig};
+pub use discovery::{
+    CaptureDevice, CaptureFormat, SinkInfo, SinkProperties,
+    capture_capabilities, discover_capture, discover_sinks, sink_properties,
+};

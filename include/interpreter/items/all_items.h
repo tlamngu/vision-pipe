@@ -36,6 +36,7 @@
 #include "interpreter/items/gpu_debayer_items.h"
 #include "interpreter/items/gpu_transform_items.h"
 #include "interpreter/items/frame_sink_items.h"
+#include "interpreter/items/discovery_items.h"
 #include "interpreter/items/stabilization_items.h"
 #include "interpreter/items/gpu_stabilization_items.h"
 #include "interpreter/items/shm_items.h"
