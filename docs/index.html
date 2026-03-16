@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisionPipe — DSL for Computer Vision Pipelines</title>
+    <meta name="description" content="VisionPipe is a powerful DSL and high-performance image processing framework for building complex computer vision pipelines.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #1a1a1f;
+            --bg-sidebar: #141417;
+            --bg-content: #1e1e24;
+            --bg-card: #252530;
+            --bg-card-hover: #2d2d3a;
+            --bg-code: #0d0d10;
+            --bg-input: #252530;
+            --border-subtle: rgba(255,255,255,0.06);
+            --border-medium: rgba(255,255,255,0.1);
+            --text-primary: #f5f5f7;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent-red: #ef4444;
+            --accent-red-hover: #f87171;
+            --accent-orange: #f97316;
+            --accent-orange-hover: #fb923c;
+            --accent-amber: #f59e0b;
+            --accent-gradient: linear-gradient(135deg, #ef4444, #f97316);
+            --success: #22c55e;
+            --warning: #eab308;
+            --info: #3b82f6;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 16px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.5);
+            --transition-fast: 150ms ease;
+            --transition-normal: 250ms ease;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            line-height: 1.65;
+            font-size: 15px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ── NAV ── */
+        .topnav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 1000;
+            background: rgba(20,20,23,0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-subtle);
+            height: 60px;
+            display: flex;
+            align-items: center;
+            padding: 0 32px;
+            gap: 0;
+        }
+        .topnav-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            margin-right: 40px;
+        }
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--accent-gradient);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+            color: white;
+        }
+        .logo-text { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+        .topnav-links {
+            display: flex;
+            gap: 4px;
+            flex: 1;
+        }
+        .topnav-link {
+            padding: 6px 14px;
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: var(--transition-fast);
+        }
+        .topnav-link:hover { background: var(--bg-card); color: var(--text-primary); }
+        .topnav-link.active { color: var(--accent-orange); }
+        .topnav-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 18px;
+            border-radius: var(--radius-md);
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: var(--transition-fast);
+            cursor: pointer;
+            border: none;
+        }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-medium);
+        }
+        .btn-ghost:hover { background: var(--bg-card); color: var(--text-primary); }
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+        }
+        .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+        /* ── LAYOUT ── */
+        main { padding-top: 60px; }
+        .section { padding: 80px 0; }
+        .section-alt { background: var(--bg-content); }
+        .container { max-width: 1100px; margin: 0 auto; padding: 0 40px; }
+        .section-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--accent-orange);
+            margin-bottom: 12px;
+        }
+        .section-title {
+            font-size: 36px;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-bottom: 16px;
+        }
+        .section-desc {
+            font-size: 17px;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 48px;
+        }
+
+        /* ── HERO ── */
+        #home {
+            padding: 100px 0 80px;
+            position: relative;
+            overflow: hidden;
+        }
+        #home::before {
+            content: '';
+            position: absolute;
+            top: -60px; left: 50%;
+            transform: translateX(-50%);
+            width: 900px; height: 500px;
+            background: radial-gradient(ellipse at center, rgba(249,115,22,0.12) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(249,115,22,0.12);
+            border: 1px solid rgba(249,115,22,0.3);
+            border-radius: 20px;
+            padding: 6px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-orange);
+            margin-bottom: 24px;
+        }
+        .hero-badge-dot {
+            width: 6px; height: 6px;
+            background: var(--accent-orange);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+        .hero-title {
+            font-size: 56px;
+            font-weight: 800;
+            line-height: 1.1;
+            letter-spacing: -1px;
+            margin-bottom: 24px;
+        }
+        .hero-title .gradient-text {
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero-desc {
+            font-size: 19px;
+            color: var(--text-secondary);
+            max-width: 620px;
+            line-height: 1.7;
+            margin-bottom: 40px;
+        }
+        .hero-actions { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 56px; }
+        .hero-stats {
+            display: flex;
+            gap: 40px;
+            padding-top: 40px;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .hero-stat-value {
+            font-size: 28px;
+            font-weight: 800;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero-stat-label { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+        /* ── FEATURES GRID ── */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        @media (max-width: 900px) { .features-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 600px) { .features-grid { grid-template-columns: 1fr; } }
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            transition: var(--transition-normal);
+        }
+        .feature-card:hover {
+            border-color: rgba(249,115,22,0.3);
+            background: var(--bg-card-hover);
+            transform: translateY(-2px);
+        }
+        .feature-icon {
+            width: 44px; height: 44px;
+            background: rgba(249,115,22,0.12);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 18px;
+        }
+        .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+        .feature-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+
+        /* ── CODE BLOCKS ── */
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            margin: 24px 0;
+        }
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .code-lang {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--accent-orange);
+            font-weight: 600;
+        }
+        .code-copy {
+            background: transparent;
+            border: 1px solid var(--border-subtle);
+            color: var(--text-muted);
+            padding: 4px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            cursor: pointer;
+            transition: var(--transition-fast);
+            font-family: inherit;
+        }
+        .code-copy:hover { color: var(--text-primary); border-color: var(--border-medium); }
+        .code-body {
+            padding: 24px;
+            overflow-x: auto;
+        }
+        pre {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
+        /* Syntax highlighting */
+        .kw { color: #f97316; font-weight: 600; }
+        .fn { color: #fb923c; }
+        .str { color: #86efac; }
+        .num { color: #c4b5fd; }
+        .cmt { color: #52525b; font-style: italic; }
+        .var { color: #93c5fd; }
+        .op { color: #f9a8d4; }
+
+        /* ── TABS ── */
+        .tab-bar {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            background: var(--bg-card);
+            border-radius: var(--radius-md);
+            padding: 4px;
+            width: fit-content;
+        }
+        .tab-btn {
+            padding: 8px 20px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            transition: var(--transition-fast);
+            font-family: inherit;
+        }
+        .tab-btn.active {
+            background: var(--accent-gradient);
+            color: white;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ── DSL SECTION ── */
+        .dsl-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+        @media (max-width: 800px) { .dsl-grid { grid-template-columns: 1fr; } }
+        .dsl-concepts { display: flex; flex-direction: column; gap: 16px; }
+        .dsl-concept {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 20px 24px;
+            border-left: 3px solid var(--accent-orange);
+        }
+        .dsl-concept-name { font-size: 14px; font-weight: 700; color: var(--accent-orange); margin-bottom: 6px; }
+        .dsl-concept-desc { font-size: 14px; color: var(--text-secondary); }
+        .dsl-concept-syntax {
+            margin-top: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-muted);
+            background: var(--bg-code);
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+        }
+
+        /* ── MODULES TABLE ── */
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        @media (max-width: 900px) { .modules-grid { grid-template-columns: repeat(2, 1fr); } }
+        .module-chip {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 16px 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 500;
+            transition: var(--transition-fast);
+        }
+        .module-chip:hover {
+            background: var(--bg-card-hover);
+            border-color: rgba(249,115,22,0.3);
+            color: var(--accent-orange);
+        }
+        .module-chip-icon { font-size: 18px; }
+        .module-chip-count {
+            margin-left: auto;
+            background: var(--bg-body);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+        }
+
+        /* ── DOCS SECTION ── */
+        .docs-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        @media (max-width: 800px) { .docs-cards { grid-template-columns: 1fr; } }
+        .doc-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            text-decoration: none;
+            color: inherit;
+            transition: var(--transition-normal);
+            display: block;
+        }
+        .doc-card:hover {
+            border-color: rgba(249,115,22,0.3);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .doc-card-icon { font-size: 32px; margin-bottom: 16px; }
+        .doc-card-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+        .doc-card-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+        .doc-card-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-orange);
+        }
+
+        /* ── RELEASES / TRACKING ── */
+        .tracking-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+        }
+        @media (max-width: 800px) { .tracking-grid { grid-template-columns: 1fr; } }
+        .tracking-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+        .tracking-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .tracking-panel-title {
+            font-size: 16px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tracking-panel-title-icon { font-size: 18px; }
+        .tracking-panel-body { padding: 8px 0; max-height: 420px; overflow-y: auto; }
+        .tracking-panel-body::-webkit-scrollbar { width: 4px; }
+        .tracking-panel-body::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 2px; }
+        .tracking-item {
+            display: flex;
+            gap: 14px;
+            padding: 14px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+            transition: var(--transition-fast);
+            text-decoration: none;
+            color: inherit;
+        }
+        .tracking-item:last-child { border-bottom: none; }
+        .tracking-item:hover { background: rgba(255,255,255,0.03); }
+        .tracking-avatar {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            background: var(--bg-body);
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        .tracking-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .tracking-content { flex: 1; min-width: 0; }
+        .tracking-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 4px;
+        }
+        .tracking-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 10px; flex-wrap: wrap; }
+        .tracking-sha {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-body);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--accent-orange);
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-open { background: rgba(34,197,94,0.15); color: var(--success); }
+        .badge-closed { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .badge-merged { background: rgba(139,92,246,0.15); color: #a78bfa; }
+        .loading-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: 4px;
+        }
+        @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .skeleton-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; }
+        .skeleton-text { height: 13px; width: 80%; }
+        .skeleton-meta { height: 11px; width: 50%; margin-top: 6px; }
+        .error-state {
+            padding: 32px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* ── RELEASE NOTES ── */
+        .release-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            margin-bottom: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+        .release-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--accent-gradient);
+        }
+        .release-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .release-version {
+            font-size: 24px;
+            font-weight: 800;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .release-date { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+        .release-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+        .release-stability-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        .release-stability-table th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .release-stability-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-secondary);
+        }
+        .release-stability-table tr:last-child td { border-bottom: none; }
+        .status-stable { color: var(--success); font-weight: 600; }
+        .status-beta { color: var(--accent-amber); font-weight: 600; }
+        .status-untested { color: var(--accent-red); font-weight: 600; }
+
+        /* ── FOOTER ── */
+        footer {
+            background: var(--bg-sidebar);
+            border-top: 1px solid var(--border-subtle);
+            padding: 40px 0;
+        }
+        .footer-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 24px;
+        }
+        .footer-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+        .footer-links { display: flex; gap: 24px; }
+        .footer-link { color: var(--text-muted); text-decoration: none; font-size: 14px; transition: var(--transition-fast); }
+        .footer-link:hover { color: var(--text-primary); }
+        .footer-copy { font-size: 13px; color: var(--text-muted); }
+
+        /* ── RESPONSIVE NAV ── */
+        .hamburger { display: none; background: none; border: none; color: var(--text-primary); cursor: pointer; font-size: 20px; padding: 4px; }
+        @media (max-width: 700px) {
+            .topnav-links { display: none; }
+            .hamburger { display: block; }
+            .hero-title { font-size: 36px; }
+            .section-title { font-size: 28px; }
+            .container { padding: 0 20px; }
+            .hero-actions { flex-direction: column; }
+            .hero-stats { flex-wrap: wrap; gap: 24px; }
+        }
+
+        /* ── UTIL ── */
+        .text-gradient {
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .divider { height: 1px; background: var(--border-subtle); margin: 40px 0; }
+        .tag {
+            display: inline-block;
+            padding: 3px 10px;
+            background: rgba(249,115,22,0.1);
+            color: var(--accent-orange);
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+        @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+        .steps { counter-reset: step; display: flex; flex-direction: column; gap: 20px; }
+        .step { display: flex; gap: 16px; align-items: flex-start; }
+        .step-num {
+            counter-increment: step;
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            background: var(--accent-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .step-num::after { content: counter(step); }
+        .step-body { flex: 1; }
+        .step-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+        .step-desc { font-size: 14px; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+
+<!-- ── TOP NAV ── -->
+<nav class="topnav">
+    <a class="topnav-logo" href="#home">
+        <div class="logo-icon">VP</div>
+        <span class="logo-text">VisionPipe</span>
+    </a>
+    <div class="topnav-links">
+        <a class="topnav-link" href="#home">Home</a>
+        <a class="topnav-link" href="#quickstart">Quick Start</a>
+        <a class="topnav-link" href="#dsl">DSL Guide</a>
+        <a class="topnav-link" href="#documentation">Documentation</a>
+        <a class="topnav-link" href="#releases">Releases</a>
+        <a class="topnav-link" href="#tracking">Activity</a>
+    </div>
+    <div class="topnav-right">
+        <a class="btn btn-ghost" href="https://github.com/tlamngu/vision-pipe" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub
+        </a>
+    </div>
+    <button class="hamburger" onclick="toggleMobileMenu()" aria-label="Menu">&#9776;</button>
+</nav>
+
+<main>
+<!-- ── HERO ── -->
+<section id="home" class="section">
+    <div class="container">
+        <div class="hero-badge">
+            <span class="hero-badge-dot"></span>
+            v1.4.0 — Now with libvisionpipe SDK &amp; Python bindings
+        </div>
+        <h1 class="hero-title">
+            A DSL for<br>
+            <span class="gradient-text">Computer Vision</span><br>
+            Pipelines
+        </h1>
+        <p class="hero-desc">
+            VisionPipe is a powerful domain-specific language and high-performance image processing
+            framework for building complex computer vision pipelines. Built on C++17 and OpenCV —
+            with 300+ vision operations, real-time video processing, and deep learning integration.
+        </p>
+        <div class="hero-actions">
+            <a class="btn btn-primary" href="#quickstart">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Get Started
+            </a>
+            <a class="btn btn-ghost" href="visionpipe-docs.html">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                Documentation
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/tlamngu/vision-pipe" target="_blank" rel="noopener">
+                View on GitHub
+            </a>
+        </div>
+        <div class="hero-stats">
+            <div>
+                <div class="hero-stat-value">300+</div>
+                <div class="hero-stat-label">Vision Operations</div>
+            </div>
+            <div>
+                <div class="hero-stat-value">487+</div>
+                <div class="hero-stat-label">Built-in Functions</div>
+            </div>
+            <div>
+                <div class="hero-stat-value">19</div>
+                <div class="hero-stat-label">Pipeline Modules</div>
+            </div>
+            <div>
+                <div class="hero-stat-value">C++17</div>
+                <div class="hero-stat-label">Powered by</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ── FEATURES ── -->
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-label">Why VisionPipe</div>
+        <h2 class="section-title">Everything you need for<br>vision pipelines</h2>
+        <p class="section-desc">From simple filters to deep-learning inference — build any computer vision workflow with a clean, expressive DSL.</p>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🔬</div>
+                <div class="feature-title">Domain-Specific Language</div>
+                <div class="feature-desc">Simple, readable syntax specifically designed for defining vision pipelines. Write complex workflows in a few lines.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <div class="feature-title">C++17 Performance</div>
+                <div class="feature-desc">Built on C++17 with OpenCV at its core. Hardware acceleration via OpenCL, CUDA, and SIMD auto-vectorization.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🧠</div>
+                <div class="feature-title">Deep Learning Integration</div>
+                <div class="feature-desc">Built-in DNN inference via OpenCV DNN or ONNX Runtime. Run YOLOv8, MiDaS, and any ONNX model out of the box.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📦</div>
+                <div class="feature-title">libvisionpipe SDK</div>
+                <div class="feature-desc">Embed VisionPipe in any C++ or Python app. Zero-copy frame delivery via shared memory with the new libvisionpipe SDK.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🐍</div>
+                <div class="feature-title">Python Bindings</div>
+                <div class="feature-desc">Full <code>pyvisionpipe</code> extension module — frames returned as NumPy arrays. Supports polling, callback, and context manager patterns.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎥</div>
+                <div class="feature-title">Multiple Input Sources</div>
+                <div class="feature-desc">OpenCV VideoCapture, libcamera, V4L2 native backend (direct ioctl on Linux). Stream from webcams, IP cameras, or files.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔀</div>
+                <div class="feature-title">Multi-Pipeline Orchestration</div>
+                <div class="feature-desc">Thread-safe concurrent pipeline execution. Run multiple pipelines in parallel with shared frames and global state.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌐</div>
+                <div class="feature-title">Cross-Platform</div>
+                <div class="feature-desc">Linux (✅), Windows (✅), macOS (⏳). Builds with CMake 3.16+ and GCC/Clang/MSVC.</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔧</div>
+                <div class="feature-title">VSCode Extension</div>
+                <div class="feature-desc">Syntax highlighting, IntelliSense, 487+ auto-generated snippets, and signature help for <code>.vsp</code> files.</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ── QUICK START ── -->
+<section id="quickstart" class="section">
+    <div class="container">
+        <div class="section-label">Quick Start</div>
+        <h2 class="section-title">Up and running in minutes</h2>
+        <p class="section-desc">Build from source and run your first VisionPipe pipeline with just a few commands.</p>
+
+        <div class="two-col">
+            <div>
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-num"></div>
+                        <div class="step-body">
+                            <div class="step-title">Clone the repository</div>
+                            <div class="step-desc">Get the latest source from the official GitHub repository.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num"></div>
+                        <div class="step-body">
+                            <div class="step-title">Install prerequisites</div>
+                            <div class="step-desc">You need CMake 3.16+, a C++17 compiler, and OpenCV 4.x.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num"></div>
+                        <div class="step-body">
+                            <div class="step-title">Build with CMake</div>
+                            <div class="step-desc">Configure and compile. Enable optional features with CMake flags.</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-num"></div>
+                        <div class="step-body">
+                            <div class="step-title">Write your pipeline</div>
+                            <div class="step-desc">Create a <code>.vsp</code> file and run it with <code>visionpipe run</code>.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="tab-bar">
+                    <button class="tab-btn active" onclick="switchTab('build','clone')">Clone &amp; Build</button>
+                    <button class="tab-btn" onclick="switchTab('build','hello')">Hello World</button>
+                    <button class="tab-btn" onclick="switchTab('build','advanced')">Advanced</button>
+                </div>
+
+                <div id="build-clone" class="tab-content active">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">bash</span>
+                            <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                        </div>
+                        <div class="code-body"><pre><span class="cmt"># Clone the official repository</span>
+git clone https://github.com/tlamngu/vision-pipe.git
+cd vision-pipe
+
+<span class="cmt"># Create build directory</span>
+mkdir build && cd build
+
+<span class="cmt"># Configure (set OpenCV path)</span>
+cmake .. -DOpenCV_DIR=&lt;path-to-opencv&gt;
+
+<span class="cmt"># Build in Release mode</span>
+cmake --build . --config Release
+
+<span class="cmt"># Optional: enable ONNX Runtime support</span>
+cmake .. -DOpenCV_DIR=&lt;path&gt; \
+         -DVISIONPIPE_WITH_ONNXRUNTIME=ON \
+         -DOnnxRuntime_DIR=&lt;path-to-onnxruntime&gt;</pre></div>
+                    </div>
+                </div>
+
+                <div id="build-hello" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">vsp — hello.vsp</span>
+                            <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                        </div>
+                        <div class="code-body"><pre><span class="cmt"># hello.vsp — Your first VisionPipe pipeline</span>
+
+<span class="kw">pipeline</span> <span class="fn">main</span>
+    <span class="fn">video_cap</span>(<span class="num">0</span>)
+    <span class="fn">draw_text</span>(<span class="str">"Hello from VisionPipe"</span>, <span class="num">50</span>, <span class="num">50</span>)
+    <span class="fn">imshow</span>(<span class="str">"Hello VisionPipe"</span>)
+    <span class="fn">wait_key</span>(<span class="num">30</span>)
+<span class="kw">end</span>
+
+<span class="kw">exec_loop</span> <span class="fn">main</span></pre></div>
+                    </div>
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">bash — run it</span>
+                            <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                        </div>
+                        <div class="code-body"><pre>visionpipe run hello.vsp</pre></div>
+                    </div>
+                </div>
+
+                <div id="build-advanced" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-lang">vsp — filters with trackbars</span>
+                            <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                        </div>
+                        <div class="code-body"><pre><span class="kw">pipeline</span> <span class="fn">setup</span>
+    <span class="fn">named_window</span>(<span class="str">"Controls"</span>, <span class="str">"autosize"</span>)
+    <span class="fn">create_trackbar</span>(<span class="str">"Filter"</span>, <span class="str">"Controls"</span>, <span class="num">5</span>, <span class="num">0</span>)
+<span class="kw">end</span>
+
+<span class="kw">pipeline</span> <span class="fn">main</span>
+    <span class="fn">video_cap</span>(<span class="num">0</span>)
+    <span class="fn">flip</span>(<span class="str">"horizontal"</span>) <span class="op">-></span> <span class="kw">global</span> <span class="str">"frame"</span>
+
+    <span class="fn">trackbar_value</span>(<span class="str">"Filter"</span>, <span class="str">"Controls"</span>, <span class="str">"mode"</span>)
+
+    <span class="kw">if</span> mode <span class="op">==</span> <span class="num">1</span>
+        <span class="fn">use</span>(<span class="kw">global</span> <span class="str">"frame"</span>)
+        <span class="fn">cvt_color</span>(<span class="str">"bgr2gray"</span>)
+        <span class="fn">cvt_color</span>(<span class="str">"gray2bgr"</span>)
+    <span class="kw">end</span>
+
+    <span class="fn">imshow</span>(<span class="str">"Output"</span>)
+    <span class="kw">key</span> <span class="op">=</span> <span class="fn">wait_key</span>(<span class="num">1</span>)
+    <span class="kw">if</span> key <span class="op">==</span> <span class="num">27</span>
+        <span class="kw">break</span>
+    <span class="kw">end</span>
+<span class="kw">end</span>
+
+<span class="kw">exec_seq</span> <span class="fn">setup</span>
+<span class="kw">exec_loop</span> <span class="fn">main</span></pre></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CMake flags -->
+        <div class="divider"></div>
+        <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">Key CMake Build Flags</h3>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 20px;">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-orange);margin-bottom:6px;">VISIONPIPE_WITH_ONNXRUNTIME=ON</div>
+                <div style="font-size:13px;color:var(--text-secondary);">Enable ONNX Runtime backend for DNN inference</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 20px;">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-orange);margin-bottom:6px;">V4L2_NATIVE_BACKEND=ON</div>
+                <div style="font-size:13px;color:var(--text-secondary);">Direct V4L2 ioctl access on Linux (bypasses OpenCV)</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 20px;">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-orange);margin-bottom:6px;">VISIONPIPE_WITH_PYTHON=ON</div>
+                <div style="font-size:13px;color:var(--text-secondary);">Build pyvisionpipe Python bindings (requires pybind11)</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 20px;">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-orange);margin-bottom:6px;">VISIONPIPE_WITH_LIBCAMERA=ON</div>
+                <div style="font-size:13px;color:var(--text-secondary);">Enable libcamera support for Raspberry Pi cameras</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ── DSL GUIDE ── -->
+<section id="dsl" class="section section-alt">
+    <div class="container">
+        <div class="section-label">DSL Guide</div>
+        <h2 class="section-title">The VisionPipe DSL</h2>
+        <p class="section-desc">A concise language for expressing vision workflows. Pipelines are named, composable, and support control flow, variables, and shared state.</p>
+
+        <div class="dsl-grid">
+            <div class="dsl-concepts">
+                <div class="dsl-concept">
+                    <div class="dsl-concept-name">pipeline — Define a named pipeline</div>
+                    <div class="dsl-concept-desc">A pipeline is a named block of vision operations. Pipelines can accept parameters and be called from other pipelines.</div>
+                    <div class="dsl-concept-syntax">pipeline &lt;name&gt;(&lt;params&gt;)<br>    &lt;items&gt;<br>end</div>
+                </div>
+                <div class="dsl-concept">
+                    <div class="dsl-concept-name">exec_loop / exec_seq — Execute pipelines</div>
+                    <div class="dsl-concept-desc"><code>exec_loop</code> runs a pipeline in a continuous loop; <code>exec_seq</code> runs it once sequentially from another pipeline.</div>
+                    <div class="dsl-concept-syntax">exec_loop main<br>exec_seq setup<br>exec_seq process(param1, param2)</div>
+                </div>
+                <div class="dsl-concept">
+                    <div class="dsl-concept-name">global / global_cache — Shared frames</div>
+                    <div class="dsl-concept-desc">Pass frames between pipelines using named global variables. <code>global_cache</code> stores the current frame; <code>use</code> retrieves it.</div>
+                    <div class="dsl-concept-syntax">flip("horizontal") -> global "frame"<br>use(global "frame")<br>global_cache("my_frame")</div>
+                </div>
+                <div class="dsl-concept">
+                    <div class="dsl-concept-name">Variables &amp; Control Flow</div>
+                    <div class="dsl-concept-desc">VisionPipe supports variables, arithmetic, and conditional branching with <code>if</code>, <code>else</code>, and <code>break</code>.</div>
+                    <div class="dsl-concept-syntax">value = 42<br>if value == 42<br>    draw_text("Match!", 10, 30)<br>end</div>
+                </div>
+                <div class="dsl-concept">
+                    <div class="dsl-concept-name">let — Pipeline parameters</div>
+                    <div class="dsl-concept-desc">Pipelines can accept typed parameters using <code>let</code>. Pass values when invoking with <code>exec_seq</code>.</div>
+                    <div class="dsl-concept-syntax">pipeline blur_frame(let size)<br>    gaussian_blur(size)<br>end<br><br>exec_seq blur_frame(5)</div>
+                </div>
+            </div>
+            <div>
+                <div class="code-block">
+                    <div class="code-header">
+                        <span class="code-lang">vsp — full DSL example</span>
+                        <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                    </div>
+                    <div class="code-body"><pre><span class="cmt"># Multi-pipeline vision script</span>
+
+<span class="cmt"># Pipeline with parameters</span>
+<span class="kw">pipeline</span> <span class="fn">detect_edges</span>(<span class="kw">let</span> low, <span class="kw">let</span> high)
+    <span class="fn">cvt_color</span>(<span class="str">"bgr2gray"</span>)
+    <span class="fn">gaussian_blur</span>(<span class="num">5</span>)
+    <span class="fn">canny</span>(low, high)
+    <span class="fn">cvt_color</span>(<span class="str">"gray2bgr"</span>)
+<span class="kw">end</span>
+
+<span class="cmt"># Capture and store frame globally</span>
+<span class="kw">pipeline</span> <span class="fn">capture</span>
+    <span class="fn">video_cap</span>(<span class="num">0</span>)
+    <span class="fn">flip</span>(<span class="str">"horizontal"</span>) <span class="op">-></span> <span class="kw">global</span> <span class="str">"raw"</span>
+<span class="kw">end</span>
+
+<span class="cmt"># Main loop: control flow + trackbar</span>
+<span class="kw">pipeline</span> <span class="fn">main</span>
+    <span class="fn">exec_seq</span> <span class="fn">capture</span>
+
+    <span class="fn">trackbar_value</span>(<span class="str">"Low"</span>, <span class="str">"Ctrl"</span>, <span class="str">"lo"</span>)
+    <span class="fn">trackbar_value</span>(<span class="str">"High"</span>, <span class="str">"Ctrl"</span>, <span class="str">"hi"</span>)
+
+    <span class="fn">use</span>(<span class="kw">global</span> <span class="str">"raw"</span>)
+
+    <span class="kw">if</span> lo <span class="op">></span> <span class="num">0</span>
+        <span class="fn">exec_seq</span> <span class="fn">detect_edges</span>(lo, hi)
+    <span class="kw">end</span>
+
+    <span class="fn">imshow</span>(<span class="str">"Output"</span>)
+    key <span class="op">=</span> <span class="fn">wait_key</span>(<span class="num">1</span>)
+    <span class="kw">if</span> key <span class="op">==</span> <span class="num">27</span>
+        <span class="kw">break</span>
+    <span class="kw">end</span>
+<span class="kw">end</span>
+
+<span class="cmt"># Entry point</span>
+<span class="kw">exec_loop</span> <span class="fn">main</span></pre></div>
+                </div>
+
+                <!-- Python SDK usage -->
+                <div style="margin-top:24px;">
+                    <div class="tab-bar">
+                        <button class="tab-btn active" onclick="switchTab('sdk','cpp')">C++ SDK</button>
+                        <button class="tab-btn" onclick="switchTab('sdk','python')">Python SDK</button>
+                    </div>
+                    <div id="sdk-cpp" class="tab-content active">
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span class="code-lang">C++ — libvisionpipe</span>
+                                <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                            </div>
+                            <div class="code-body"><pre>#include "libvisionpipe/libvisionpipe.h"
+
+int main() {
+    vp::VisionPipeConfig cfg;
+    cfg.script_path = "pipeline.vsp";
+
+    vp::VisionPipe vp(cfg);
+    auto session = vp.createSession();
+
+    session->onFrame([](const vp::Frame& f) {
+        // Zero-copy frame via shared memory
+        cv::Mat img(f.height, f.width,
+                    CV_8UC3, (void*)f.data);
+        cv::imshow("frame", img);
+    });
+
+    vp.run();
+    return 0;
+}</pre></div>
+                        </div>
+                    </div>
+                    <div id="sdk-python" class="tab-content">
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span class="code-lang">Python — pyvisionpipe</span>
+                                <button class="code-copy" onclick="copyCode(this)">Copy</button>
+                            </div>
+                            <div class="code-body"><pre>import pyvisionpipe as vp
+import numpy as np
+
+with vp.VisionPipe("pipeline.vsp") as pipe:
+    session = pipe.create_session()
+
+    # Callback mode
+    def on_frame(frame: np.ndarray):
+        print(f"Frame: {frame.shape}")
+
+    session.on_frame(on_frame)
+    pipe.run()</pre></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modules table -->
+        <div class="divider"></div>
+        <h3 style="font-size:18px;font-weight:700;margin-bottom:8px;">Pipeline Modules</h3>
+        <p style="font-size:14px;color:var(--text-secondary);margin-bottom:24px;">VisionPipe organizes its 300+ built-in functions into 19 domain-specific modules.</p>
+        <div class="modules-grid">
+            <a class="module-chip" href="visionpipe-docs.html#advanced"><span class="module-chip-icon">🔬</span>Advanced<span class="module-chip-count">30</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#arithmetic"><span class="module-chip-icon">➕</span>Arithmetic<span class="module-chip-count">28</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#color"><span class="module-chip-icon">🎨</span>Color<span class="module-chip-count">17</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#conditional"><span class="module-chip-icon">🔀</span>Conditional<span class="module-chip-count">24</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#control"><span class="module-chip-icon">⚙️</span>Control<span class="module-chip-count">38</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#display"><span class="module-chip-icon">🖥️</span>Display<span class="module-chip-count">27</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#dnn"><span class="module-chip-icon">🧠</span>DNN<span class="module-chip-count">19</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#draw"><span class="module-chip-icon">✏️</span>Draw<span class="module-chip-count">19</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#edge"><span class="module-chip-icon">📐</span>Edge<span class="module-chip-count">23</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#feature"><span class="module-chip-icon">⭐</span>Feature<span class="module-chip-count">20</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#filter"><span class="module-chip-icon">🔍</span>Filter<span class="module-chip-count">14</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#math"><span class="module-chip-icon">📊</span>Math<span class="module-chip-count">28</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#morphology"><span class="module-chip-icon">🔷</span>Morphology<span class="module-chip-count">14</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#stereo"><span class="module-chip-icon">👁️</span>Stereo<span class="module-chip-count">22</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#tensor"><span class="module-chip-icon">📦</span>Tensor<span class="module-chip-count">49</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#transform"><span class="module-chip-icon">🔄</span>Transform<span class="module-chip-count">21</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#video_io"><span class="module-chip-icon">📹</span>Video I/O<span class="module-chip-count">36</span></a>
+            <a class="module-chip" href="visionpipe-docs.html#gui"><span class="module-chip-icon">🖱️</span>GUI<span class="module-chip-count">16</span></a>
+            <a class="module-chip" href="ip-stream/visionpipe-docs.html#ip_stream"><span class="module-chip-icon">📡</span>IP Stream<span class="module-chip-count">5</span></a>
+        </div>
+    </div>
+</section>
+
+<!-- ── DOCUMENTATION ── -->
+<section id="documentation" class="section">
+    <div class="container">
+        <div class="section-label">Documentation</div>
+        <h2 class="section-title">Explore the docs</h2>
+        <p class="section-desc">Comprehensive reference documentation for every built-in function, the C++ SDK, and Python bindings.</p>
+        <div class="docs-cards">
+            <a class="doc-card" href="visionpipe-docs.html">
+                <div class="doc-card-icon">📚</div>
+                <div class="doc-card-title">VisionPipe Items Reference</div>
+                <div class="doc-card-desc">Complete reference for all 487+ built-in pipeline functions — parameters, return values, examples, and tags. Searchable and filterable by module.</div>
+                <div class="doc-card-link">Browse functions →</div>
+            </a>
+            <a class="doc-card" href="ip-stream/visionpipe-docs.html">
+                <div class="doc-card-icon">📡</div>
+                <div class="doc-card-title">IP Streaming Reference</div>
+                <div class="doc-card-desc">Documentation for the IP streaming pipeline items — broadcast video streams over HTTP MJPEG, control latency, and manage clients.</div>
+                <div class="doc-card-link">Explore IP streaming →</div>
+            </a>
+            <a class="doc-card" href="https://github.com/tlamngu/vision-pipe/blob/main/docs/libvisionpipe.md" target="_blank" rel="noopener">
+                <div class="doc-card-icon">🔌</div>
+                <div class="doc-card-title">libvisionpipe SDK</div>
+                <div class="doc-card-desc">Developer reference for embedding VisionPipe in C++ and Python applications. Covers VisionPipeConfig, Session API, zero-copy frame transport, and more.</div>
+                <div class="doc-card-link">SDK reference →</div>
+            </a>
+        </div>
+        <div style="margin-top:32px;padding:24px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:6px;">VSCode Extension</div>
+                <div style="font-size:14px;color:var(--text-secondary);">Install the <strong>vscode-vsp</strong> extension for syntax highlighting, IntelliSense, and 487+ function snippets inside VSCode.</div>
+            </div>
+            <a class="btn btn-ghost" href="https://github.com/tlamngu/vision-pipe/tree/main/vscode-vsp" target="_blank" rel="noopener">View Extension →</a>
+        </div>
+    </div>
+</section>
+
+<!-- ── RELEASES ── -->
+<section id="releases" class="section section-alt">
+    <div class="container">
+        <div class="section-label">Releases</div>
+        <h2 class="section-title">Release history</h2>
+        <p class="section-desc">Latest stable release and stability status for each component.</p>
+
+        <div class="release-card">
+            <div class="release-header">
+                <div>
+                    <div class="release-version">v1.4.0</div>
+                    <div class="release-date">Latest release — Pre-Production</div>
+                </div>
+                <div class="release-badges">
+                    <span class="badge badge-open">⚠️ Pre-Production</span>
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;">
+                <div style="background:var(--bg-body);border-radius:var(--radius-md);padding:16px 18px;border:1px solid var(--border-subtle);">
+                    <div style="font-size:13px;font-weight:700;color:var(--accent-orange);margin-bottom:4px;">libvisionpipe SDK</div>
+                    <div style="font-size:13px;color:var(--text-secondary);">Cross-platform C++ shared library. Zero-copy shared-memory frame delivery via <code>frame_sink()</code>.</div>
+                </div>
+                <div style="background:var(--bg-body);border-radius:var(--radius-md);padding:16px 18px;border:1px solid var(--border-subtle);">
+                    <div style="font-size:13px;font-weight:700;color:var(--accent-orange);margin-bottom:4px;">Python bindings (pyvisionpipe)</div>
+                    <div style="font-size:13px;color:var(--text-secondary);">pybind11-based Python extension. Frames delivered as NumPy arrays.</div>
+                </div>
+                <div style="background:var(--bg-body);border-radius:var(--radius-md);padding:16px 18px;border:1px solid var(--border-subtle);">
+                    <div style="font-size:13px;font-weight:700;color:var(--accent-orange);margin-bottom:4px;">V4L2 Native Backend</div>
+                    <div style="font-size:13px;color:var(--text-secondary);">Direct Linux V4L2 camera access without OpenCV VideoCapture.</div>
+                </div>
+                <div style="background:var(--bg-body);border-radius:var(--radius-md);padding:16px 18px;border:1px solid var(--border-subtle);">
+                    <div style="font-size:13px;font-weight:700;color:var(--accent-orange);margin-bottom:4px;">runString() API</div>
+                    <div style="font-size:13px;color:var(--text-secondary);">Launch a pipeline from a C++/Python string without writing a file to disk.</div>
+                </div>
+            </div>
+
+            <table class="release-stability-table">
+                <thead>
+                    <tr>
+                        <th>Component</th>
+                        <th>Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Core Pipeline Engine</td>
+                        <td><span class="status-stable">✅ Stable</span></td>
+                        <td>Well-tested, production-quality</td>
+                    </tr>
+                    <tr>
+                        <td>ONNX Runtime Backend</td>
+                        <td><span class="status-stable">✅ Stable</span></td>
+                        <td>Fully tested</td>
+                    </tr>
+                    <tr>
+                        <td>OpenCV DNN Module</td>
+                        <td><span class="status-stable">✅ Stable</span></td>
+                        <td>Extensively tested</td>
+                    </tr>
+                    <tr>
+                        <td>libvisionpipe SDK</td>
+                        <td><span class="status-beta">⏳ Beta</span></td>
+                        <td>New in v1.4.0; Linux/macOS tested, Windows under validation</td>
+                    </tr>
+                    <tr>
+                        <td>Python Bindings (pyvisionpipe)</td>
+                        <td><span class="status-beta">⏳ Beta</span></td>
+                        <td>New in v1.4.0; API stable, broader testing ongoing</td>
+                    </tr>
+                    <tr>
+                        <td>V4L2 Native Backend</td>
+                        <td><span class="status-beta">⏳ Beta</span></td>
+                        <td>Linux only, tested on aarch64</td>
+                    </tr>
+                    <tr>
+                        <td>Iceoryx2 IPC Support</td>
+                        <td><span class="status-untested">⚠️ Untested</span></td>
+                        <td>Not yet validated; use with caution</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div id="github-releases-section">
+            <h3 style="font-size:16px;font-weight:700;margin-bottom:16px;">GitHub Releases</h3>
+            <div id="github-releases-list">
+                <div class="loading-row">
+                    <div class="skeleton skeleton-avatar"></div>
+                    <div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div>
+                </div>
+                <div class="loading-row">
+                    <div class="skeleton skeleton-avatar"></div>
+                    <div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ── ACTIVITY TRACKING ── -->
+<section id="tracking" class="section">
+    <div class="container">
+        <div class="section-label">Activity</div>
+        <h2 class="section-title">Commits &amp; Pull Requests</h2>
+        <p class="section-desc">Live activity feed from the VisionPipe repository — auto-synced with the main branch via GitHub API.</p>
+        <div class="tracking-grid">
+            <div class="tracking-panel">
+                <div class="tracking-panel-header">
+                    <div class="tracking-panel-title">
+                        <span class="tracking-panel-title-icon">🔨</span>
+                        Recent Commits
+                    </div>
+                    <a href="https://github.com/tlamngu/vision-pipe/commits/main" target="_blank" rel="noopener" style="font-size:13px;color:var(--accent-orange);text-decoration:none;">View all →</a>
+                </div>
+                <div class="tracking-panel-body" id="commits-list">
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                </div>
+            </div>
+            <div class="tracking-panel">
+                <div class="tracking-panel-header">
+                    <div class="tracking-panel-title">
+                        <span class="tracking-panel-title-icon">🔀</span>
+                        Pull Requests
+                    </div>
+                    <a href="https://github.com/tlamngu/vision-pipe/pulls" target="_blank" rel="noopener" style="font-size:13px;color:var(--accent-orange);text-decoration:none;">View all →</a>
+                </div>
+                <div class="tracking-panel-body" id="prs-list">
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                    <div class="loading-row"><div class="skeleton skeleton-avatar"></div><div style="flex:1"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-meta" style="margin-top:8px;"></div></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<!-- ── FOOTER ── -->
+<footer>
+    <div class="container">
+        <div class="footer-inner">
+            <a class="footer-logo" href="#home">
+                <div class="logo-icon" style="width:28px;height:28px;font-size:14px;">VP</div>
+                <span style="font-size:16px;font-weight:700;color:var(--text-primary);">VisionPipe</span>
+            </a>
+            <div class="footer-links">
+                <a class="footer-link" href="https://github.com/tlamngu/vision-pipe" target="_blank" rel="noopener">GitHub</a>
+                <a class="footer-link" href="visionpipe-docs.html">Docs</a>
+                <a class="footer-link" href="https://github.com/tlamngu/vision-pipe/issues" target="_blank" rel="noopener">Issues</a>
+                <a class="footer-link" href="https://github.com/tlamngu/vision-pipe/releases" target="_blank" rel="noopener">Releases</a>
+            </div>
+            <div class="footer-copy">© 2024 VisionPipe — Versys-GPL-License-v1</div>
+        </div>
+    </div>
+</footer>
+
+<script>
+    /* ── Tab switching ── */
+    function switchTab(group, tab) {
+        document.querySelectorAll(`[id^="${group}-"]`).forEach(el => el.classList.remove('active'));
+        const tabEl = document.getElementById(`${group}-${tab}`);
+        if (tabEl) tabEl.classList.add('active');
+
+        const groupEl = tabEl && tabEl.closest('section, div');
+        if (groupEl) {
+            groupEl.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(`'${tab}'`));
+            });
+        }
+    }
+
+    /* ── Copy code ── */
+    function copyCode(btn) {
+        const code = btn.closest('.code-block').querySelector('pre').innerText;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        }).catch(() => {
+            btn.textContent = 'Copy';
+        });
+    }
+
+    /* ── Mobile menu ── */
+    function toggleMobileMenu() {
+        const links = document.querySelector('.topnav-links');
+        if (!links) return;
+        const isOpen = links.style.display === 'flex';
+        links.style.display = isOpen ? '' : 'flex';
+        if (!isOpen) {
+            links.style.position = 'absolute';
+            links.style.top = '60px';
+            links.style.left = '0';
+            links.style.right = '0';
+            links.style.flexDirection = 'column';
+            links.style.background = 'var(--bg-sidebar)';
+            links.style.padding = '12px 16px';
+            links.style.borderBottom = '1px solid var(--border-subtle)';
+            links.style.gap = '4px';
+        } else {
+            links.style.position = '';
+            links.style.flexDirection = '';
+            links.style.background = '';
+            links.style.padding = '';
+            links.style.borderBottom = '';
+        }
+    }
+
+    /* ── Active nav link on scroll ── */
+    const sections = document.querySelectorAll('section[id]');
+    const navLinks = document.querySelectorAll('.topnav-link');
+    window.addEventListener('scroll', () => {
+        let current = '';
+        sections.forEach(sec => {
+            if (window.scrollY >= sec.offsetTop - 100) current = sec.id;
+        });
+        navLinks.forEach(link => {
+            link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+        });
+    }, { passive: true });
+
+    /* ── GitHub API helpers ── */
+    function timeAgo(dateStr) {
+        const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000);
+        if (diff < 60) return diff + 's ago';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        if (diff < 2592000) return Math.floor(diff / 86400) + 'd ago';
+        return Math.floor(diff / 2592000) + 'mo ago';
+    }
+
+    async function loadCommits() {
+        const el = document.getElementById('commits-list');
+        try {
+            const res = await fetch('https://api.github.com/repos/tlamngu/vision-pipe/commits?per_page=10', {
+                headers: { 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (!res.ok) throw new Error('API error ' + res.status);
+            const data = await res.json();
+            el.innerHTML = data.map(c => {
+                const msg = (c.commit.message || '').split('\n')[0];
+                const author = c.author ? c.author.login : (c.commit.author ? c.commit.author.name : 'unknown');
+                const avatar = c.author ? c.author.avatar_url : 'https://github.com/identicons/' + author + '.png';
+                const sha = c.sha.substring(0, 7);
+                const date = timeAgo(c.commit.author.date);
+                return `<a class="tracking-item" href="${c.html_url}" target="_blank" rel="noopener">
+                    <div class="tracking-avatar"><img src="${avatar}" alt="${author}" loading="lazy"></div>
+                    <div class="tracking-content">
+                        <div class="tracking-title">${escHtml(msg)}</div>
+                        <div class="tracking-meta">
+                            <span class="tracking-sha">${sha}</span>
+                            <span>${escHtml(author)}</span>
+                            <span>${date}</span>
+                        </div>
+                    </div>
+                </a>`;
+            }).join('');
+        } catch (e) {
+            el.innerHTML = `<div class="error-state">Unable to load commits.<br><a href="https://github.com/tlamngu/vision-pipe/commits/main" target="_blank" rel="noopener" style="color:var(--accent-orange);">View on GitHub →</a></div>`;
+        }
+    }
+
+    async function loadPRs() {
+        const el = document.getElementById('prs-list');
+        try {
+            const res = await fetch('https://api.github.com/repos/tlamngu/vision-pipe/pulls?state=all&per_page=10&sort=updated', {
+                headers: { 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (!res.ok) throw new Error('API error ' + res.status);
+            const data = await res.json();
+            if (data.length === 0) {
+                el.innerHTML = '<div class="error-state">No pull requests found.</div>';
+                return;
+            }
+            el.innerHTML = data.map(pr => {
+                const state = pr.merged_at ? 'merged' : pr.state;
+                const badge = state === 'merged'
+                    ? '<span class="badge badge-merged">⇒ Merged</span>'
+                    : state === 'open'
+                    ? '<span class="badge badge-open">● Open</span>'
+                    : '<span class="badge badge-closed">✕ Closed</span>';
+                const author = pr.user ? pr.user.login : 'unknown';
+                const avatar = pr.user ? pr.user.avatar_url : '';
+                const date = timeAgo(pr.updated_at);
+                return `<a class="tracking-item" href="${pr.html_url}" target="_blank" rel="noopener">
+                    <div class="tracking-avatar"><img src="${avatar}" alt="${author}" loading="lazy"></div>
+                    <div class="tracking-content">
+                        <div class="tracking-title">#${pr.number} ${escHtml(pr.title)}</div>
+                        <div class="tracking-meta">${badge}<span>${escHtml(author)}</span><span>${date}</span></div>
+                    </div>
+                </a>`;
+            }).join('');
+        } catch (e) {
+            el.innerHTML = `<div class="error-state">Unable to load pull requests.<br><a href="https://github.com/tlamngu/vision-pipe/pulls" target="_blank" rel="noopener" style="color:var(--accent-orange);">View on GitHub →</a></div>`;
+        }
+    }
+
+    async function loadReleases() {
+        const el = document.getElementById('github-releases-list');
+        try {
+            const res = await fetch('https://api.github.com/repos/tlamngu/vision-pipe/releases?per_page=5', {
+                headers: { 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (!res.ok) throw new Error('API error ' + res.status);
+            const data = await res.json();
+            if (data.length === 0) {
+                el.innerHTML = '<div style="padding:20px;color:var(--text-muted);font-size:14px;">No GitHub releases yet.</div>';
+                return;
+            }
+            el.innerHTML = data.map((r, i) => {
+                const date = new Date(r.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                return `<a class="tracking-item" href="${r.html_url}" target="_blank" rel="noopener">
+                    <div class="tracking-avatar" style="background:var(--accent-gradient);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;">
+                        ${i === 0 ? '★' : r.tag_name[0].toUpperCase()}
+                    </div>
+                    <div class="tracking-content">
+                        <div class="tracking-title">${escHtml(r.name || r.tag_name)} ${i === 0 ? '<span style="font-size:11px;background:rgba(249,115,22,0.15);color:var(--accent-orange);padding:1px 6px;border-radius:4px;margin-left:6px;">Latest</span>' : ''}</div>
+                        <div class="tracking-meta">
+                            <span class="tracking-sha">${escHtml(r.tag_name)}</span>
+                            <span>${date}</span>
+                            ${r.prerelease ? '<span style="color:var(--warning);">pre-release</span>' : ''}
+                        </div>
+                    </div>
+                </a>`;
+            }).join('');
+        } catch (e) {
+            el.innerHTML = `<div style="padding:20px;color:var(--text-muted);font-size:14px;">Unable to load releases. <a href="https://github.com/tlamngu/vision-pipe/releases" target="_blank" rel="noopener" style="color:var(--accent-orange);">View on GitHub →</a></div>`;
+        }
+    }
+
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    /* ── Load all dynamic data ── */
+    loadCommits();
+    loadPRs();
+    loadReleases();
+</script>
+</body>
+</html>
