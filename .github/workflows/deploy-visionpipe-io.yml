@@ -8,39 +8,27 @@ on:
       - 'docs/**'
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   deploy:
-    name: Push docs to visionpipe.github.io
+    name: Initial Push to visionpipe.github.io
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout Repo A
         uses: actions/checkout@v4
 
-      - name: Upload docs as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: visionpipe-docs
-          path: docs/
-          retention-days: 7
-
-      - name: Deploy docs to visionpipe/visionpipe.github.io
+      - name: Force Sync to Empty Repo B
         env:
           GH_PAGES_TOKEN: ${{ secrets.VISIONPIPE_PAGES_TOKEN }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git clone --depth=1 https://x-access-token:${GH_PAGES_TOKEN}@github.com/visionpipe/visionpipe.github.io.git /tmp/visionpipe-io
-          rsync -av --delete docs/ /tmp/visionpipe-io/
-          cd /tmp/visionpipe-io
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to deploy."
-          else
-            git commit -m "Deploy docs from ${{ github.repository }}@${{ github.sha }}"
-          # Push to 'main' branch of the target visionpipe/visionpipe.github.io repo
-            # (new GitHub repositories use 'main' as default branch)
-            git push origin main
-          fi
+
+          cd docs
+
+          git init
+          git checkout -b main
+          git add .
+          git commit -m "Initial deploy from ${{ github.repository }}"
+
+          git remote add origin https://x-access-token:${GH_PAGES_TOKEN}@github.com/visionpipe/visionpipe.github.io.git
+          git push -u origin main --force
