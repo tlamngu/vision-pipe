@@ -1,11 +1,5 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tlamngu/vision-pipe)
 
-> ⚠️ **Security Warning**
->
-> The ONLY official repository for vision-pipe is: https://github.com/tlamngu/vision-pipe
->
-> The repository https://github.com/Basit3751/vision-pipe is an **UNOFFICIAL copy** and its releases have been identified as **MALWARE**. Do NOT download or run binaries from that repository.
-> We providing absolutely NO binary as of current stage. 
 
 # VisionPipe
 
